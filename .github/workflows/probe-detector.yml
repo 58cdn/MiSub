@@ -17,6 +17,24 @@ concurrency:
   group: probe-detector-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  distribution-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test offline archive audit and notice collection
+        run: python3 -B -m unittest discover -s detector/scripts -p 'test_audit_distribution.py' -v
+      - name: Confirm missing distribution evidence keeps readiness closed
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, subprocess, sys
+          result = subprocess.run([sys.executable, '-B', 'detector/scripts/audit_distribution.py', '--require-ready'], capture_output=True, text=True, check=False)
+          report = json.loads(result.stdout)
+          assert result.returncode == 2 and report['ready'] is False
+          assert report['blockers']
+          print('Distribution readiness remains blocked; no artifacts published.')
+          PY
   native:
     strategy:
       fail-fast: false
