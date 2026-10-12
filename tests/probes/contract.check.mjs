@@ -27,3 +27,18 @@ test('token hashes are stable and tokens have 256 random bits', async () => {
     assert.equal(await digest(token), await digest(token));
     assert.notEqual(await digest(token), token);
 });
+
+test('preserves bounded rate-limit evidence without raw response headers', () => {
+    const v = {status:'unknown',code:'rate_limited',httpStatus:429,retryAfterSeconds:120,headers:{secret:'discard'}};
+    assert.deepEqual(sanitizeResult({proxy:v}, ['proxy']), {proxy:{status:'unknown',code:'rate_limited',httpStatus:429,retryAfterSeconds:120}});
+    assert.equal(sanitizeResult({unlock:{status:'unknown',code:'probe_inconclusive',services:[{service:'netflix',...v}]}}, ['unlock']).unlock.services[0].retryAfterSeconds,120);
+    for (const retryAfterSeconds of [-1, 86401, 0.5, '120', NaN, Infinity]) assert.throws(() => sanitizeResult({proxy:{...v,retryAfterSeconds}}, ['proxy']), /invalid_retry_after/);
+    assert.throws(() => sanitizeResult({proxy:{...v,code:'ok'}}, ['proxy']), /invalid_rate_limit/);
+    assert.throws(() => sanitizeResult({proxy:{...v,httpStatus:200}}, ['proxy']), /invalid_rate_limit/);
+    for (const patch of [{status:'passed'}, {bytes:1024}, {latencyMs:1}, {bytesPerSecond:1}, {region:'US'}]) {
+        const invalid = {...v, ...patch};
+        delete invalid.retryAfterSeconds;
+        assert.throws(() => sanitizeResult({proxy:invalid}, ['proxy']), /invalid_rate_limit/);
+        assert.throws(() => sanitizeResult({unlock:{status:'unknown',code:'probe_inconclusive',services:[{service:'netflix',...invalid}]}}, ['unlock']), /invalid_rate_limit/);
+    }
+});
