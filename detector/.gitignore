@@ -1,4 +1,6 @@
 /embedded/kernel.gz
+/embedded/kernel.zip
+/misub-probe.exe
 /embedded/kernel.sha256
 /embedded/kernel-source.txt
 /embedded/LICENSE.mihomo

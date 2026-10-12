@@ -47,6 +47,19 @@
       "requiredFiles": []
     },
     {
+      "id": "kernel-windows-amd64",
+      "role": "kernel",
+      "format": "zip",
+      "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-windows-amd64-compatible-v1.19.32.zip",
+      "sha256": "974a4d7ad69aed27aa2e8f91d61113573c14dadb14562c63e58effabf59816f0",
+      "target": "windows-amd64",
+      "prefix": "",
+      "requiredFiles": [],
+      "entry": "mihomo-windows-amd64-compatible.exe",
+      "executableSha256": "04f8d7fc2b314771e1ecbf15951d59f0e1cb7914503c88cfb6972ff6a824e314",
+      "executableBytes": 61276672
+    },
+    {
       "id": "upstream-vendor",
       "role": "vendor",
       "format": "tar.gz",

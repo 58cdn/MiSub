@@ -1,8 +1,8 @@
 # MiSub Probe / 独立节点检测器
 
-本目录是主动拉取任务的 Linux/macOS 检测器源码。构建目标是把固定版本 Mihomo 嵌入单个可执行文件，运行时不依赖 Go、Python、Node.js 或 Docker。
+本目录是主动拉取任务的 Linux、macOS 与 Windows 检测器源码。固定版本 Mihomo 嵌入单个可执行文件，运行时不依赖 Go、Python、Node.js 或 Docker。Windows 目标为 `windows-amd64`，要求 Windows 10 / Windows Server 2016 或更新版本的 x64 系统；不包含 Windows ARM64 或旧版 Windows。
 
-**当前状态：二进制 Release 和 CI artifact 分发已暂停。** 还需补齐传递依赖 LICENSE/NOTICE 与内核生成 CA 等构建输入，验证源码包与二进制的对应关系；目前不能宣称已提供完整可分发的安装包。原生 CI 构建及离线代理 fixture 继续执行。下述安装流程是待发布后的使用说明；检测器管理与任务 UI 已由 PR #12 集成，但尚未完成真实节点验收。
+**当前状态：二进制 Release 和 CI artifact 分发已暂停，尚未提供 Windows 发行包。** 还需核验传递依赖 LICENSE/NOTICE、生成输入和源码包与二进制的对应关系；目前不能宣称已提供完整可分发的安装包。原生 CI 构建及离线代理 fixture 继续执行。以下命令供已取得并核验来源的本版本本地构建使用，不表示已完成真实用户节点验收。
 
 ## 启动
 
@@ -18,17 +18,27 @@
 misub-probe --pair --server https://your-misub.example --pair-window <window-id> --config <private-config-path>
 ```
 
-将占位符替换为实际值。配置路径必须是绝对路径，例如 `"$HOME/.misub-probe/probe.json"`；客户端可创建最后一层 0700 私有目录，已有父目录也必须属于当前用户且权限为 0700，路径中不允许符号链接。不要把长期凭据或私密设备证明放入命令行。客户端会显示短码、站点和本次随机请求的比对指纹；在网页输入短码，核对这三项以及客户端声明的名称、平台与版本后明确批准。该指纹用于比对会话，不是硬件身份认证。
+将占位符替换为实际值。Linux/macOS 配置路径必须是绝对路径，例如 `"$HOME/.misub-probe/probe.json"`；客户端可创建最后一层 0700 私有目录，已有配置父目录也必须属于当前用户且权限为 0700，路径中不允许符号链接。
+
+Windows 在普通用户的 PowerShell 中使用对应本地程序，默认私密目录为 `%LOCALAPPDATA%\MiSubProbe`：
+
+```powershell
+.\misub-probe-windows-amd64.exe --pair --server https://your-misub.example --pair-window PUBLIC_WINDOW_ID --config "$env:LOCALAPPDATA\MiSubProbe\probe.json"
+```
+
+Windows 使用仅当前用户与 SYSTEM 可访问的受保护 ACL；配对可创建最后一层私密目录，已有目录或文件权限不安全时拒绝继续，不自动更改权限。路径必须是支持持久 ACL 的本地卷上的绝对路径，不接受 UNC、设备路径、符号链接或目录联接；详细路径限制见 [Windows 说明](../docs/detector-windows.md)。
+
+不要把长期凭据或私密设备证明放入命令行。客户端会显示短码、站点和本次随机请求的比对指纹；在网页输入短码，核对这三项以及客户端声明的名称、平台与版本后明确批准。该指纹用于比对会话，不是硬件身份认证。
 
 客户端只在批准后一次领取长期凭据，安全保存配置并退出。配对不会启动代理内核、领取节点任务、安装服务或启用自启；之后显式执行 `misub-probe --config <private-config-path>` 才开始运行。页面中的“身份已创建”与“首次通信”分别表示兑换完成和实际收到领单/心跳。
 
-现有配置不会被隐式覆盖。配对过期、取消或已兑换无法再次领取凭据；若成功响应丢失或本机保存失败，在网页撤销该未连接身份后重新配对。完整协议见[配对 API 契约](../docs/detector-pairing-api.md)。本阶段配对安全存储支持 Linux/macOS；Windows 安装与 ACL 适配单独验收。
+配置通过完整写入后原子发布保存，已有目标不会被覆盖。配对过期、取消或已兑换无法再次领取凭据；若成功响应丢失或本机保存失败，在网页撤销该未连接身份后重新配对。完整协议见[配对 API 契约](../docs/detector-pairing-api.md)。
 
-### 私密配置文件
+### 高级方式：手动配置
 
-1. 在 MiSub 的“设置 → 数据与集成 → 添加 / 管理检测器”创建一台检测器，下载一次性生成的 `probe.json`。每台机器使用不同的配置；不要把同一个身份复制到多台机器。
-2. 从本仓库 `probe-v*` Release 下载匹配系统和 CPU 的压缩包，验证 SHA256 后解压。`linux-amd64` 对应常见 x86 服务器，`linux-arm64` 对应 ARM 服务器；`darwin-amd64` 是 Intel Mac，`darwin-arm64` 是 Apple Silicon。
-3. 在文件所在目录执行（替换为下载包内的实际文件名）：
+1. 需要手动管理凭据时，在“添加 / 管理检测器”使用高级手动创建入口，下载一次性生成的 `probe.json`。每台机器使用不同的配置；不要把同一个身份复制到多台机器。
+2. 使用来源可信、版本匹配的本地构建。目标为 `linux-amd64`、`linux-arm64`、`darwin-amd64`（Intel Mac）、`darwin-arm64`（Apple Silicon）和 `windows-amd64`；Windows 本地构建文件名为 `misub-probe-windows-amd64.exe`。分发恢复后再按发行说明校验下载包，既有 `probe-v0.1.0` 不能代替本版本。
+3. Linux/macOS 在文件所在目录执行（替换为实际文件名）：
 
 ```sh
 chmod 600 probe.json
@@ -38,13 +48,21 @@ chmod 700 misub-probe-linux-amd64
 ./misub-probe-linux-amd64 --config ./probe.json
 ```
 
+Windows 的手动配置也必须满足私密 ACL 检查；普通下载目录中的文件不应直接作为私密配置。优先使用配对流程创建合格目录和文件，然后运行：
+
+```powershell
+.\misub-probe-windows-amd64.exe --check-config --config "$env:LOCALAPPDATA\MiSubProbe\probe.json"
+.\misub-probe-windows-amd64.exe --self-test
+.\misub-probe-windows-amd64.exe --config "$env:LOCALAPPDATA\MiSubProbe\probe.json"
+```
+
 在 MiSub 选择检测器与节点后提交任务即可。Ctrl-C 正常停止。`--once` 最多处理一条待测节点任务后退出；`--version` 显示构建版本。配置包含可读取授权节点凭据的 Token，请勿提交、粘贴到聊天或打印到日志。丢失配置时撤销该身份并重新创建，不能再次读取旧 Token。
 
-不需要公网 IP、入站防火墙规则、SSH、TUN、系统代理或管理员权限。内核只在本机回环地址短暂监听，并使用随机认证；不会设置系统网络。建议用普通用户运行。Linux 必须有正常的系统 CA 证书；Linux/macOS 必须允许在用户临时目录执行文件。macOS 未签名程序可能需要通过系统安全设置进行一次明确批准；不要批量关闭 Gatekeeper。
+不需要公网 IP、入站防火墙规则、SSH、TUN、系统代理或管理员权限。内核只在本机回环地址短暂监听，并使用随机认证；不会设置系统网络。使用普通用户运行。Linux 必须有正常的系统 CA 证书；各平台必须允许在用户私有临时目录执行文件。macOS 未签名程序可能需要通过系统安全设置进行一次明确批准；不要批量关闭 Gatekeeper。
 
 “无依赖”不等于“只联网 MiSub 就能测任何节点”：检测机仍必须能连到 MiSub、节点服务器，并经节点访问测试站点。首次安装可在别处下载后传到检测机；运行时不访问 GitHub 下载内核。
 
-## 五类检测及结果含义
+## 六类检测及结果含义
 
 | 类型     | 实际执行                                                                                          | 边界                                                                                                               |
 | -------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -53,6 +71,7 @@ chmod 700 misub-probe-linux-amd64
 | `proxy`  | 经过所选节点请求固定 HTTPS 204 地址                                                               | 包含协议、TLS、HTTP 开销，不称为 TCP RTT；必须空响应 204 才通过                                                    |
 | `speed`  | 经过节点读取固定测速站点的限量数据                                                                | 仅显式选择；默认 5 MiB、最多 20 MiB/节点/次；界面显示最坏重试预算                                                  |
 | `unlock` | 经节点探测 Netflix、YouTube、OpenAI、Claude、Gemini、Disney+、Spotify、TikTok 的固定公开页面/接口 | 返回明确地区拒绝、限流、挑战/未知、可访问但解锁未知；不把普通 200/401 或 Netflix CDN 地址当作能播放/账号可用的证明 |
+| `observations` | 经节点访问选定的固定 HTTPS 来源，记录出口 IP、国家、ASN 与可选的 IPPure 质量证据 | 各来源独立保留时间、错误、未知值和冲突；IPPure 为实验性来源，IPinfo 未配置，来源请求耗时不作为节点延迟 |
 
 服务检测是**网络侧可用性证据**，不登录、不申请 API Key、不验证订阅套餐或真实播放。所有普通网页成功仍保留 `status=unknown, code=service_reachable`，明确拒绝才标记 blocked。服务规则会随平台变化，空结果或挑战页不能显示绿色“已解锁”。这一保守语义有回归测试。
 
@@ -60,7 +79,7 @@ chmod 700 misub-probe-linux-amd64
 
 ## 安全与任务生命周期
 
-检测器只使用固定 HTTPS MiSub 源，拒绝 API 重定向，不读取系统代理环境变量。原始节点配置只交给授权检测器；任务领取后保留在内存与 0700 私有临时目录里的 0600 内核配置，任务退出清理。SIGKILL/断电不能执行清理，系统临时目录仍应按本机策略定期清理。
+检测器只使用固定 HTTPS MiSub 源，拒绝 API 重定向，不读取系统代理环境变量。原始节点配置只交给授权检测器；任务领取后保留在内存与私有临时文件中，任务退出清理。Linux/macOS 使用 0700 目录与 0600 配置；Windows 使用当前用户与 SYSTEM 的受保护 ACL。Windows 内核无窗口启动，并在执行前加入 Job Object；取消或检测器进程退出会终止其内核及子进程。进程被强制终止或断电后无法保证临时文件清理，系统临时目录仍应按本机策略定期清理。
 
 节点目标拒绝 loopback、私网、链路本地、CGNAT、保留/文档/组播地址、云元数据目标，以及包含私网答案的 DNS 结果。通过校验后固定目标 IP，并保留协议支持的 TLS 身份；无直接联网回退。当前内核的 SOCKS5 TLS 不支持独立 SNI，因此域名服务器与自定义身份明确返回 unsupported；不会关闭验证来补偿。链式代理、额外路由/次级目标、任何层级的 skip-cert-verify 与当前未安全支持的传输参数同样返回 unsupported。Provider 请求仍由节点侧处理目标域名，不替换为检测机的 DNS 结果。
 
@@ -72,7 +91,7 @@ HTTP 429 在读取响应体前保留为 `unknown/rate_limited`，合法 `Retry-A
 
 ## 用户级安装管理
 
-已取得本版本可执行文件后，可用以下命令管理 Linux/macOS 用户安装。二进制分发仍暂停；既有 `probe-v0.1.0` 不包含这些命令。示例使用 Linux amd64 文件，macOS 请替换为对应平台文件名。
+已取得本版本可执行文件后，可显式管理用户安装。二进制分发仍暂停；既有 `probe-v0.1.0` 不包含这些命令。以下示例使用 Linux amd64 文件，macOS 请替换为对应平台文件名。
 
 ```sh
 ./misub-probe-linux-amd64 --install --config "$HOME/.misub-probe/probe.json"
@@ -83,13 +102,28 @@ HTTP 429 在读取响应体前保留为 `unknown/rate_limited`，合法 `Retry-A
 ./misub-probe-linux-amd64 --uninstall
 ```
 
-安装只复制当前程序并生成私有清单与服务描述，不联网配对、不启动服务。配置可先配对生成，也可在安装后配对；显式启动前必须存在有效私密配置。Linux 使用当前用户的 systemd 会话和临时关联，macOS 使用当前用户 GUI 会话的显式 launchd 加载。登录自动启动、系统服务、`linger`、提权、系统代理和 TUN 均不由这些命令配置。
+安装只复制当前程序并生成私有清单与进程描述，不联网配对、不启动进程。配置可先配对生成，也可在安装后配对；显式启动前必须存在有效私密配置。Linux 使用当前用户的 systemd 会话和临时关联，macOS 使用当前用户 GUI 会话的显式 launchd 加载。登录自动启动、系统服务、`linger`、提权、系统代理和 TUN 均不由这些命令配置。
 
 重装和卸载要求服务已停止；文件内容、归属或注册信息不明时拒绝修改。重装复用原配置路径且不自动启动，卸载保留配置及服务器撤销状态。`--status` 表示本机进程状态，连接 MiSub 仍以管理页实际通信为准。进程运行时可在断网后继续等待恢复，凭据失效则退出；没有自动崩溃重启。具体目录与恢复限制见[用户安装说明](../docs/detector-user-install.md)。
 
+Windows 在非管理员 PowerShell 中使用相同管理选项：
+
+```powershell
+.\misub-probe-windows-amd64.exe --install
+.\misub-probe-windows-amd64.exe --start
+.\misub-probe-windows-amd64.exe --status --json
+.\misub-probe-windows-amd64.exe --stop
+.\misub-probe-windows-amd64.exe --reinstall
+.\misub-probe-windows-amd64.exe --uninstall
+```
+
+Windows 默认配置为 `%LOCALAPPDATA%\MiSubProbe\probe.json`，安装目录为 `%LOCALAPPDATA%\MiSubProbe\install`。`--install --config <绝对路径>` 可指定安装目录之外的其他私密配置。安装结果和 `--status --json` 的 `executablePath` 提供已核验的程序路径；安装后的文件名为 `<安装目录>\<代号>\misub-probe.exe`。`--start` 创建无窗口的用户进程，不注册 Windows 服务、计划任务、开机启动或 PATH；启动和停止须处于同一用户的同一 Windows 登录会话。
+
+Windows 的私密 `runtime.json` 保存进程 PID、创建时间、程序路径与用户 SID，停止前核验这些值，避免把复用的 PID 当成原进程；这些值不是硬件身份认证。`--status` 只检查本机状态，不验证 MiSub 连接。重装和卸载前须停止；重装保留配置及旧代文件，最多八代。Windows 无法删除正在执行的自身程序，因此从安装目录内运行 `--uninstall` 会在删除前拒绝；请用安装目录之外另一份已核验可信的本地程序卸载。卸载保留配置与服务器身份，停用设备时另在网页撤销。详见 [Windows 安装与安全说明](../docs/detector-windows.md)。
+
 ## 可选开机运行
 
-先完成前台 `--self-test` 与一条任务验收。仓库提供 `services/misub-probe.service`（Linux 用户服务）和 `services/com.misub.probe.plist`（macOS LaunchAgent）模板，替换绝对路径后再安装。不会自动要求 sudo、创建系统用户或修改防火墙。日志只输出固定状态，不输出配置、Token、URI 或内核原始日志。
+Linux/macOS 用户可在完成前台 `--self-test` 与一条任务验收后另行配置开机运行。仓库提供 `services/misub-probe.service`（Linux 用户服务）和 `services/com.misub.probe.plist`（macOS LaunchAgent）模板，替换绝对路径后再安装。不会自动要求 sudo、创建系统用户或修改防火墙。Windows 管理命令不提供开机运行配置。日志只输出固定状态，不输出配置、Token、URI 或内核原始日志。
 
 ## 源码构建与测试
 
@@ -101,9 +135,11 @@ CGO_ENABLED=0 go build -trimpath -o misub-probe .
 ./misub-probe --self-test
 ```
 
-仅构建机需要 Python 3 和 Go；只从锁定的官方地址下载并验证 SHA256。源代码单元测试可不下载内核执行 `go test -race ./...`，此时两个真实内核测试会跳过；不能据此声称代理链路已通过。发行 CI 在 Linux/macOS 两种 CPU 的原生 runner 上执行内核测试，校验请求确实通过指定代理、坏节点不直接回退，再生成发行包。
+仅构建机需要 Python 3 和 Go；只从锁定的官方地址下载并验证 SHA256。源代码单元测试可不下载内核执行 `go test -race ./...`，此时依赖真实内核的测试会跳过；不能据此声称代理链路已通过。原生 CI 覆盖 Linux/macOS 各两种 CPU 与 Windows amd64 共五个目标，要求提供校验后的内核，测试请求确实通过指定代理、坏节点不直接回退，并构建本地归档。构建归档不等于获准分发。
 
-Mihomo 固定 `v1.19.32` / `88dcbf7f1614a67c3b36b848ee3592dfa92ada36`，四平台压缩文件 SHA256 记录于 `kernel-lock.json`。原生构建、代理 fixture、真实用户节点验收是不同层次；CI fixtures 不证明你已有节点的地区解锁状态。
+Windows 构建使用 `python scripts/bundle.py windows-amd64`，随后执行 `go test`、`go vet` 与 `go build -o misub-probe-windows-amd64.exe .`。Windows 的 `go test -race` 另需兼容的 MinGW-w64 编译器；运行发行程序不需要这些构建工具。Windows CI 还要求原生 ACL、任务清理与进程生命周期测试及 `--self-test`，交叉编译不能替代这些检查。
+
+Mihomo 固定 `v1.19.32` / `88dcbf7f1614a67c3b36b848ee3592dfa92ada36`，五个目标的归档 SHA256 记录于 `kernel-lock.json`。Windows 使用官方 amd64 compatible ZIP，同时校验唯一 EXE 的摘要、大小与 PE 架构；不解包任意路径。原生构建、代理 fixture、真实用户节点验收是不同层次；CI fixtures 不证明你已有节点的地区解锁状态。
 
 ## 许可证与来源
 

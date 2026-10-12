@@ -64,6 +64,8 @@ jobs:
         run: |
           test "$(go env GOOS)-$(go env GOARCH)" = '${{ matrix.target }}'
           python3 scripts/bundle.py '${{ matrix.target }}'
+      - name: Test archive verification with offline fixtures
+        run: python3 -B -m unittest discover -s scripts -p 'test_*.py' -v
       - name: Unit, race and actual core routing tests
         env:
           MISUB_PROBE_REQUIRE_KERNEL: '1'
@@ -106,6 +108,60 @@ jobs:
           name: misub-probe-${{ matrix.target }}
           path: detector/misub-probe-${{ matrix.target }}.tar.gz
           if-no-files-found: error
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: detector
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Verify native architecture and available race compiler
+        run: |
+          if ((go env GOOS) -ne 'windows' -or (go env GOARCH) -ne 'amd64') { throw 'Unexpected runner architecture' }
+          $compiler = (Get-Command gcc -ErrorAction Stop).Source
+          & $compiler --version
+          if ($LASTEXITCODE -ne 0) { throw 'C compiler unavailable' }
+          $runtimeLibrary = & $compiler --print-file-name libsynchronization.a
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $runtimeLibrary)) { throw 'MinGW race runtime unavailable' }
+          "CC=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Verify locked Windows archive and offline archive fixtures
+        run: |
+          python scripts/bundle.py windows-amd64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B -m unittest discover -s scripts -p 'test_*.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Native race, ACL, lifecycle and actual core routing tests
+        env:
+          CGO_ENABLED: '1'
+          MISUB_PROBE_REQUIRE_KERNEL: '1'
+        run: |
+          go test -race -count=1 -v ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go vet ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build standalone executable and native smoke
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          go build -trimpath -ldflags "-s -w -X main.version=0.1.0 -X main.commit=$env:GITHUB_SHA" -o dist/misub-probe-windows-amd64.exe .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./dist/misub-probe-windows-amd64.exe --self-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./dist/misub-probe-windows-amd64.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item -LiteralPath README.md,kernel-lock.json -Destination dist
+          Copy-Item -LiteralPath ../LICENSE -Destination dist/LICENSE.MiSub
+          Copy-Item -LiteralPath embedded/LICENSE.mihomo -Destination dist
+          $digest = (Get-FileHash -LiteralPath dist/misub-probe-windows-amd64.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$digest  misub-probe-windows-amd64.exe" | Set-Content -LiteralPath dist/SHA256SUMS -Encoding ascii
+          Compress-Archive -Path dist/* -DestinationPath misub-probe-windows-amd64.zip
   source:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -140,7 +196,7 @@ jobs:
     # Re-enable only in an audited PR that pairs every binary with complete
     # licenses/notices, wrapper source, kernel source and generated build inputs.
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish && false }}
-    needs: [native, source]
+    needs: [native, windows, source, distribution-audit]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

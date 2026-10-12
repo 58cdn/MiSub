@@ -13,9 +13,11 @@ import os
 import pathlib
 import re
 import stat
+import struct
 import sys
 import tarfile
 import unicodedata
+import zipfile
 import zlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -30,7 +32,7 @@ LIMITS = {
     "totalNoticeBytes": 24 * 1024 * 1024,
     "modules": 2048,
 }
-TARGETS = {"linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64"}
+TARGETS = {"linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64", "windows-amd64"}
 NOTICE = re.compile(r"^(license|licence|copying|notice|copyright|patents|authors)([._-].*)?$", re.I)
 HEX = re.compile(r"^[0-9a-f]{64}$")
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
@@ -88,11 +90,16 @@ def validate_lock(lock, kernel):
         raise AuditError("kernel_source_lock_mismatch")
     if not isinstance(lock["artifacts"], list) or not 1 <= len(lock["artifacts"]) <= 16:
         raise AuditError("invalid_distribution_lock")
+    if not isinstance(kernel["assets"], dict) or set(kernel["assets"]) != TARGETS:
+        raise AuditError("invalid_kernel_targets")
     ids, targets = set(), set()
     for artifact in lock["artifacts"]:
-        if not isinstance(artifact, dict) or set(artifact) != {
+        fields = {
             "id", "role", "format", "url", "sha256", "target", "prefix", "requiredFiles"
-        }:
+        }
+        if isinstance(artifact, dict) and artifact.get("format") == "zip":
+            fields |= {"entry", "executableSha256", "executableBytes"}
+        if not isinstance(artifact, dict) or set(artifact) != fields:
             raise AuditError("invalid_artifact_lock")
         identifier = artifact["id"]
         if not isinstance(identifier, str) or not IDENTIFIER.fullmatch(identifier) or identifier in ids:
@@ -100,7 +107,7 @@ def validate_lock(lock, kernel):
         ids.add(identifier)
         if artifact["role"] not in {"kernel", "vendor", "toolchain", "historical-core-source"}:
             raise AuditError("invalid_artifact_role")
-        if artifact["format"] not in {"gzip", "tar.gz"}:
+        if artifact["format"] not in {"gzip", "tar.gz", "zip"}:
             raise AuditError("invalid_artifact_format")
         if not isinstance(artifact["sha256"], str) or not HEX.fullmatch(artifact["sha256"]):
             raise AuditError("invalid_artifact_digest")
@@ -111,13 +118,25 @@ def validate_lock(lock, kernel):
             raise AuditError("invalid_artifact_source")
         if artifact["role"] == "kernel":
             target = artifact["target"]
-            if target not in TARGETS or target in targets or artifact["format"] != "gzip":
+            expected_format = "zip" if target == "windows-amd64" else "gzip"
+            if target not in TARGETS or target in targets or artifact["format"] != expected_format:
                 raise AuditError("invalid_kernel_target")
             targets.add(target)
             expected = kernel["assets"][target]
             url = f'https://github.com/{kernel["repository"]}/releases/download/{kernel["version"]}/{expected["file"]}'
             if artifact["sha256"] != expected["sha256"] or artifact["url"] != url:
                 raise AuditError("kernel_asset_lock_mismatch")
+            if artifact["prefix"] != "" or artifact["requiredFiles"] != []:
+                raise AuditError("invalid_kernel_archive_metadata")
+            if expected_format == "zip":
+                if not isinstance(artifact["entry"], str) or not re.fullmatch(r"mihomo-[a-z0-9.-]+\.exe", artifact["entry"]):
+                    raise AuditError("invalid_kernel_entry")
+                if not isinstance(artifact["executableSha256"], str) or not HEX.fullmatch(artifact["executableSha256"]):
+                    raise AuditError("invalid_kernel_executable_digest")
+                if type(artifact["executableBytes"]) is not int or not 0 < artifact["executableBytes"] <= LIMITS["memberBytes"]:
+                    raise AuditError("invalid_kernel_executable_size")
+                if any(artifact[key] != expected.get(key) for key in ("entry", "executableSha256", "executableBytes")):
+                    raise AuditError("kernel_executable_lock_mismatch")
         elif artifact["target"] is not None or artifact["format"] != "tar.gz":
             raise AuditError("invalid_artifact_target")
         if artifact["prefix"] and canonical_path(artifact["prefix"]) != artifact["prefix"]:
@@ -302,6 +321,120 @@ def read_snapshot(path, maximum):
     return payload
 
 
+def validate_zip_extra(extra):
+    seen, offset = set(), 0
+    while offset < len(extra):
+        if len(extra) - offset < 4:
+            raise AuditError("invalid_zip_extra")
+        kind, size = struct.unpack_from("<HH", extra, offset)
+        offset += 4
+        if size > len(extra) - offset or kind in seen:
+            raise AuditError("invalid_zip_extra")
+        # Small locked assets need neither ZIP64 nor alternate path/encryption metadata.
+        if kind in (0x0001, 0x7075, 0x9901):
+            raise AuditError("unsupported_zip_extra")
+        seen.add(kind)
+        offset += size
+
+
+def scan_kernel_zip(payload, artifact, limits):
+    # Preflight the directory before ZipFile allocates a list of member metadata.
+    end = payload.rfind(b"PK\x05\x06", max(0, len(payload) - 65557))
+    if end < 0 or len(payload) - end < 22:
+        raise AuditError("invalid_zip_directory")
+    # ZipFile consults this locator even when the ordinary EOCD has no ZIP64
+    # sentinel values. It must not select a directory outside this preflight.
+    if end >= 20 and payload[end - 20:end - 16] == b"PK\x06\x07":
+        raise AuditError("unsupported_zip64_locator")
+    _, disk, directory_disk, disk_count, count, directory_size, directory_offset, comment_size = struct.unpack_from("<4s4H2IH", payload, end)
+    if disk or directory_disk or disk_count != 1 or count != 1 or limits["members"] < 1:
+        raise AuditError("zip_requires_one_executable")
+    if directory_size > limits["metadataBytes"] or directory_size < 46:
+        raise AuditError("archive_metadata_size_limit")
+    if end + 22 + comment_size != len(payload) or directory_offset + directory_size != end:
+        raise AuditError("trailing_or_hidden_zip_data")
+    if directory_offset < 30 or payload[directory_offset:directory_offset + 4] != b"PK\x01\x02":
+        raise AuditError("invalid_zip_directory")
+    if struct.unpack_from("<H", payload, directory_offset + 6)[0] > 20:
+        raise AuditError("unsupported_zip_version")
+    name_size, extra_size, entry_comment_size, start_disk = struct.unpack_from("<4H", payload, directory_offset + 28)
+    if start_disk or 46 + name_size + extra_size + entry_comment_size != directory_size:
+        raise AuditError("invalid_zip_directory")
+    central_name = payload[directory_offset + 46:directory_offset + 46 + name_size]
+    validate_zip_extra(payload[directory_offset + 46 + name_size:directory_offset + 46 + name_size + extra_size])
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        entries = archive.infolist()
+        if len(entries) != 1:
+            raise AuditError("zip_requires_one_executable")
+        entry = entries[0]
+        name = canonical_path(entry.orig_filename)
+        if entry.orig_filename != name or name != artifact["entry"] or entry.filename != name:
+            raise AuditError("kernel_entry_mismatch")
+        mode = entry.external_attr >> 16
+        if entry.is_dir() or entry.external_attr & 0x18 or stat.S_IFMT(mode) not in (0, stat.S_IFREG):
+            raise AuditError("unsafe_archive_member_type")
+        if entry.flag_bits & ~0x080e or entry.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+            raise AuditError("unsupported_zip_encoding")
+        if entry.header_offset != 0 or payload[:4] != b"PK\x03\x04":
+            raise AuditError("hidden_zip_prefix")
+        if entry.file_size <= 0 or entry.file_size > limits["memberBytes"]:
+            raise AuditError("archive_member_size_limit")
+        if entry.file_size > limits["expandedBytes"]:
+            raise AuditError("expanded_size_limit")
+        if entry.file_size != artifact["executableBytes"]:
+            raise AuditError("kernel_executable_size_mismatch")
+        _, version, flags, method, _, _, crc, compressed, expanded, local_name_size, local_extra_size = struct.unpack_from("<4s5H3I2H", payload)
+        header_size = 30 + local_name_size + local_extra_size
+        if header_size + directory_size + comment_size > limits["metadataBytes"]:
+            raise AuditError("archive_metadata_size_limit")
+        if header_size > directory_offset or payload[30:30 + local_name_size] != central_name:
+            raise AuditError("zip_local_header_mismatch")
+        if version != entry.extract_version or flags != entry.flag_bits or method != entry.compress_type:
+            raise AuditError("zip_local_header_mismatch")
+        validate_zip_extra(payload[30 + local_name_size:header_size])
+        expected_values = (entry.CRC, entry.compress_size, entry.file_size)
+        actual_values = (crc, compressed, expanded)
+        if any(actual != expected and not (flags & 8 and actual == 0) for actual, expected in zip(actual_values, expected_values)):
+            raise AuditError("zip_local_header_mismatch")
+        data_end = header_size + entry.compress_size
+        if data_end > directory_offset:
+            raise AuditError("zip_overlapping_member")
+        descriptor = payload[data_end:directory_offset]
+        if flags & 8:
+            if descriptor.startswith(b"PK\x07\x08"):
+                descriptor = descriptor[4:]
+            if len(descriptor) != 12 or struct.unpack("<III", descriptor) != expected_values:
+                raise AuditError("invalid_zip_descriptor")
+        elif descriptor:
+            raise AuditError("trailing_or_hidden_zip_data")
+        digest, size, checksum = hashlib.sha256(), 0, 0
+        decoder = zlib.decompressobj(-15) if method == zipfile.ZIP_DEFLATED else None
+        for offset in range(header_size, data_end, CHUNK):
+            chunk = payload[offset:min(offset + CHUNK, data_end)]
+            decoded = decoder.decompress(chunk, entry.file_size - size + 1) if decoder else chunk
+            size += len(decoded)
+            if size > entry.file_size:
+                raise AuditError("kernel_executable_size_mismatch")
+            if decoder and (decoder.unused_data or decoder.unconsumed_tail):
+                raise AuditError("trailing_zip_compressed_data")
+            digest.update(decoded)
+            checksum = zlib.crc32(decoded, checksum)
+        if decoder and not decoder.eof:
+            raise AuditError("truncated_zip_member")
+        if size != entry.file_size:
+            raise AuditError("kernel_executable_size_mismatch")
+        if checksum != entry.CRC:
+            raise AuditError("zip_crc_mismatch")
+        if digest.hexdigest() != artifact["executableSha256"]:
+            raise AuditError("kernel_executable_checksum_mismatch")
+        return {
+            "expandedBytes": size,
+            "uncompressedSha256": digest.hexdigest(),
+            "executableIdentity": "locked-sha256",
+            "inventory": [{"path": name, "type": "file", "size": size, "sha256": digest.hexdigest()}],
+        }
+
+
 def audit_artifact(artifact, path, limits=None):
     limits = LIMITS if limits is None else limits
     # Hash and parse exactly the same immutable, bounded bytes. The caller's file
@@ -311,6 +444,9 @@ def audit_artifact(artifact, path, limits=None):
     if digest != artifact["sha256"]:
         raise AuditError("artifact_checksum_mismatch")
     result = {"id": artifact["id"], "status": "verified", "verifiedScope": "sha256-and-structure", "sha256": digest, "compressedBytes": len(payload), "lockedSource": artifact["url"], "role": artifact["role"], "target": artifact["target"]}
+    if artifact["format"] == "zip":
+        result.update(scan_kernel_zip(payload, artifact, limits))
+        return result, {}
     with gzip.GzipFile(fileobj=io.BytesIO(payload)) as decompressed:
         if artifact["format"] == "tar.gz":
             scan, notices = scan_archive(decompressed, artifact, limits)
@@ -342,7 +478,7 @@ def audit(lock, kernel, supplied):
         try:
             result, notices = audit_artifact(artifact, pathlib.Path(supplied[identifier]))
             collected[identifier] = notices
-        except (AuditError, OSError, EOFError, tarfile.TarError, UnicodeError, zlib.error, RecursionError) as error:
+        except (AuditError, OSError, EOFError, tarfile.TarError, zipfile.BadZipFile, UnicodeError, zlib.error, RecursionError) as error:
             result = {"id": identifier, "status": "invalid", "error": str(error) if isinstance(error, AuditError) else "unreadable_archive"}
         results.append(result)
     # These are verifier capabilities, never assertions accepted from the lock.

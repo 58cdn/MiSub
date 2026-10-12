@@ -61,7 +61,7 @@ func TestInstallationOfflineCancellationStopsWithoutRetry(t *testing.T) {
 }
 
 func TestInstallationUnsupportedPlatformFailsBeforeAnyAction(t *testing.T) {
-	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
 		t.Skip("supported platform")
 	}
 	for _, action := range []string{"install", "start", "stop", "status", "uninstall", "reinstall"} {

@@ -22,11 +22,19 @@ python3 -B detector/scripts/audit_distribution.py \
   --require-ready > audit-report.json
 ```
 
-`--artifact ID=PATH` can be repeated for different IDs. The four kernel IDs are
+`--artifact ID=PATH` can be repeated for different IDs. The five kernel IDs are
 `kernel-linux-amd64`, `kernel-linux-arm64`, `kernel-darwin-amd64`, and
-`kernel-darwin-arm64`. The lock cross-checks each kernel digest, asset URL, version
+`kernel-darwin-arm64`, plus `kernel-windows-amd64`. The lock cross-checks each kernel digest, asset URL, version
 and source commit against `detector/kernel-lock.json`. Duplicate IDs, unknown IDs,
 duplicate JSON keys, and unknown lock fields are rejected.
+
+The Windows target accepts the locked ZIP containing exactly
+`mihomo-windows-amd64-compatible.exe`. Both locks must agree on its outer archive
+digest, entry name, executable byte count and inner executable digest. The report
+records the inner size and SHA256 with `executableIdentity: "locked-sha256"`.
+This identifies the pinned bytes; it does not verify executable behavior,
+publisher identity, signatures, or source correspondence. The Unix kernel
+reports retain their uncompressed digests without claiming those stronger checks.
 
 The JSON report contains the checked digest, uncompressed member sizes and
 digests, full member inventory, recognized notice files, module versions and
@@ -97,6 +105,16 @@ conflicts, unsafe prefixes, global PAX headers, excessive extension metadata, an
 after the tar end marker. The gzip trailer is read and validated. Recognized
 notices are retained in bounded memory for explicit collection; other large
 members are hashed incrementally.
+
+Windows ZIPs are inspected without extraction. Before allocating ZIP directory
+entries, the auditor requires a single-disk archive with exactly one member and
+bounded directory metadata. It rejects unsafe or nonmatching paths, duplicates,
+nonregular entries, encryption, unsupported compression, ZIP64 and alternate-path
+metadata, malformed or duplicate extra fields, inconsistent local/directory
+headers, overlapping data, hidden prefixes/trailers, and invalid data descriptors.
+Only stored and deflated data are supported. Streaming decompression is bounded
+by the locked executable size and the 128 MiB member limit, consumes the complete
+compressed stream, and checks CRC32 plus the separately locked executable SHA256.
 
 ## Verified public material observations
 
@@ -177,3 +195,7 @@ full notice text and digest preservation, replacements, malformed input,
 traversal/links/collisions, limits, extension metadata, empty CA, corruption,
 truncation, and hidden concatenated archives. Real subscriptions and real-node
 network checks are outside this audit.
+Windows cases additionally cover ZIP directory preflight, entry types, encryption,
+data descriptors, CRC, local-header conflicts, inner size/digest mismatches and
+compressed-stream trailers. An all-material fixture proves that successful checks
+for all five target archives still leave `ready: false`.

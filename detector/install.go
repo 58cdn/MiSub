@@ -42,6 +42,9 @@ type installPaths struct {
 }
 
 func (p installPaths) serviceName() string {
+	if p.Platform == "windows" {
+		return "managed-process.json"
+	}
 	if p.Platform == "darwin" {
 		return "com.misub.probe.plist"
 	}
@@ -53,7 +56,13 @@ func (p installPaths) join(parts ...string) string {
 	}
 	return filepath.Join(parts...)
 }
-func (p installPaths) binary(id string) string  { return p.join(p.Root, id, "misub-probe") }
+func (p installPaths) binary(id string) string {
+	name := "misub-probe"
+	if p.Platform == "windows" {
+		name += ".exe"
+	}
+	return p.join(p.Root, id, name)
+}
 func (p installPaths) service(id string) string { return p.join(p.Root, id, p.serviceName()) }
 
 type serviceStatus struct {
@@ -240,7 +249,7 @@ func (m *installManager) execute(ctx context.Context, action string) (installati
 }
 
 func manageInstallation(ctx context.Context, action, config string, jsonOutput bool, output io.Writer) error {
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
 		return errors.New("installation_platform_not_supported")
 	}
 	paths, err := currentInstallPaths(config)
@@ -252,7 +261,7 @@ func manageInstallation(ctx context.Context, action, config string, jsonOutput b
 		return err
 	}
 	defer files.Close()
-	manager := installManager{paths: paths, files: files, service: newServiceBackend(paths, &nativeCommandRunner{home: paths.Home})}
+	manager := installManager{paths: paths, files: files, service: platformManagedService(paths, files)}
 	bounded, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	status, err := manager.execute(bounded, action)

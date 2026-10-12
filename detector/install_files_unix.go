@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -18,6 +19,13 @@ import (
 )
 
 const maxInstalledBinaryBytes = 256 * 1024 * 1024
+
+func platformManagedService(paths installPaths, _ installationStore) managedService {
+	return newServiceBackend(paths, &nativeCommandRunner{home: paths.Home})
+}
+func runManagedInstallation(context.Context, string, string) error {
+	return errors.New("managed_process_platform_not_supported")
+}
 
 type privateInstallationStore struct {
 	paths installPaths

@@ -183,15 +183,55 @@ try {
     for (const [name, width, height, dark] of [
         ['desktop', 1440, 900, false],
         ['mobile', 375, 812, true],
+        ['narrow-light', 320, 900, false],
+        ['narrow-dark', 320, 900, true],
     ]) {
         const before = created;
         await open(width, height, dark);
         assert.equal(created, before, 'Opening the wizard cannot create an installation window');
+        const terminal = page.getByTestId('pairing-terminal');
+        assert.equal(await terminal.inputValue(), 'unix');
+        await terminal.focus();
+        await page.keyboard.press('ArrowDown');
+        await page.keyboard.press('Enter');
+        assert.equal(await terminal.inputValue(), 'windows');
+        assert.equal(created, before, 'Changing terminals cannot create a pairing window');
+        assert.ok(
+            await terminal.evaluate(
+                (e) =>
+                    e === document.activeElement &&
+                    e.getBoundingClientRect().height >= 44 &&
+                    getComputedStyle(e).outlineStyle !== 'none'
+            )
+        );
         await page.getByTestId('pairing-start').click();
         await page.getByTestId('pairing-command').waitFor();
         const command = await page.getByTestId('pairing-command').textContent();
         assert.ok(command.includes(fixtureOrigin) && command.includes(windowId));
         assert.ok(!/mp1_|pdc1_/.test(command));
+        assert.equal(
+            command,
+            `.\\misub-probe-windows-amd64.exe --pair --server '${fixtureOrigin}' --pair-window '${windowId}' --config "$env:LOCALAPPDATA\\MiSubProbe\\probe.json"`
+        );
+        assert.equal(created, before + 1);
+        await terminal.selectOption('unix');
+        assert.ok(
+            (await page.getByTestId('pairing-command').textContent()).includes(
+                '"$HOME/.misub-probe/probe.json"'
+            )
+        );
+        await terminal.selectOption('windows');
+        assert.equal(created, before + 1, 'Switching shell instructions preserves the window');
+        await page.getByTestId('pairing-command').scrollIntoViewIfNeeded();
+        await page.screenshot({
+            path: resolve(evidence, `detector-pairing-${name}-powershell.png`),
+        });
+        const commandOverflow = await page.evaluate(() =>
+            [...document.querySelectorAll('main, section, pre')]
+                .filter((e) => e.scrollWidth > e.clientWidth + 1)
+                .map((e) => e.tagName)
+        );
+        assert.deepEqual(commandOverflow, []);
         await page.getByTestId('pairing-code').fill('ZZZZZ-ZZZZZ');
         await page.getByTestId('pairing-resolve').click();
         await page.getByRole('alert').first().waitFor();
@@ -296,6 +336,7 @@ try {
             'no native or job API from browser',
             'no private credentials in DOM/commands',
             'desktop/mobile dark mode',
+            'explicit PowerShell/Unix terminal choice with keyboard focus and 320px layouts',
         ],
     };
     await writeFile(
