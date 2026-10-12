@@ -18,7 +18,7 @@ export class ProbeStore {
     }
     q(sql, ...params) { return this.db.prepare(sql).bind(...params); }
     async agents() {
-        const rows = await this.q('SELECT * FROM probe_agents ORDER BY created_at DESC LIMIT 64').all();
+        const rows = await this.q('SELECT * FROM probe_agents ORDER BY (revoked_at IS NOT NULL), created_at DESC LIMIT 64').all();
         return rows.results.map(publicAgent);
     }
     async addAgent(name) {
