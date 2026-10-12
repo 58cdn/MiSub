@@ -1,20 +1,20 @@
-# Node diagnostics
+# Node diagnostics compatibility API and source research
 
-## Architecture and delivery plan
+This document covers the retained service-binding compatibility API at
+`/api/nodes/diagnostics` and the source research dated 2026-10-12. The current
+single-node and bulk UI uses `/api/probes/v1` with the native Go detector; see
+[node detection](node-probes.md), [source observations](probe-source-observations.md)
+and [the unified evidence UI](probe-observations-ui.md). The provider table below
+describes the compatibility runner, not the native detector's feature set.
 
-MiSub uses Vue 3/Vite and Cloudflare Pages Functions with KV/D1. The inspected
-baseline is `3253e9b1c8767cd4ba490bd93d9d7281446f42c9` on `58cdn/MiSub:main`.
-No tracked AGENTS.md, .agents, or .codex rules exist at that revision.
+## Architecture
 
-1. Add a versioned evidence contract, fixed provider registry, bounded offline-testable
-   runner and an admin-only optional executor boundary. Workers do not include a
-   proxy core: absent an explicitly configured trusted executor, return unsupported.
-2. Expose node diagnostics in the existing node interface with explicit per-run
-   consent, independent source results, timestamps, errors and conflicts. Correct
-   the existing browser HTTP timing description; it is not TCP RTT or node URLTest.
-
-Each PR starts as a draft. Merge requires independent review, security checks and
-passing CI for its final HEAD. Integration is tested again after merging.
+MiSub uses Vue 3/Vite and Cloudflare Pages Functions with KV/D1. Workers host the
+control plane; the separately operated native detector supplies the proxy core.
+The compatibility endpoint requires an explicitly configured trusted service
+binding and otherwise returns unsupported. Its versioned evidence contract keeps
+source results, timestamps, errors and conflicts independent. Repository-wide
+collaboration and documentation rules are defined in [AGENTS.md](../AGENTS.md).
 
 ## Research (2026-10-12)
 
@@ -41,13 +41,13 @@ passing CI for its final HEAD. Integration is tested again after merging.
 
 ## Safety and acceptance boundary
 
-No actual subscriptions or node credentials are used in development or CI. Fixture
-responses alone do not establish production provider correctness or real node
-routing. No deployment credentials, ports, TLS settings, or network configuration
-are created or modified. A successful Pages deployment only proves the release
-workflow, not real network acceptance.
+Compatibility tests use fixture responses rather than actual subscriptions or
+node credentials. These fixtures do not establish production provider correctness
+or real node routing. Running a compatibility executor or real-data probes requires
+separate administrator setup and authorization. A successful Pages deployment
+does not establish real network acceptance.
 
-## Implemented boundary and provider coverage
+## Compatibility API boundary and provider coverage
 
 `GET /api/nodes/diagnostics/capabilities` and `POST /api/nodes/diagnostics` require
 the existing admin session. POST also requires same-origin `Origin`, JSON body
@@ -56,8 +56,8 @@ source IDs. Input is capped at 16 KiB. No subscription expansion occurs. Unknown
 protocols are rejected; accepting a URI does not claim the executor supports it.
 The response is `no-store`; results are not saved in KV, D1 or subscription exports.
 
-No executor is installed or bound by this change. An administrator can separately
-provide a `NODE_DIAGNOSTICS` service binding implementing `POST /v1/check`.
+The compatibility API requires a `NODE_DIAGNOSTICS` service binding implementing
+`POST /v1/check`, configured separately by an administrator.
 This must be a trusted adapter to a separately operated proxy core, not a generic
 Worker fetch wrapper. It receives `{ version: 1, requestId, node, sources }` and
 must produce `{ version: 1, requestId, scope: 'node', results }`. The request ID,
@@ -89,7 +89,7 @@ Retry-After and is never automatically retried.
 | netflix / disney / youtube / gemini / claude | Registered extension points; checker_not_implemented, no request                                                  |
 | ping0                                        | Not registered or requested                                                                                       |
 
-Successful unlock detection is **not implemented** in v1. A future checker must
+Successful unlock detection is **not implemented** in the compatibility v1 API. A future checker must
 define and test affirmative provider-specific evidence before expanding the
 contract; a successful ordinary HTTP request is insufficient. Unit tests cover
 only fixtures. Actual proxy-core protocol coverage, public-address resolution,
@@ -99,8 +99,8 @@ Results carry per-source `checkedAt`, `durationMs`, `probeVersion`, `httpStatus`
 `error`, nullable IP/family/country/ASN/quality fields and explicit latency method.
 `durationMs` for an IP or quality site is never node latency. Conflicts are reported
 within an IP family and for differing country claims on the same IP. No winner,
-average risk score or merged quality classification is fabricated. V1 does not
-cache; returned `expiresAt` marks the ten-minute display freshness window.
+average risk score or merged quality classification is fabricated. The compatibility
+endpoint does not cache; returned `expiresAt` marks the ten-minute display freshness window.
 
 The executor must keep TLS verification enabled, bind every request to the selected
 node, reject unsupported protocols without direct fallback, validate node destinations

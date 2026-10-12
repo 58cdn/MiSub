@@ -14,8 +14,8 @@ Wire and execution contract:
   icanhazip.com and experimental IPPure, including source version, timestamp,
   duration, HTTP status, bounded error and nullable evidence fields. IPPure is
   opt-in; the default set is the four unauthenticated exit IP sources.
-- IPinfo without an existing detector-side configuration remains not_configured.
-  Ping0 remains disabled; no unverified HTML scraper is enabled.
+- IPinfo remains not_configured; this native detector does not accept or create
+  an IPinfo token. Ping0 remains disabled; no unverified HTML scraper is enabled.
 - Reuse the existing versioned diagnostic evidence validation where applicable;
   conflicts are recomputed at the control plane, never majority-voted away. IPv4
   and IPv6 are separate, and country conflicts are tied to the same IP.
@@ -27,12 +27,12 @@ Wire and execution contract:
   HTTP URLTest separate; quality scores keep their source meaning and missing
   fields remain unknown. Ordinary service success never proves unlock.
 
-A follow-up UI PR extends the existing NodeDetectionPanel from PR #12 with source
-selection and per-source details, freshness, errors and conflicts using the same
-jobs/results. No new credentials, production detector deployment, release assets
-or public listeners are created. Native fixture success and Pages deployment are
-not real-node acceptance. Binary distribution remains subject to the separate
-corresponding-source and license gate.
+The [NodeDetectionPanel](probe-observations-ui.md) provides unified single-node
+and bulk task entrypoints with explicit source selection and independent source
+details, freshness, errors and conflicts. Both use the same jobs/results and
+node-sharing consent. Native fixture success and Pages deployment are not
+real-node acceptance. Binary distribution remains subject to the separate
+[corresponding-source and license gate](detector-hardening.md).
 
 ## Task protocol
 

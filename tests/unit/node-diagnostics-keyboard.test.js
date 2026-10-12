@@ -1,14 +1,21 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import NodeDiagnosticsButton from '../../src/components/nodes/NodeDiagnosticsButton.vue';
 import Modal from '../../src/components/forms/Modal.vue';
 import { setLocale } from '../../src/i18n/index.js';
-vi.mock('../../src/lib/http.js', () => ({
-    api: { get: vi.fn(async () => ({ executorConfigured: false, sources: [] })) },
-}));
+beforeEach(() =>
+    vi.stubGlobal(
+        'fetch',
+        vi.fn(
+            async () =>
+                new Response(JSON.stringify({ success: true, data: { storageReady: false } }))
+        )
+    )
+);
 let wrapper;
 afterEach(() => {
     wrapper?.unmount();
+    vi.unstubAllGlobals();
     document.body.innerHTML = '';
 });
 it('moves and traps focus on first open, closes with Escape and restores the trigger', async () => {
