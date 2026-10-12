@@ -68,8 +68,8 @@ export function sanitizeResult(input, types, services = PROBE_SERVICES) {
     const out = {};
     for (const type of types) {
         out[type] = cleanCheck(input[type]);
-        if (type === 'unlock' && input[type].services !== undefined) {
-            requireValue(Array.isArray(input[type].services) && input[type].services.length <= services.length, 'invalid_service_results');
+        if (type === 'unlock' && (input[type].services !== undefined || ['passed', 'unknown'].includes(out[type].status))) {
+            requireValue(Array.isArray(input[type].services) && input[type].services.length === services.length, 'invalid_service_results');
             const seen = new Set();
             out[type].services = input[type].services.map(v => {
                 requireValue(services.includes(v.service) && !seen.has(v.service), 'invalid_service_result');

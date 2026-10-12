@@ -8,7 +8,11 @@ export async function readProbeJson(request) {
     if (declared) requireValue(/^\d+$/.test(declared) && Number(declared) <= LIMIT, 'body_too_large', 413);
     const reader = request.body?.getReader();
     requireValue(reader, 'invalid_json');
-    const parts = []; let size = 0;
+    const parts = []; let size = 0; let timedOut = false;
+    const stop = () => { void reader.cancel().catch(() => {}); };
+    const timer = setTimeout(() => { timedOut = true; stop(); }, 5000);
+    request.signal.addEventListener('abort', stop, { once: true });
+    if (request.signal.aborted) stop();
     try {
         while (true) {
             const { done, value } = await reader.read();
@@ -17,13 +21,15 @@ export async function readProbeJson(request) {
             if (size > LIMIT) { await reader.cancel(); throw probeError('body_too_large', 413); }
             parts.push(value);
         }
+        if (timedOut) throw probeError('body_timeout', 408);
+        if (request.signal.aborted) throw probeError('request_cancelled', 400);
         const bytes = new Uint8Array(size); let offset = 0;
         for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
         let body;
         try { body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); } catch { throw probeError('invalid_json'); }
         requireValue(body && typeof body === 'object' && !Array.isArray(body), 'invalid_json');
         return body;
-    } finally { reader.releaseLock(); }
+    } finally { clearTimeout(timer); request.signal.removeEventListener('abort', stop); reader.releaseLock(); }
 }
 function json(data, status = 200) {
     return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' } });
@@ -53,7 +59,8 @@ export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNod
                 requireValue(!request.headers.has('cookie') && !request.headers.has('origin'), 'agent_browser_request_forbidden', 403);
                 const auth = request.headers.get('authorization') || '';
                 requireValue(/^Bearer mp1_[0-9a-f]{64}$/.test(auth), 'unauthorized', 401);
-                store = await makeStore(env).init();
+                // Enrollment initializes the schema; unauthenticated agents must not issue DDL.
+                store = makeStore(env);
                 const agent = await store.authenticate(auth.slice(7));
                 const body = await readProbeJson(request);
                 if (path.length === 2 && path[1] === 'claim') return json({ success: true, data: await store.claim(agent, body) });
@@ -83,6 +90,7 @@ export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNod
                     const agentIds = [...new Set(body.agentIds)];
                     const nodes = await resolveNodes(body, env);
                     const normalized = normalizeOptions(body, nodes.length, agentIds.length);
+                    requireValue(body.consent === true, 'consent_required');
                     return json({ success: true, data: await store.createJob({ nodes, agentIds, ...normalized }, request.headers.get('Idempotency-Key')) }, 202);
                 }
                 if (path.length === 2 && method === 'GET') {

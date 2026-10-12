@@ -46,3 +46,12 @@ test('plain parser success is not reported as connectivity and invalid proxies a
     const n=(await prepare([{id:'x',url:'trojan://invalid'}]))[0];
     assert.equal(n.format.status,'failed'); assert.equal(n.proxy,null); assert.equal(n.healthy,undefined);
 });
+test('task creation requires explicit node-sharing consent',async()=>{
+ const {env,handle,request}=fixture();
+ const store=await new ProbeStore(env.MISUB_PROBE_DB).init();const a=await store.addAgent('agent');
+ const body={scope:'all',agentIds:[a.id],types:['tcp']};
+ const denied=await handle(request('jobs',body,{...admin,'Idempotency-Key':'consent-test-01'}),env);
+ assert.equal(denied.status,400);assert.equal((await denied.json()).error.code,'consent_required');
+ const accepted=await handle(request('jobs',{...body,consent:true},{...admin,'Idempotency-Key':'consent-test-01'}),env);
+ assert.equal(accepted.status,202);
+});
