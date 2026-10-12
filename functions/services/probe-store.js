@@ -1,11 +1,13 @@
 import { digest, originTokenHash, randomToken, probeError, requireValue, publicAgent, sanitizeResult, MAX_ATTEMPTS, LEASE_MS } from './probe-contract.js';
+import { agentManagementFilters } from './probe-agent-management.js';
 
 export const PROBE_SCHEMA = [
     `CREATE TABLE IF NOT EXISTS probe_agents (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, last_seen INTEGER NOT NULL DEFAULT 0, revoked_at INTEGER, version TEXT NOT NULL DEFAULT '', platform TEXT NOT NULL DEFAULT '')`,
     `CREATE TABLE IF NOT EXISTS probe_jobs (id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, request_hash TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, cancelled_at INTEGER, types_json TEXT NOT NULL, options_json TEXT NOT NULL, total INTEGER NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS probe_tasks (id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES probe_jobs(id) ON DELETE CASCADE, agent_id TEXT NOT NULL REFERENCES probe_agents(id), node_id TEXT NOT NULL, node_name TEXT NOT NULL, node_payload TEXT, state TEXT NOT NULL DEFAULT 'queued', attempt INTEGER NOT NULL DEFAULT 0, lease_hash TEXT, lease_until INTEGER NOT NULL DEFAULT 0, result_json TEXT, result_hash TEXT, completed_at INTEGER)`,
     `CREATE INDEX IF NOT EXISTS probe_tasks_agent_state ON probe_tasks(agent_id, state, lease_until)`,
-    `CREATE INDEX IF NOT EXISTS probe_tasks_job ON probe_tasks(job_id)`
+    `CREATE INDEX IF NOT EXISTS probe_tasks_job ON probe_tasks(job_id)`,
+    `CREATE TABLE IF NOT EXISTS probe_agent_archives (agent_id TEXT PRIMARY KEY REFERENCES probe_agents(id), archived_at INTEGER NOT NULL, restored_at INTEGER)`
 ];
 const initialized = new WeakMap();
 export const PROBE_AGENT_ONLINE_WINDOW_MS = 120000;
@@ -26,6 +28,8 @@ function agentSummary(row, checkedAt) {
         : age <= PROBE_AGENT_ONLINE_WINDOW_MS ? 'online' : 'offline';
     return {
         ...publicAgent(row), status, lastTaskAt: row.last_task_at, lastResultAt: row.last_result_at,
+        archivedAt: row.archived_at ?? null, hidden: row.archived_at != null && row.restored_at == null,
+        lastHeartbeatAt: null, capabilities: null,
         taskCounts: { queued: row.queued, running: row.running, done: row.done, stopped: row.stopped }
     };
 }
@@ -43,20 +47,32 @@ export class ProbeStore {
     }
     q(sql, ...params) { return this.db.prepare(sql).bind(...params); }
     async agents() {
-        const rows = await this.q('SELECT * FROM probe_agents ORDER BY (revoked_at IS NOT NULL), created_at DESC LIMIT 64').all();
+        const rows = await this.q(`SELECT a.* FROM probe_agents a LEFT JOIN probe_agent_archives x ON x.agent_id=a.id
+            WHERE x.agent_id IS NULL OR x.restored_at IS NOT NULL ORDER BY (a.revoked_at IS NOT NULL),a.created_at DESC LIMIT 64`).all();
         return rows.results.map(publicAgent);
     }
-    async agentsOverview(offset = 0, limit = 20) {
+    async agentsOverview(offset = 0, limit = 20, input = {}) {
         validateManagementPage(offset, limit);
+        const filters = agentManagementFilters(input);
         await this.sweep();
         const checkedAt = this.now();
-        const total = (await this.q('SELECT COUNT(*) AS n FROM probe_agents').first()).n;
-        const rows = await this.q(`WITH selected_agents AS (
-            SELECT ${AGENT_PUBLIC_COLUMNS} FROM probe_agents
-            ORDER BY (revoked_at IS NOT NULL),created_at DESC,id LIMIT ? OFFSET ?
-        ) SELECT ${AGENT_SUMMARY_COLUMNS} FROM selected_agents a
+        const selected = `WITH agent_state AS (SELECT a.${AGENT_PUBLIC_COLUMNS.split(',').join(',a.')},x.archived_at,x.restored_at,
+            CASE WHEN a.revoked_at IS NOT NULL THEN 'revoked'
+                WHEN typeof(a.last_seen)<>'integer' OR a.last_seen<=0 OR a.last_seen>9007199254740991 OR a.last_seen>? THEN 'unknown'
+                WHEN a.last_seen>=? THEN 'online' ELSE 'offline' END AS status
+            FROM probe_agents a LEFT JOIN probe_agent_archives x ON x.agent_id=a.id),
+            selected_agents AS (SELECT * FROM agent_state WHERE (?='all' OR status=?)
+                AND (?='all' OR (?='hidden' AND archived_at IS NOT NULL AND restored_at IS NULL)
+                    OR (?='visible' AND (archived_at IS NULL OR restored_at IS NOT NULL)))
+                AND (?='' OR instr(lower(name),lower(?))>0 OR instr(lower(version),lower(?))>0 OR instr(lower(platform),lower(?))>0))`;
+        const params = [checkedAt, checkedAt - PROBE_AGENT_ONLINE_WINDOW_MS, filters.status, filters.status,
+            filters.visibility, filters.visibility, filters.visibility, filters.q, filters.q, filters.q, filters.q];
+        const total = (await this.q(`${selected} SELECT COUNT(*) AS n FROM selected_agents`, ...params).first()).n;
+        const sortColumn = { createdAt: 'a.created_at', name: 'a.name COLLATE NOCASE', status: 'a.status',
+            lastSeen: 'NULLIF(a.last_seen,0)', lastTaskAt: 'last_task_at', lastResultAt: 'last_result_at', version: "NULLIF(a.version,'') COLLATE NOCASE" }[filters.sort];
+        const rows = await this.q(`${selected} SELECT ${AGENT_SUMMARY_COLUMNS},a.archived_at,a.restored_at FROM selected_agents a
             LEFT JOIN probe_tasks t ON t.agent_id=a.id LEFT JOIN probe_jobs j ON j.id=t.job_id
-            GROUP BY a.id ORDER BY (a.revoked_at IS NOT NULL),a.created_at DESC,a.id`, limit, offset).all();
+            GROUP BY a.id ORDER BY ${sortColumn} ${filters.direction.toUpperCase()} NULLS LAST,a.id LIMIT ? OFFSET ?`, ...params, limit, offset).all();
         return {
             agents: rows.results.map(row => agentSummary(row, checkedAt)), total,
             nextOffset: offset + rows.results.length < total ? offset + rows.results.length : null,
@@ -68,7 +84,8 @@ export class ProbeStore {
         requireValue(state === null || PROBE_HISTORY_STATES.includes(state), 'invalid_state');
         await this.sweep();
         const checkedAt = this.now();
-        const row = await this.q(`SELECT ${AGENT_SUMMARY_COLUMNS} FROM probe_agents a
+        const row = await this.q(`SELECT ${AGENT_SUMMARY_COLUMNS},x.archived_at,x.restored_at FROM probe_agents a
+            LEFT JOIN probe_agent_archives x ON x.agent_id=a.id
             LEFT JOIN probe_tasks t ON t.agent_id=a.id LEFT JOIN probe_jobs j ON j.id=t.job_id
             WHERE a.id=? GROUP BY a.id`, id).first();
         requireValue(row, 'agent_not_found', 404);
@@ -111,6 +128,30 @@ export class ProbeStore {
             this.q("UPDATE probe_tasks SET state='cancelled', node_payload=NULL, completed_at=? WHERE agent_id=? AND state IN ('queued','running')", now, id)
         ]);
         return result[0].meta.changes > 0;
+    }
+    async archiveAgent(id, hidden = true) {
+        requireValue(typeof id === 'string' && /^[\w-]{1,128}$/.test(id), 'agent_not_found', 404);
+        requireValue(typeof hidden === 'boolean', 'invalid_archive_action');
+        const agent = await this.q('SELECT id,revoked_at FROM probe_agents WHERE id=?', id).first();
+        requireValue(agent, 'agent_not_found', 404);
+        requireValue(agent.revoked_at !== null, 'agent_must_be_revoked', 409);
+        const now = this.now();
+        let row;
+        if (hidden) {
+            row = await this.q(`INSERT INTO probe_agent_archives(agent_id,archived_at)
+                SELECT id,? FROM probe_agents WHERE id=? AND revoked_at IS NOT NULL
+                AND NOT EXISTS(SELECT 1 FROM probe_tasks WHERE agent_id=? AND state='running' AND lease_until>?)
+                ON CONFLICT(agent_id) DO UPDATE SET
+                    archived_at=CASE WHEN probe_agent_archives.restored_at IS NULL THEN probe_agent_archives.archived_at ELSE excluded.archived_at END,
+                    restored_at=NULL RETURNING archived_at,restored_at`, now, id, id, now).first();
+            requireValue(row, 'agent_has_active_lease', 409);
+        } else {
+            row = await this.q(`UPDATE probe_agent_archives SET restored_at=COALESCE(restored_at,?) WHERE agent_id=?
+                AND EXISTS(SELECT 1 FROM probe_agents WHERE id=? AND revoked_at IS NOT NULL)
+                RETURNING archived_at,restored_at`, now, id, id).first();
+        }
+        const isHidden = row != null && row.restored_at === null;
+        return { id, hidden: isHidden, archivedAt: row?.archived_at ?? null, restoredAt: row?.restored_at ?? null };
     }
     async sweep() {
         const now = this.now();

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: MiSub multi-detector API
-  version: 1.3.0
+  version: 1.4.0
   description: |
     HTTPS only. Separate from /api/ext/v1 and /api/nodes/diagnostics.
     Admin writes require the same-origin Origin header and a valid auth_session.
@@ -217,6 +217,7 @@ paths:
   /agents:
     get:
       operationId: listDetectors
+      description: Legacy public array, active identities first. Hidden archived identities are excluded; response fields remain unchanged.
       responses:
         '200':
           description: Public detector records, never tokens or hashes.
@@ -251,7 +252,13 @@ paths:
     get:
       operationId: detectorOverview
       description: |
-        Paginated public detector summaries, active identities first, then createdAt descending and id ascending.
+        Paginated public detector summaries, default createdAt descending with id ascending as a stable tie-break.
+        Hidden identities are excluded by default. Filters apply to both total and the returned page.
+        Search is a literal substring of name, version or platform; percent and underscore are ordinary characters.
+        ASCII letter case is ignored. Search is trimmed and limited to 80 characters without control characters.
+        Query keys are whitelisted; unknown or duplicate parameters return 400.
+        Sort keys are whitelisted, null/empty version and never-seen times sort last in either direction.
+        Status sorting follows its string value; version sorting is lexical, not semantic version precedence.
         Status uses the server's latest claim or accepted heartbeat. Online means communication within two
         minutes, inclusive; it does not prove node connectivity or service availability. A detector with no
         valid communication timestamp has unknown status. Revocation takes precedence over communication.
@@ -261,6 +268,21 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/ManagementOffset' }
         - { $ref: '#/components/parameters/ManagementLimit' }
+        - in: query
+          name: q
+          schema: { type: string, maxLength: 80, default: '' }
+        - in: query
+          name: status
+          schema: { type: string, enum: [all, online, offline, unknown, revoked], default: all }
+        - in: query
+          name: visibility
+          schema: { type: string, enum: [visible, hidden, all], default: visible }
+        - in: query
+          name: sort
+          schema: { type: string, enum: [createdAt, name, status, lastSeen, lastTaskAt, lastResultAt, version], default: createdAt }
+        - in: query
+          name: direction
+          schema: { type: string, enum: [asc, desc], default: desc }
       responses:
         '200':
           description: Public detector page and server time used for status calculation.
@@ -291,7 +313,7 @@ paths:
       operationId: detectorTaskHistory
       description: |
         Persisted tasks assigned to this detector, including unfinished and stopped tasks.
-        Records cover jobs created within the past seven days and remain visible after revocation.
+        Records cover jobs created within the past seven days and remain visible after revocation or archive.
         Newest job creation time first, then task id ascending; 404 for an unknown identity.
         The creation timestamp is the job's enqueue time, not a probe execution start time.
         Completion is the server's accepted result or stop time, not an inferred provider observation time.
@@ -314,6 +336,63 @@ paths:
                   - { $ref: '#/components/schemas/Envelope' }
                   - properties:
                       data: { $ref: '#/components/schemas/DetectorHistoryPage' }
+        default: { $ref: '#/components/responses/Error' }
+  /agents/{id}/archive:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      operationId: archiveDetector
+      parameters: [{ $ref: '#/components/parameters/Origin' }]
+      description: |
+        Reversibly hide a revoked identity from the default detector lists. Requires admin auth and exact same Origin.
+        JSON is at most 256 bytes and must contain only confirmed=true; query parameters are rejected.
+        A single SQL statement checks revocation and absence of a running task with lease_until greater than server time.
+        Idempotent retries retain archivedAt. Re-archive after restore starts a new archivedAt transition.
+        No detector, task, job or credential row is deleted. Seven-day task retention continues normally.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DetectorActionConfirmation' }
+      responses:
+        '200':
+          description: Visibility at this atomic transition; concurrent later operations may change it.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Envelope' }
+                  - properties:
+                      data: { $ref: '#/components/schemas/DetectorArchiveState' }
+        '404': { description: agent_not_found, $ref: '#/components/responses/Error' }
+        '409': { description: agent_must_be_revoked or agent_has_active_lease, $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+  /agents/{id}/restore:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      operationId: restoreDetector
+      parameters: [{ $ref: '#/components/parameters/Origin' }]
+      description: |
+        Make a revoked identity visible again, preserving its revoked credential and all retained history.
+        Requires admin auth, exact same Origin, no query and at most 256 bytes of JSON containing only confirmed=true.
+        Idempotent retries preserve restoredAt. A never-archived revoked identity is a successful no-op with null timestamps.
+        This never reauthorizes a detector or creates a credential.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DetectorActionConfirmation' }
+      responses:
+        '200':
+          description: Visibility at this atomic transition; concurrent later operations may change it.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Envelope' }
+                  - properties:
+                      data: { $ref: '#/components/schemas/DetectorArchiveState' }
+        '404': { description: agent_not_found, $ref: '#/components/responses/Error' }
+        '409': { description: agent_must_be_revoked, $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
   /jobs:
     get:
@@ -635,7 +714,7 @@ components:
       allOf:
         - { $ref: '#/components/schemas/Detector' }
         - type: object
-          required: [status, lastTaskAt, lastResultAt, taskCounts]
+          required: [status, lastTaskAt, lastResultAt, taskCounts, hidden, archivedAt, lastHeartbeatAt, capabilities]
           properties:
             status:
               type: string
@@ -647,6 +726,10 @@ components:
             lastResultAt:
               type: [integer, 'null']
               description: Latest retained done task's server result receipt time, including failed checks; excludes stops. Null if absent.
+            hidden: { type: boolean, description: Whether a revoked identity is currently archived from default lists. }
+            archivedAt: { type: [integer, 'null'], description: Latest archive transition in Unix milliseconds; retained after restore. }
+            lastHeartbeatAt: { type: 'null', description: Heartbeat-only timestamps are not independently persisted. lastSeen includes claims and accepted heartbeats. }
+            capabilities: { type: 'null', description: Capabilities are not persisted or inferred from version/platform. }
             taskCounts:
               type: object
               required: [queued, running, done, stopped]
@@ -660,11 +743,25 @@ components:
       required: [agents, total, nextOffset, checkedAt, onlineWindowMs, retentionDays]
       properties:
         agents: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/DetectorOverview' } }
-        total: { type: integer, minimum: 0, description: Total identities including revoked detectors. }
+        total: { type: integer, minimum: 0, description: Total identities matching search/status/visibility before pagination. }
         nextOffset: { type: [integer, 'null'], minimum: 0 }
         checkedAt: { type: integer, description: Server time in Unix milliseconds. }
         onlineWindowMs: { type: integer, const: 120000 }
         retentionDays: { type: integer, const: 7 }
+    DetectorActionConfirmation:
+      type: object
+      additionalProperties: false
+      required: [confirmed]
+      properties:
+        confirmed: { const: true }
+    DetectorArchiveState:
+      type: object
+      required: [id, hidden, archivedAt, restoredAt]
+      properties:
+        id: { type: string }
+        hidden: { type: boolean }
+        archivedAt: { type: [integer, 'null'] }
+        restoredAt: { type: [integer, 'null'] }
     DetectorHistoryPage:
       type: object
       required: [agent, records, total, nextOffset, checkedAt, retentionDays]

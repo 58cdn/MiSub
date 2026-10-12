@@ -86,7 +86,8 @@ test('detector status uses server communication time, a two-minute inclusive win
     assert.equal((await current()).status, 'online');
     assert.equal((await current()).version, '0.2.0');
     assert.equal((await current()).platform, 'linux-amd64');
-    assert.equal((await current()).capabilities, undefined);
+    assert.equal((await current()).capabilities, null);
+    assert.equal((await current()).lastHeartbeatAt, null);
     advance(PROBE_AGENT_ONLINE_WINDOW_MS);
     assert.equal((await current()).status, 'online');
     assert.equal((await current()).lastSeen, seen);
@@ -100,7 +101,7 @@ test('detector status uses server communication time, a two-minute inclusive win
     assert.equal((await current()).status, 'revoked');
 });
 
-test('overview is paginated with stable identity ordering and active detectors ahead of revoked identities', async () => {
+test('overview defaults to createdAt descending with stable identity tie-breaking', async () => {
     const { store, read, advance } = await fixture();
     const active = [await store.addAgent('A'), await store.addAgent('B')].sort((a, b) =>
         a.id.localeCompare(b.id)
@@ -110,13 +111,13 @@ test('overview is paginated with stable identity ordering and active detectors a
     await store.revokeAgent(retired.id);
     const first = await read('agents/overview?limit=1');
     assert.equal(first.total, 3);
-    assert.equal(first.agents[0].id, active[0].id);
+    assert.equal(first.agents[0].id, retired.id);
     assert.equal(first.nextOffset, 1);
     const second = await read('agents/overview?limit=1&offset=1');
-    assert.equal(second.agents[0].id, active[1].id);
+    assert.equal(second.agents[0].id, active[0].id);
     assert.equal(second.nextOffset, 2);
     const third = await read('agents/overview?limit=1&offset=2');
-    assert.equal(third.agents[0].id, retired.id);
+    assert.equal(third.agents[0].id, active[1].id);
     assert.equal(third.nextOffset, null);
     assert.deepEqual((await read('agents/overview?offset=100000&limit=50')).agents, []);
     assert.equal((await read('agents/overview?offset=100000&limit=50')).nextOffset, null);
