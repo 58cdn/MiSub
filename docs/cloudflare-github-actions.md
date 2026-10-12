@@ -60,4 +60,4 @@
 
 ## 5. Fork 上游同步与部署关系
 
-`.github/workflows/fork-sync.yml` 已改成 **仅快进（fast-forward）**，不再执行 `git reset --hard upstream/main` / 强制推送清除 Fork 自有提交。发生分叉时此工作流会跳过，由现有 `sync-upstream.yml` 尝试普通合并；若有冲突，需要人工处理，不能自动丢弃本地的部署配置。
+`.github/workflows/fork-sync.yml` 已改成 **仅快进（fast-forward）**，不再执行 `git reset --hard upstream/main` / 强制推送清除 Fork 自有提交。发生分叉时此工作流会跳过，由现有 `sync-upstream.yml` 尝试普通合并；若有冲突，需要人工处理，不能自动丢弃本地的部署配置。两个同步工作流在成功推送 `main` 后都会调用 `gh workflow run cloudflare-pages.yml --ref main`，因为 GitHub 内置 `GITHUB_TOKEN` 推送不会自动触发新的 `push` 工作流。
