@@ -9,6 +9,11 @@ for key in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID ADMIN_PASSWORD; do
   fi
 done
 
+if [[ "$ADMIN_PASSWORD" == "admin" ]]; then
+  echo "::error::ADMIN_PASSWORD must not be the insecure default 'admin'."
+  exit 1
+fi
+
 project_name="${CLOUDFLARE_PAGES_PROJECT_NAME:-misub}"
 if [[ ! "$project_name" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
   echo "::error::CLOUDFLARE_PAGES_PROJECT_NAME must use lowercase letters, digits, or hyphens."
@@ -46,6 +51,28 @@ if jq -e '[
   (.result.deployment_configs.production.d1_databases // {} | keys[] | select(. != "MISUB_DB"))
 ] | length > 0' "$project_json" >/dev/null; then
   echo "::error::Existing Pages project has other KV/D1 bindings. Review them before replacing its Wrangler configuration."
+  exit 1
+fi
+
+# Extra production variables or resource bindings may be removed by a new Wrangler
+# configuration. Fail closed instead of silently changing an existing deployment.
+if jq -e '
+  (.result.deployment_configs.production // {}) as $p |
+  (
+    [($p.env_vars // {} | keys[] | select(. != "ADMIN_PASSWORD" and . != "COOKIE_SECRET"))] +
+    [($p.r2_buckets // {} | keys[])] +
+    [($p.durable_object_namespaces // {} | keys[])] +
+    [($p.services // {} | keys[])] +
+    [($p.queue_producers // {} | keys[])] +
+    [($p.hyperdrive_bindings // {} | keys[])] +
+    [($p.analytics_engine_datasets // {} | keys[])] +
+    [($p.vectorize_bindings // {} | keys[])] +
+    [($p.ai_bindings // {} | keys[])] +
+    [($p.browsers // {} | keys[])] +
+    [($p.mtls_certificates // {} | keys[])]
+  ) | length > 0
+' "$project_json" >/dev/null; then
+  echo "::error::Existing Pages project has additional production settings. Back up and migrate them before using this Wrangler-managed deployment."
   exit 1
 fi
 
