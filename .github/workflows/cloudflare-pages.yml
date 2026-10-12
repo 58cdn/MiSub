@@ -18,6 +18,7 @@ jobs:
   build-and-deploy:
     name: Test, build and deploy
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -29,10 +30,13 @@ jobs:
           cache: npm
 
       - name: Check deployment script syntax
-        run: bash -n scripts/deploy-cloudflare-pages.sh
+        run: |
+          bash -n scripts/deploy-cloudflare-pages.sh
+          bash -n scripts/provision-probe-d1.sh
+          node --check scripts/smoke-node-probes.mjs
 
-      - name: Test deployment script (offline)
-        run: node --test tests/deployment/cloudflare-pages.test.mjs
+      - name: Test deployment scripts (offline)
+        run: node --test tests/deployment/*.test.mjs
 
       - name: Install dependencies
         run: npm ci
@@ -42,6 +46,23 @@ jobs:
 
       - name: Build Pages assets
         run: npm run build
+
+      - name: Set up Go for production acceptance
+        if: github.event_name != 'pull_request'
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Build real detector for production acceptance
+        if: github.event_name != 'pull_request'
+        working-directory: detector
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          python3 scripts/bundle.py linux-amd64
+          go build -trimpath -ldflags "-s -w -X main.version=0.1.0 -X main.commit=${GITHUB_SHA}" -o misub-probe .
+          ./misub-probe --self-test
 
       # PRs from forks must never receive production credentials.
       - name: Deploy to Cloudflare Pages
@@ -55,4 +76,14 @@ jobs:
           CLOUDFLARE_KV_NAMESPACE_ID: ${{ secrets.CLOUDFLARE_KV_NAMESPACE_ID }}
           CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
           CLOUDFLARE_D1_DATABASE_NAME: ${{ secrets.CLOUDFLARE_D1_DATABASE_NAME }}
+          PROVISION_NODE_PROBES: 'true'
         run: bash scripts/deploy-cloudflare-pages.sh
+
+      - name: Accept deployed two-detector task loop
+        if: github.event_name != 'pull_request'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          CLOUDFLARE_PAGES_PROJECT_NAME: ${{ secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
+        run: node scripts/smoke-node-probes.mjs

@@ -1,5 +1,6 @@
 /** Versioned, credential-free probe wire contract. */
-export const PROBE_TYPES = ['format', 'tcp', 'proxy', 'speed', 'unlock'];
+import { OBSERVATIONS_VERSION, OBSERVATION_SOURCES, DEFAULT_OBSERVATION_SOURCES, sanitizeObservations } from './probe-observations.js';
+export const PROBE_TYPES = ['format', 'tcp', 'proxy', 'speed', 'unlock', 'observations'];
 export const PROBE_SERVICES = ['netflix', 'youtube', 'openai', 'claude', 'gemini', 'disney', 'spotify', 'tiktok'];
 export const PROBE_STATUSES = ['passed', 'failed', 'timeout', 'blocked', 'unknown', 'unsupported', 'skipped', 'cancelled'];
 export const MAX_NODES = 500;
@@ -35,16 +36,27 @@ export function normalizeOptions(input, nodeCount, agentCount) {
     const worstCaseDownloadBytes = types.includes('speed') ? nodeCount * agentCount * downloadBytes * MAX_ATTEMPTS : 0;
     requireValue(worstCaseDownloadBytes <= MAX_JOB_BYTES, 'job_traffic_limit');
     if (types.includes('speed')) requireValue(o.allowMetered === true, 'speed_consent_required');
-    return { types, options: { timeoutMs, downloadBytes, services: [...new Set(services)], worstCaseDownloadBytes } };
+    const options = { timeoutMs, downloadBytes, services: [...new Set(services)], worstCaseDownloadBytes };
+    if (types.includes('observations')) {
+        requireValue((o.observationsVersion ?? OBSERVATIONS_VERSION) === OBSERVATIONS_VERSION, 'invalid_observations_version');
+        const sources = o.sources ?? DEFAULT_OBSERVATION_SOURCES;
+        requireValue(Array.isArray(sources) && sources.length > 0 && sources.length <= OBSERVATION_SOURCES.length && new Set(sources).size === sources.length && sources.every(id => OBSERVATION_SOURCES.includes(id)), 'invalid_sources');
+        options.observationsVersion = OBSERVATIONS_VERSION;
+        options.sources = [...sources];
+    }
+    return { types, options };
 }
 export function publicAgent(a) {
     return { id: a.id, name: a.name, createdAt: a.created_at, lastSeen: a.last_seen, revokedAt: a.revoked_at, version: a.version, platform: a.platform };
 }
-export function sanitizeResult(input, types, services = PROBE_SERVICES) {
+export function sanitizeResult(input, types, services = PROBE_SERVICES, options = {}, context = {}) {
     requireValue(input && typeof input === 'object' && !Array.isArray(input), 'invalid_result');
     const cleanCheck = (v) => {
         requireValue(v && typeof v === 'object' && PROBE_STATUSES.includes(v.status), 'invalid_result_status');
         requireValue(CODES.has(v.code), 'invalid_result_code');
+        if (v.code === 'rate_limited' || v.httpStatus === 429) {
+            requireValue(v.status === 'unknown' && v.code === 'rate_limited' && v.httpStatus === 429 && ['latencyMs', 'bytes', 'bytesPerSecond', 'region'].every(key => v[key] === undefined), 'invalid_rate_limit');
+        }
         const out = { status: v.status, code: v.code };
         for (const [key, max] of Object.entries({ latencyMs: 180000, bytes: 20 * 1024 * 1024, bytesPerSecond: 1e12, httpStatus: 599 })) {
             if (v[key] !== undefined) {
@@ -56,11 +68,23 @@ export function sanitizeResult(input, types, services = PROBE_SERVICES) {
             requireValue(typeof v.region === 'string' && /^[A-Z]{2}$/.test(v.region), 'invalid_result_region');
             out.region = v.region;
         }
+        if (v.retryAfterSeconds !== undefined) {
+            requireValue(v.code === 'rate_limited' && v.httpStatus === 429 && Number.isInteger(v.retryAfterSeconds) && v.retryAfterSeconds >= 0 && v.retryAfterSeconds <= 86400, 'invalid_retry_after');
+            out.retryAfterSeconds = v.retryAfterSeconds;
+        }
         return out;
     };
     const out = {};
     for (const type of types) {
         out[type] = cleanCheck(input[type]);
+        if (type === 'observations') {
+            // This container makes no overall IP-quality or unlock judgement.
+            const states = { unknown: ['probe_inconclusive'], skipped: ['prerequisite_failed'], unsupported: ['unsupported_protocol', 'unsupported_transport', 'kernel_missing', 'kernel_failed', 'cancelled'], failed: ['invalid_format', 'dns_failed'], blocked: ['unsafe_target'], cancelled: ['cancelled'], timeout: ['deadline'] };
+            requireValue(states[out[type].status]?.includes(out[type].code) && Object.keys(input[type]).every(key => ['status', 'code', 'report'].includes(key)), 'invalid_observations_status');
+            try { out[type].report = sanitizeObservations(input[type].report, options, context); }
+            catch { throw probeError('invalid_observations'); }
+            if (out[type].status !== 'unknown') requireValue(out[type].report.results.every(r => r.status === 'unsupported' && r.error === 'transport_unavailable'), 'invalid_observations');
+        }
         if (type === 'unlock' && (input[type].services !== undefined || ['passed', 'unknown'].includes(out[type].status))) {
             requireValue(Array.isArray(input[type].services) && input[type].services.length === services.length, 'invalid_service_results');
             const seen = new Set();

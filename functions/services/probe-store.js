@@ -18,7 +18,7 @@ export class ProbeStore {
     }
     q(sql, ...params) { return this.db.prepare(sql).bind(...params); }
     async agents() {
-        const rows = await this.q('SELECT * FROM probe_agents ORDER BY created_at DESC LIMIT 64').all();
+        const rows = await this.q('SELECT * FROM probe_agents ORDER BY (revoked_at IS NOT NULL), created_at DESC LIMIT 64').all();
         return rows.results.map(publicAgent);
     }
     async addAgent(name) {
@@ -96,10 +96,11 @@ export class ProbeStore {
         const row = await this.q(`UPDATE probe_tasks SET state='running',attempt=attempt+1,lease_hash=?,lease_until=? WHERE id=(
             SELECT t.id FROM probe_tasks t JOIN probe_jobs j ON j.id=t.job_id JOIN probe_agents a ON a.id=t.agent_id
             WHERE t.agent_id=? AND a.revoked_at IS NULL AND j.cancelled_at IS NULL AND j.expires_at>?
+            AND (json_extract(j.options_json,'$.observationsVersion') IS NULL OR (json_extract(j.options_json,'$.observationsVersion')=1 AND ?=1))
             AND (t.state='queued' OR (t.state='running' AND t.lease_until<=?)) AND t.attempt<?
             AND NOT EXISTS(SELECT 1 FROM probe_tasks busy WHERE busy.agent_id=? AND busy.state='running' AND busy.lease_until>?)
             ORDER BY j.created_at,t.id LIMIT 1) RETURNING id,job_id,node_payload,attempt`,
-            await digest(leaseToken), now + LEASE_MS, agent.id, now, now, MAX_ATTEMPTS, agent.id, now).first();
+            await digest(leaseToken), now + LEASE_MS, agent.id, now, info.observationsVersion === 1 ? 1 : 0, now, MAX_ATTEMPTS, agent.id, now).first();
         if (!row) return null;
         const job = await this.q('SELECT types_json,options_json FROM probe_jobs WHERE id=?', row.job_id).first();
         return { id: row.id, jobId: row.job_id, node: JSON.parse(row.node_payload), types: JSON.parse(job.types_json), options: JSON.parse(job.options_json), attempt: row.attempt, leaseToken, leaseMs: LEASE_MS };
@@ -117,16 +118,18 @@ export class ProbeStore {
     }
     async finish(agent, id, leaseToken, input) {
         requireValue(typeof leaseToken === 'string' && /^[0-9a-f]{64}$/.test(leaseToken), 'invalid_lease');
-        const row = await this.q('SELECT t.*,j.types_json,j.options_json FROM probe_tasks t JOIN probe_jobs j ON j.id=t.job_id WHERE t.id=? AND t.agent_id=?', id, agent.id).first();
+        const row = await this.q('SELECT t.*,j.types_json,j.options_json,j.created_at AS job_created_at FROM probe_tasks t JOIN probe_jobs j ON j.id=t.job_id WHERE t.id=? AND t.agent_id=?', id, agent.id).first();
         requireValue(row, 'task_not_found', 404);
         const options = JSON.parse(row.options_json);
-        const result = sanitizeResult(input, JSON.parse(row.types_json), options.services);
+        const now = this.now();
+        // Preserve server validation timestamps for an identical replay after a
+        // lost ACK, instead of changing the hash/freshness on every delivery.
+        const result = sanitizeResult(input, JSON.parse(row.types_json), options.services, options, { taskId: id, startedAt: row.job_created_at, now: row.completed_at ?? now });
         if (result.speed?.bytes !== undefined) requireValue(result.speed.bytes <= options.downloadBytes, 'invalid_result_metric');
         const encoded = JSON.stringify(result);
         const resultHash = await digest(encoded);
         const leaseHash = await digest(leaseToken);
         if (row.state === 'done' && row.lease_hash === leaseHash && row.result_hash === resultHash) return { accepted: true, replay: true };
-        const now = this.now();
         const updated = await this.q(`UPDATE probe_tasks SET state='done',node_payload=NULL,result_json=?,result_hash=?,completed_at=?
             WHERE id=? AND agent_id=? AND state='running' AND lease_hash=? AND lease_until>?
             AND job_id IN (SELECT id FROM probe_jobs WHERE cancelled_at IS NULL AND expires_at>?)

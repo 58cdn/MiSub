@@ -73,3 +73,11 @@ test('concurrent claims for the same detector admit only one lease', async () =>
     const rows=await Promise.all([s.claim(a),s.claim(a)]);
     assert.equal(rows.filter(Boolean).length,1);
 });
+
+test('historical revoked detectors cannot hide active detector identities', async () => {
+    const {s,a,advance}=await setup();
+    for(let i=0;i<65;i++) { advance(1); const retired=await s.addAgent(`retired-${i}`); await s.revokeAgent(retired.id); }
+    const list=await s.agents();
+    assert.ok(list.some(x=>x.id===a.id && !x.revokedAt));
+    assert.equal(list.length,64);
+});
