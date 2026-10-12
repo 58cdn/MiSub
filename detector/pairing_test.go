@@ -40,8 +40,8 @@ type pairingFixture struct {
 	starts    atomic.Int32
 	polls     atomic.Int32
 	expires   int64
-	proofHash string
-	proof     string
+	proofHash atomic.Value
+	proof     atomic.Value
 	waits     []time.Duration
 	startEdit func(map[string]any)
 	poll      func(http.ResponseWriter, *http.Request, int)
@@ -50,6 +50,8 @@ type pairingFixture struct {
 func newPairingFixture(t *testing.T) *pairingFixture {
 	t.Helper()
 	f := &pairingFixture{t: t, store: &memoryPairingConfig{}, expires: time.Now().Add(time.Minute).UnixMilli()}
+	f.proofHash.Store("")
+	f.proof.Store("")
 	f.server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.RawQuery != "" || r.Header.Get("Authorization") != "" || r.Header.Get("Origin") != "" || r.Header.Get("Cookie") != "" {
 			t.Error("unexpected request credentials or method")
@@ -64,20 +66,22 @@ func newPairingFixture(t *testing.T) *pairingFixture {
 		switch r.URL.Path {
 		case "/api/probes/v1/device-pairing/start":
 			f.starts.Add(1)
-			f.proofHash = input["proofHash"]
-			if len(f.proofHash) != 64 || input["name"] != "Fixture Probe" || input["platform"] == "" || input["version"] == "" || len(input) != 5 {
+			proofHash := input["proofHash"]
+			f.proofHash.Store(proofHash)
+			if len(proofHash) != 64 || input["name"] != "Fixture Probe" || input["platform"] == "" || input["version"] == "" || len(input) != 5 {
 				t.Error("invalid self-reported metadata")
 			}
-			data := map[string]any{"id": fixturePairID, "windowId": fixturePairWindow, "origin": f.server.URL, "deviceCode": fixturePairDevice, "userCode": "ABCDE-12345", "fingerprint": pairingFingerprint(f.proofHash), "expiresAt": f.expires, "intervalSeconds": 5}
+			data := map[string]any{"id": fixturePairID, "windowId": fixturePairWindow, "origin": f.server.URL, "deviceCode": fixturePairDevice, "userCode": "ABCDE-12345", "fingerprint": pairingFingerprint(proofHash), "expiresAt": f.expires, "intervalSeconds": 5}
 			if f.startEdit != nil {
 				f.startEdit(data)
 			}
 			pairingFixtureResponse(w, http.StatusCreated, data)
 		case "/api/probes/v1/device-pairing/token":
 			count := int(f.polls.Add(1))
-			f.proof = input["proof"]
-			hash := sha256.Sum256([]byte(f.proof))
-			if len(f.proof) != 64 || hex.EncodeToString(hash[:]) != f.proofHash || input["id"] != fixturePairID || input["deviceCode"] != fixturePairDevice || len(input) != 4 {
+			proof := input["proof"]
+			f.proof.Store(proof)
+			hash := sha256.Sum256([]byte(proof))
+			if len(proof) != 64 || hex.EncodeToString(hash[:]) != f.proofHash.Load().(string) || input["id"] != fixturePairID || input["deviceCode"] != fixturePairDevice || len(input) != 4 {
 				t.Error("secret or proof mismatch")
 			}
 			if f.poll != nil {
@@ -121,7 +125,7 @@ func (f *pairingFixture) assertNoSecrets(err error) {
 	if err != nil {
 		text += err.Error()
 	}
-	for _, secret := range []string{fixturePairToken, fixturePairDevice, f.proof, f.proofHash, "server-secret"} {
+	for _, secret := range []string{fixturePairToken, fixturePairDevice, f.proof.Load().(string), f.proofHash.Load().(string), "server-secret"} {
 		if secret != "" && strings.Contains(text, secret) {
 			f.t.Fatal("pairing output contains secret material")
 		}
@@ -143,7 +147,7 @@ func TestPairingApprovesOnceSavesAndExits(t *testing.T) {
 	if f.starts.Load() != 1 || f.polls.Load() != 2 || f.store.saves != 1 || f.store.config.Token != fixturePairToken || len(f.waits) != 2 || f.waits[0] != 5*time.Second || f.waits[1] != 7*time.Second {
 		t.Fatal("pairing lifecycle mismatch")
 	}
-	for _, text := range []string{f.server.URL, "ABCDE-12345", pairingFingerprint(f.proofHash), "not hardware authentication", "start the detector separately"} {
+	for _, text := range []string{f.server.URL, "ABCDE-12345", pairingFingerprint(f.proofHash.Load().(string)), "not hardware authentication", "start the detector separately"} {
 		if !strings.Contains(f.output.String(), text) {
 			t.Errorf("missing guidance %q", text)
 		}
