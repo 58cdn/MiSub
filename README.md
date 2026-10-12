@@ -77,7 +77,11 @@ It is designed for personal and small-team usage: simple operations, clear clien
 - A Cloudflare account
 - Node.js 20+ for local development
 
-### Deploy to Cloudflare Pages
+### Deploy with GitHub Actions (Repository Secrets)
+
+GitHub Actions can build and deploy the `main` branch to Cloudflare Pages, create/reuse a Pages project and KV namespace, and keep production credentials out of the repository. PRs only run tests/build. See the [GitHub Actions deployment guide (Chinese)](docs/cloudflare-github-actions.md) for required secrets and migration precautions.
+
+### Deploy to Cloudflare Pages (Git integration)
 
 1. Fork this repository.
 2. Open Cloudflare Dashboard.
