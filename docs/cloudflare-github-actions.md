@@ -41,7 +41,7 @@
 
 - 如果项目已绑定 `MISUB_KV`，直接复用原来的 namespace；切勿主动换 ID，否则旧订阅数据会变得不可见。
 - 已使用 D1 的项目应设置 D1 ID 和**实际数据库名称**。本工作流不会自动创建 D1、执行 `schema.sql` 或迁移已有数据。若第一次启用 D1，可在 Cloudflare 侧创建并执行：`npx wrangler d1 execute <数据库名> --file=schema.sql --remote`。
-- `wrangler.toml` 是 Pages Functions 的部署配置来源。已有复杂绑定、环境变量、预览配置的项目，请先在 Cloudflare 侧检查、备份现有配置；不要直接用此基础工作流替换非标准生产环境配置。
+- `wrangler.toml` 是 Pages Functions 的部署配置来源。**现有项目如有额外生产环境变量或 KV/D1 以外的资源绑定，部署脚本会主动中止**，避免覆写这些设置。请先在 Cloudflare 侧检查、备份和迁移现有配置；非标准的预览环境配置也需人工核对。
 - 如果 Pages 已经通过 Cloudflare Git Integration 连接仓库，可能出现 Cloudflare 和 GitHub Actions **重复部署**。可以在 Pages 项目的 Branch control 禁用 Cloudflare 原生自动部署，仅保留 GitHub Actions。
 - 首次部署会创建资源并消耗 Cloudflare 配额；API Token 需要有实际授权。
 
