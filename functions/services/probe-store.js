@@ -1,4 +1,4 @@
-import { digest, randomToken, probeError, requireValue, publicAgent, sanitizeResult, MAX_ATTEMPTS, LEASE_MS } from './probe-contract.js';
+import { digest, originTokenHash, randomToken, probeError, requireValue, publicAgent, sanitizeResult, MAX_ATTEMPTS, LEASE_MS } from './probe-contract.js';
 
 export const PROBE_SCHEMA = [
     `CREATE TABLE IF NOT EXISTS probe_agents (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, last_seen INTEGER NOT NULL DEFAULT 0, revoked_at INTEGER, version TEXT NOT NULL DEFAULT '', platform TEXT NOT NULL DEFAULT '')`,
@@ -90,17 +90,17 @@ export class ProbeStore {
     }
     async addAgent(name) {
         requireValue(typeof name === 'string' && name.trim().length > 0 && name.length <= 60 && !/[\x00-\x1f\x7f]/.test(name), 'invalid_agent_name');
-        const count = await this.q('SELECT COUNT(*) AS n FROM probe_agents WHERE revoked_at IS NULL').first();
-        requireValue(count.n < 32, 'agent_limit', 409);
         const id = crypto.randomUUID();
         const token = `mp1_${randomToken()}`;
         const now = this.now();
-        await this.q('INSERT INTO probe_agents (id,name,token_hash,created_at) VALUES (?,?,?,?)', id, name.trim(), await digest(token), now).run();
+        const result = await this.q(`INSERT INTO probe_agents (id,name,token_hash,created_at)
+            SELECT ?,?,?,? WHERE (SELECT COUNT(*) FROM probe_agents WHERE revoked_at IS NULL)<32`, id, name.trim(), await digest(token), now).run();
+        requireValue(result.meta.changes === 1, 'agent_limit', 409);
         return { id, name: name.trim(), token, createdAt: now };
     }
-    async authenticate(token) {
+    async authenticate(token, origin = '') {
         if (!/^mp1_[0-9a-f]{64}$/.test(token || '')) throw probeError('unauthorized', 401);
-        const a = await this.q('SELECT * FROM probe_agents WHERE token_hash=? AND revoked_at IS NULL', await digest(token)).first();
+        const a = await this.q('SELECT * FROM probe_agents WHERE token_hash IN (?,?) AND revoked_at IS NULL', await digest(token), await originTokenHash(token, origin)).first();
         if (!a) throw probeError('unauthorized', 401);
         return a;
     }

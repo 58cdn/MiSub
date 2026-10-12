@@ -286,6 +286,7 @@ try {
     await page.getByTestId('detector-overview-prev').click();
     await page.getByTestId('detector-card-a1').waitFor();
     paged = false;
+    await page.getByTestId('detector-advanced-toggle').click();
     await page.getByTestId('detector-name').fill('Created fixture');
     await page.getByTestId('detector-create').click();
     await page.getByTestId('detector-download').waitFor();
@@ -308,6 +309,7 @@ try {
     configured = false;
     await page.reload();
     await page.getByTestId('settings-tab-detectors').click();
+    await page.getByTestId('detector-advanced-toggle').click();
     await page.getByTestId('detector-create').waitFor();
     assert.ok(await page.getByTestId('detector-create').isDisabled());
     await page.screenshot({ path: resolve(evidence, 'detector-manager-unconfigured.png') });

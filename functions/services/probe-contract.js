@@ -23,6 +23,9 @@ export async function digest(value) {
 export function randomToken() {
     return [...crypto.getRandomValues(new Uint8Array(32))].map(b => b.toString(16).padStart(2, '0')).join('');
 }
+export function originTokenHash(token, origin) {
+    return digest(`misub-probe-token:origin:v1\0${origin}\0${token}`);
+}
 export function normalizeOptions(input, nodeCount, agentCount) {
     requireValue(Array.isArray(input.types) && input.types.length > 0 && input.types.every(x => PROBE_TYPES.includes(x)), 'invalid_types');
     const types = [...new Set(input.types)];

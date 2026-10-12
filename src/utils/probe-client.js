@@ -96,7 +96,12 @@ export async function probeRequest(path, { method = 'GET', body, key, signal } =
         const data = await response.json();
         if (!response.ok || data.success !== true) {
             const code = String(data.error?.code || 'request_failed');
-            throw new Error(/^[a-z_]{1,60}$/.test(code) ? code : 'request_failed');
+            const error = new Error(/^[a-z_]{1,60}$/.test(code) ? code : 'request_failed');
+            const retryAfter = data.error?.retryAfterSeconds;
+            if (Number.isInteger(retryAfter) && retryAfter >= 0 && retryAfter <= 86400) {
+                error.retryAfterSeconds = retryAfter;
+            }
+            throw error;
         }
         return data.data;
     } catch (e) {

@@ -10,6 +10,7 @@
     } from 'vue';
     import Modal from '@/components/forms/Modal.vue';
     import NodeObservationReport from '@/components/nodes/NodeObservationReport.vue';
+    import DetectorPairingWizard from './DetectorPairingWizard.vue';
     import { useI18n } from '@/i18n/index.js';
     import { probeRequest } from '@/utils/probe-client.js';
 
@@ -507,8 +508,8 @@
             <p>
                 {{
                     L(
-                        '检测器在你控制的设备上运行，通过节点执行检测。添加后下载配置并启动检测器。',
-                        'Detectors run on devices you control and perform checks through your nodes. Add a detector, download its configuration, then start it.'
+                        '检测器在你控制的设备上运行，通过节点执行检测。可通过配对连接，也可使用高级方式下载私密配置。',
+                        'Detectors run on devices you control and perform checks through your nodes. Connect by pairing, or download a private configuration using the advanced option.'
                     )
                 }}
             </p>
@@ -541,49 +542,63 @@
                 )
             }}
         </div>
-        <form class="detector-card space-y-3" @submit.prevent="createAgent">
-            <label for="detector-name" class="block font-medium text-gray-900 dark:text-white">{{
-                L('检测器名称', 'Detector name')
-            }}</label>
-            <div class="flex flex-col gap-3 sm:flex-row">
-                <input
-                    id="detector-name"
-                    v-model="name"
-                    data-testid="detector-name"
-                    class="min-h-11 min-w-0 flex-1 rounded-lg border border-gray-300 bg-white px-3 dark:border-gray-600 dark:bg-gray-800"
-                    maxlength="60"
-                    autocomplete="off"
-                    :disabled="!storageReady || creating"
-                    :placeholder="L('例如：家中设备', 'For example: Home device')"
-                />
-                <button
-                    data-testid="detector-create"
-                    class="detector-button detector-primary"
-                    type="submit"
-                    :disabled="
-                        !storageReady || !validName || creating || revoking || showEnrollment
-                    "
+        <DetectorPairingWizard
+            :enabled="storageReady && !creating && !revoking && !showEnrollment"
+            @agents-changed="reloadAfterMutation"
+        />
+        <details class="detector-card">
+            <summary
+                data-testid="detector-advanced-toggle"
+                class="min-h-11 cursor-pointer rounded py-3 font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+            >
+                {{ L('高级方式：下载私密配置', 'Advanced: download a private configuration') }}
+            </summary>
+            <form class="space-y-3 pt-3" @submit.prevent="createAgent">
+                <label
+                    for="detector-name"
+                    class="block font-medium text-gray-900 dark:text-white"
+                    >{{ L('检测器名称', 'Detector name') }}</label
                 >
-                    {{ creating ? L('正在添加…', 'Adding…') : L('添加检测器', 'Add detector') }}
-                </button>
-            </div>
-            <p class="text-xs leading-relaxed text-gray-500 dark:text-gray-400">
-                {{
-                    L(
-                        '仅在点击添加后创建身份。配置含访问凭据，仅本次创建后可下载，请妥善保管。',
-                        'An identity is created only when you click Add. Its configuration contains credentials and is available only after creation; keep it private.'
-                    )
-                }}
-            </p>
-            <p v-if="createError" class="detector-error" role="alert">
-                {{
-                    L(
-                        '添加未确认成功，服务器可能已创建身份。请先刷新列表核对；无法获取配置时撤销该身份，再手动添加。请求不会自动重试。',
-                        'Creation was not confirmed; an identity may already exist. Refresh the list first. Revoke any identity whose configuration is unavailable before adding again. This request is not retried automatically.'
-                    )
-                }}
-            </p>
-        </form>
+                <div class="flex flex-col gap-3 sm:flex-row">
+                    <input
+                        id="detector-name"
+                        v-model="name"
+                        data-testid="detector-name"
+                        class="min-h-11 min-w-0 flex-1 rounded-lg border border-gray-300 bg-white px-3 dark:border-gray-600 dark:bg-gray-800"
+                        maxlength="60"
+                        autocomplete="off"
+                        :disabled="!storageReady || creating"
+                        :placeholder="L('例如：家中设备', 'For example: Home device')"
+                    />
+                    <button
+                        data-testid="detector-create"
+                        class="detector-button"
+                        type="submit"
+                        :disabled="
+                            !storageReady || !validName || creating || revoking || showEnrollment
+                        "
+                    >
+                        {{ creating ? L('正在添加…', 'Adding…') : L('添加检测器', 'Add detector') }}
+                    </button>
+                </div>
+                <p class="text-xs leading-relaxed text-gray-500 dark:text-gray-400">
+                    {{
+                        L(
+                            '仅在点击添加后创建身份。配置含访问凭据，仅本次创建后可下载，请妥善保管。',
+                            'An identity is created only when you click Add. Its configuration contains credentials and is available only after creation; keep it private.'
+                        )
+                    }}
+                </p>
+                <p v-if="createError" class="detector-error" role="alert">
+                    {{
+                        L(
+                            '添加未确认成功，服务器可能已创建身份。请先刷新列表核对；无法获取配置时撤销该身份，再手动添加。请求不会自动重试。',
+                            'Creation was not confirmed; an identity may already exist. Refresh the list first. Revoke any identity whose configuration is unavailable before adding again. This request is not retried automatically.'
+                        )
+                    }}
+                </p>
+            </form>
+        </details>
         <p v-if="notice" role="status" class="detector-card">{{ notice }}</p>
         <template v-if="storageReady">
             <div class="flex flex-wrap items-center justify-between gap-3">
