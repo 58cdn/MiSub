@@ -17,18 +17,20 @@ var taskIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // Check contains public measurements only: no URI, passwords, raw error or response body.
 type Check struct {
-	Status            string         `json:"status"`
-	Code              string         `json:"code"`
-	LatencyMs         *int64         `json:"latencyMs,omitempty"`
-	Bytes             *int64         `json:"bytes,omitempty"`
-	BytesPerSecond    *float64       `json:"bytesPerSecond,omitempty"`
-	HTTPStatus        int            `json:"httpStatus,omitempty"`
-	RetryAfterSeconds *int64         `json:"retryAfterSeconds,omitempty"`
-	Region            string         `json:"region,omitempty"`
-	Services          []ServiceCheck `json:"services,omitempty"`
+	Status            string             `json:"status"`
+	Code              string             `json:"code"`
+	LatencyMs         *int64             `json:"latencyMs,omitempty"`
+	Bytes             *int64             `json:"bytes,omitempty"`
+	BytesPerSecond    *float64           `json:"bytesPerSecond,omitempty"`
+	HTTPStatus        int                `json:"httpStatus,omitempty"`
+	RetryAfterSeconds *int64             `json:"retryAfterSeconds,omitempty"`
+	Region            string             `json:"region,omitempty"`
+	Services          []ServiceCheck     `json:"services,omitempty"`
+	Report            *ObservationReport `json:"report,omitempty"`
 }
 type ServiceCheck struct {
-	Service string `json:"service"`
+	Service   string `json:"service"`
+	CheckedAt string `json:"checkedAt,omitempty"`
 	Check
 }
 type Node struct {
@@ -42,6 +44,8 @@ type Options struct {
 	DownloadBytes          int64    `json:"downloadBytes"`
 	Services               []string `json:"services"`
 	WorstCaseDownloadBytes int64    `json:"worstCaseDownloadBytes"`
+	ObservationsVersion    int      `json:"observationsVersion,omitempty"`
+	Sources                []string `json:"sources,omitempty"`
 }
 type Task struct {
 	ID         string   `json:"id"`
@@ -58,12 +62,12 @@ func (t Task) validate() error {
 	if !taskIDPattern.MatchString(t.ID) || !leasePattern.MatchString(t.LeaseToken) || t.LeaseMs < 30000 || t.LeaseMs > 120000 || t.Attempt < 1 || t.Attempt > 3 {
 		return errors.New("invalid_task")
 	}
-	if len(t.Types) < 1 || len(t.Types) > 5 || t.Options.TimeoutMs < 1000 || t.Options.TimeoutMs > 15000 || t.Options.DownloadBytes < 65536 || t.Options.DownloadBytes > 20*1024*1024 || len(t.Options.Services) > 8 {
+	if len(t.Types) < 1 || len(t.Types) > 6 || t.Options.TimeoutMs < 1000 || t.Options.TimeoutMs > 15000 || t.Options.DownloadBytes < 65536 || t.Options.DownloadBytes > 20*1024*1024 || len(t.Options.Services) > 8 {
 		return errors.New("invalid_task")
 	}
 	seen := map[string]bool{}
 	for _, typ := range t.Types {
-		if !contains([]string{"format", "tcp", "proxy", "speed", "unlock"}, typ) || seen[typ] {
+		if !contains([]string{"format", "tcp", "proxy", "speed", "unlock", "observations"}, typ) || seen[typ] {
 			return errors.New("invalid_task")
 		}
 		seen[typ] = true
@@ -77,6 +81,18 @@ func (t Task) validate() error {
 	}
 	if contains(t.Types, "unlock") && len(t.Options.Services) == 0 {
 		return errors.New("invalid_task")
+	}
+	if contains(t.Types, "observations") {
+		if t.Options.ObservationsVersion != observationsVersion || len(t.Options.Sources) == 0 || len(t.Options.Sources) > len(observationSources) {
+			return errors.New("invalid_task")
+		}
+		seen = map[string]bool{}
+		for _, id := range t.Options.Sources {
+			if _, ok := observationSources[id]; !ok || seen[id] {
+				return errors.New("invalid_task")
+			}
+			seen[id] = true
+		}
 	}
 	return nil
 }

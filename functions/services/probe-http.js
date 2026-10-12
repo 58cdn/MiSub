@@ -1,4 +1,5 @@
 import { ProbeStore } from './probe-store.js';
+import { OBSERVATIONS_VERSION, OBSERVATION_SOURCES } from './probe-observations.js';
 import { PROBE_TYPES, PROBE_SERVICES, MAX_NODES, MAX_AGENTS, MAX_ATTEMPTS, MAX_JOB_BYTES, normalizeOptions, probeError, requireValue } from './probe-contract.js';
 const PREFIX = '/api/probes/v1';
 const LIMIT = 1024 * 1024;
@@ -71,7 +72,7 @@ export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNod
             }
             requireValue(await authorizeAdmin(request, env), 'unauthorized', 401);
             if (!['GET','HEAD'].includes(method)) requireValue(request.headers.get('origin') === url.origin, 'invalid_origin', 403);
-            if (path.length === 1 && path[0] === 'capabilities' && method === 'GET') return json({ success: true, data: { version: 1, types: PROBE_TYPES, services: PROBE_SERVICES, storageReady: Boolean(env.MISUB_PROBE_DB), maxNodes: MAX_NODES, maxAgents: MAX_AGENTS, maxAttempts: MAX_ATTEMPTS, maxJobDownloadBytes: MAX_JOB_BYTES } });
+            if (path.length === 1 && path[0] === 'capabilities' && method === 'GET') return json({ success: true, data: { version: 1, types: PROBE_TYPES, services: PROBE_SERVICES, observationsVersion: OBSERVATIONS_VERSION, sources: OBSERVATION_SOURCES, storageReady: Boolean(env.MISUB_PROBE_DB), maxNodes: MAX_NODES, maxAgents: MAX_AGENTS, maxAttempts: MAX_ATTEMPTS, maxJobDownloadBytes: MAX_JOB_BYTES } });
             if (path.length === 1 && path[0] === 'format' && method === 'POST') {
                 const nodes = await resolveNodes(await readProbeJson(request), env);
                 return json({ success: true, data: { checkedAt: Date.now(), nodes: nodes.map(n=>({id:n.id,name:n.name,checks:{format:n.format}})) } });

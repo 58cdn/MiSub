@@ -100,7 +100,7 @@ func startKernel(parent context.Context, binary string, proxy map[string]any) (*
     l1.Close(); l2.Close()
     if cmd.Start()!=nil { cancel(); cleanFailure(); return nil,errors.New("kernel_failed") }
     proxyURL:=&url.URL{Scheme:"http",Host:net.JoinHostPort("127.0.0.1",strconv.Itoa(port)),User:url.UserPassword("probe",auth)}
-    transport:=&http.Transport{Proxy:http.ProxyURL(proxyURL),DialContext:(&net.Dialer{Timeout:5*time.Second}).DialContext,TLSHandshakeTimeout:10*time.Second,ResponseHeaderTimeout:15*time.Second,DisableCompression:true,MaxIdleConns:2,MaxIdleConnsPerHost:1,IdleConnTimeout:5*time.Second}
+    transport:=&http.Transport{Proxy:http.ProxyURL(proxyURL),DialContext:(&net.Dialer{Timeout:5*time.Second}).DialContext,TLSHandshakeTimeout:10*time.Second,ResponseHeaderTimeout:15*time.Second,MaxResponseHeaderBytes:8192,DisableCompression:true,MaxIdleConns:2,MaxIdleConnsPerHost:1,IdleConnTimeout:5*time.Second}
     k:=&Kernel{transport:transport,cancel:cancel,done:make(chan struct{}),dir:dir}
     k.Client=&http.Client{Transport:transport,CheckRedirect:func(*http.Request,[]*http.Request)error{return http.ErrUseLastResponse}}
     go func(){ _=cmd.Wait(); close(k.done) }()
