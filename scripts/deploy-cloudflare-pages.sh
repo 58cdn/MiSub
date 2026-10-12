@@ -156,10 +156,11 @@ if [[ -n "${COOKIE_SECRET:-}" ]]; then
   printf '%s' "$COOKIE_SECRET" | npx wrangler pages secret put COOKIE_SECRET --project-name="$project_name"
 fi
 
+# Pages discovers ./wrangler.toml automatically; an explicit --config is unsupported.
 npx wrangler pages deploy dist \
   --project-name="$project_name" \
   --branch=main \
-  --commit-hash="${GITHUB_SHA:?}" \
-  --config=wrangler.toml
+  --commit-hash="${GITHUB_SHA:?}"
 
-echo "Cloudflare Pages production deployment submitted: https://${project_name}.pages.dev"
+# Cloudflare may assign a suffixed subdomain; do not guess the deployment URL.
+echo "Cloudflare Pages production deployment complete. Use the deployment URL printed by Wrangler above."
