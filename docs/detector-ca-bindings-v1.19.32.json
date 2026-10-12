@@ -1,0 +1,147 @@
+[
+  {
+    "target": "linux-amd64",
+    "format": "ELF",
+    "binarySha256": "7a0d59da2e678d56c899a3db996a2ad8963286c4f3634b0451435db248f13fa1",
+    "headerVA": "0x3eee9a0",
+    "headerFileOffset": 61794720,
+    "headerBytes": "e0598103000000007cc70200000000007cc7020000000000",
+    "dataVA": "0x38159e0",
+    "dataFileOffset": 54614496,
+    "length": 182140,
+    "capacity": 182140,
+    "pemBlocks": 121,
+    "caSha256": "ecd9dc38bc3efb7dbd6431f57e29d2f8d6a0f0d211e1464b3fef2cbfe266fcd2",
+    "bindingStatus": "exact-object-and-two-call-sites-verified",
+    "proofs": [
+      {
+        "function": "github.com/metacubex/mihomo/component/ca.init.func1",
+        "loadStartVA": "0x9eae1c",
+        "appendCallVA": "0x9eae31",
+        "instructionBytesVerified": true
+      },
+      {
+        "function": "github.com/metacubex/mihomo/component/ca.initializeCertPool",
+        "loadStartVA": "0x9eb236",
+        "appendCallVA": "0x9eb252",
+        "instructionBytesVerified": true
+      }
+    ]
+  },
+  {
+    "target": "linux-arm64",
+    "format": "ELF",
+    "binarySha256": "c80df2ca5159567804da883401e0118908fc1155e05df2baf3dbd4d3ecfc3754",
+    "headerVA": "0x368a140",
+    "headerFileOffset": 57123136,
+    "headerBytes": "c010fb02000000007cc70200000000007cc7020000000000",
+    "dataVA": "0x2fb10c0",
+    "dataFileOffset": 49942720,
+    "length": 182140,
+    "capacity": 182140,
+    "pemBlocks": 121,
+    "caSha256": "ecd9dc38bc3efb7dbd6431f57e29d2f8d6a0f0d211e1464b3fef2cbfe266fcd2",
+    "bindingStatus": "exact-object-and-two-call-sites-verified",
+    "proofs": [
+      {
+        "function": "github.com/metacubex/mihomo/component/ca.init.func1",
+        "loadStartVA": "0x5372f8",
+        "appendCallVA": "0x53730c",
+        "instructionBytesVerified": true
+      },
+      {
+        "function": "github.com/metacubex/mihomo/component/ca.initializeCertPool",
+        "loadStartVA": "0x5376e0",
+        "appendCallVA": "0x5376fc",
+        "instructionBytesVerified": true
+      }
+    ]
+  },
+  {
+    "target": "darwin-amd64",
+    "format": "Mach-O",
+    "binarySha256": "c666c4dd92a2c27c24ff56c9fe42e115f7de94467d45b1eb8caf88f6235e2e7b",
+    "headerVA": "0x485aa90",
+    "headerFileOffset": 59091600,
+    "headerBytes": "00211804000000007cc70200000000007cc7020000000000",
+    "dataVA": "0x4182100",
+    "dataFileOffset": 51912960,
+    "length": 182140,
+    "capacity": 182140,
+    "pemBlocks": 121,
+    "caSha256": "ecd9dc38bc3efb7dbd6431f57e29d2f8d6a0f0d211e1464b3fef2cbfe266fcd2",
+    "bindingStatus": "exact-object-and-two-call-sites-verified",
+    "proofs": [
+      {
+        "function": "github.com/metacubex/mihomo/component/ca.init.func1",
+        "loadStartVA": "0x15e027c",
+        "appendCallVA": "0x15e0291",
+        "instructionBytesVerified": true
+      },
+      {
+        "function": "github.com/metacubex/mihomo/component/ca.initializeCertPool",
+        "loadStartVA": "0x15e0696",
+        "appendCallVA": "0x15e06b2",
+        "instructionBytesVerified": true
+      }
+    ]
+  },
+  {
+    "target": "darwin-arm64",
+    "format": "Mach-O",
+    "binarySha256": "94a386ec0149080deadd86b1f667363bde3c70f7489dba3258e52c56fc9a6d66",
+    "headerVA": "0x103401220",
+    "headerFileOffset": 54530592,
+    "headerBytes": "e087d202010000007cc70200000000007cc7020000000000",
+    "dataVA": "0x102d287e0",
+    "dataFileOffset": 47351776,
+    "length": 182140,
+    "capacity": 182140,
+    "pemBlocks": 121,
+    "caSha256": "ecd9dc38bc3efb7dbd6431f57e29d2f8d6a0f0d211e1464b3fef2cbfe266fcd2",
+    "bindingStatus": "exact-object-and-two-call-sites-verified",
+    "proofs": [
+      {
+        "function": "github.com/metacubex/mihomo/component/ca.init.func1",
+        "loadStartVA": "0x10051aea8",
+        "appendCallVA": "0x10051aebc",
+        "instructionBytesVerified": true
+      },
+      {
+        "function": "github.com/metacubex/mihomo/component/ca.initializeCertPool",
+        "loadStartVA": "0x10051b290",
+        "appendCallVA": "0x10051b2ac",
+        "instructionBytesVerified": true
+      }
+    ]
+  },
+  {
+    "target": "windows-amd64",
+    "format": "PE",
+    "binarySha256": "04f8d7fc2b314771e1ecbf15951d59f0e1cb7914503c88cfb6972ff6a824e314",
+    "headerVA": "0x1439122a0",
+    "headerFileOffset": 59838112,
+    "headerBytes": "20071d43010000007cc70200000000007cc7020000000000",
+    "dataVA": "0x1431d0720",
+    "dataFileOffset": 52228896,
+    "length": 182140,
+    "capacity": 182140,
+    "pemBlocks": 121,
+    "caSha256": "ecd9dc38bc3efb7dbd6431f57e29d2f8d6a0f0d211e1464b3fef2cbfe266fcd2",
+    "bindingStatus": "exact-object-and-two-call-sites-verified",
+    "proofs": [
+      {
+        "function": "github.com/metacubex/mihomo/component/ca.init.func1",
+        "loadStartVA": "0x1405fae7c",
+        "appendCallVA": "0x1405fae91",
+        "instructionBytesVerified": true
+      },
+      {
+        "function": "github.com/metacubex/mihomo/component/ca.initializeCertPool",
+        "loadStartVA": "0x1405fb296",
+        "appendCallVA": "0x1405fb2b2",
+        "instructionBytesVerified": true
+      }
+    ]
+  }
+]
