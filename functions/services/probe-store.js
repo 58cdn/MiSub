@@ -8,6 +8,31 @@ export const PROBE_SCHEMA = [
     `CREATE INDEX IF NOT EXISTS probe_tasks_job ON probe_tasks(job_id)`
 ];
 const initialized = new WeakMap();
+export const PROBE_AGENT_ONLINE_WINDOW_MS = 120000;
+export const PROBE_RETENTION_DAYS = 7;
+export const PROBE_HISTORY_STATES = ['queued', 'running', 'done', 'cancelled', 'expired'];
+const AGENT_PUBLIC_COLUMNS = 'id,name,created_at,last_seen,revoked_at,version,platform';
+const AGENT_SUMMARY_COLUMNS = `a.id,a.name,a.created_at,a.last_seen,a.revoked_at,a.version,a.platform,
+    MAX(j.created_at) AS last_task_at,
+    MAX(CASE WHEN t.state='done' THEN t.completed_at END) AS last_result_at,
+    SUM(CASE WHEN t.state='queued' THEN 1 ELSE 0 END) AS queued,
+    SUM(CASE WHEN t.state='running' THEN 1 ELSE 0 END) AS running,
+    SUM(CASE WHEN t.state='done' THEN 1 ELSE 0 END) AS done,
+    SUM(CASE WHEN t.state IN ('expired','cancelled') THEN 1 ELSE 0 END) AS stopped`;
+function agentSummary(row, checkedAt) {
+    const age = checkedAt - row.last_seen;
+    const status = row.revoked_at !== null ? 'revoked'
+        : !Number.isSafeInteger(row.last_seen) || row.last_seen <= 0 || age < 0 ? 'unknown'
+        : age <= PROBE_AGENT_ONLINE_WINDOW_MS ? 'online' : 'offline';
+    return {
+        ...publicAgent(row), status, lastTaskAt: row.last_task_at, lastResultAt: row.last_result_at,
+        taskCounts: { queued: row.queued, running: row.running, done: row.done, stopped: row.stopped }
+    };
+}
+function validateManagementPage(offset, limit) {
+    requireValue(Number.isSafeInteger(offset) && offset >= 0 && offset <= 100000, 'invalid_offset');
+    requireValue(Number.isSafeInteger(limit) && limit >= 1 && limit <= 50, 'invalid_limit');
+}
 export class ProbeStore {
     constructor(db, now = Date.now) { this.db = db; this.now = now; }
     async init() {
@@ -20,6 +45,48 @@ export class ProbeStore {
     async agents() {
         const rows = await this.q('SELECT * FROM probe_agents ORDER BY (revoked_at IS NOT NULL), created_at DESC LIMIT 64').all();
         return rows.results.map(publicAgent);
+    }
+    async agentsOverview(offset = 0, limit = 20) {
+        validateManagementPage(offset, limit);
+        await this.sweep();
+        const checkedAt = this.now();
+        const total = (await this.q('SELECT COUNT(*) AS n FROM probe_agents').first()).n;
+        const rows = await this.q(`WITH selected_agents AS (
+            SELECT ${AGENT_PUBLIC_COLUMNS} FROM probe_agents
+            ORDER BY (revoked_at IS NOT NULL),created_at DESC,id LIMIT ? OFFSET ?
+        ) SELECT ${AGENT_SUMMARY_COLUMNS} FROM selected_agents a
+            LEFT JOIN probe_tasks t ON t.agent_id=a.id LEFT JOIN probe_jobs j ON j.id=t.job_id
+            GROUP BY a.id ORDER BY (a.revoked_at IS NOT NULL),a.created_at DESC,a.id`, limit, offset).all();
+        return {
+            agents: rows.results.map(row => agentSummary(row, checkedAt)), total,
+            nextOffset: offset + rows.results.length < total ? offset + rows.results.length : null,
+            checkedAt, onlineWindowMs: PROBE_AGENT_ONLINE_WINDOW_MS, retentionDays: PROBE_RETENTION_DAYS
+        };
+    }
+    async agentHistory(id, offset = 0, limit = 20, state = null) {
+        validateManagementPage(offset, limit);
+        requireValue(state === null || PROBE_HISTORY_STATES.includes(state), 'invalid_state');
+        await this.sweep();
+        const checkedAt = this.now();
+        const row = await this.q(`SELECT ${AGENT_SUMMARY_COLUMNS} FROM probe_agents a
+            LEFT JOIN probe_tasks t ON t.agent_id=a.id LEFT JOIN probe_jobs j ON j.id=t.job_id
+            WHERE a.id=? GROUP BY a.id`, id).first();
+        requireValue(row, 'agent_not_found', 404);
+        const total = (await this.q(`SELECT COUNT(*) AS n FROM probe_tasks t JOIN probe_jobs j ON j.id=t.job_id
+            WHERE t.agent_id=? AND (? IS NULL OR t.state=?)`, id, state, state).first()).n;
+        const rows = await this.q(`SELECT t.id,t.job_id,t.node_id,t.node_name,t.state,t.attempt,j.created_at,t.completed_at,t.result_json
+            FROM probe_tasks t JOIN probe_jobs j ON j.id=t.job_id WHERE t.agent_id=? AND (? IS NULL OR t.state=?)
+            ORDER BY j.created_at DESC,t.id LIMIT ? OFFSET ?`, id, state, state, limit, offset).all();
+        const records = rows.results.map(task => ({
+            id: task.id, jobId: task.job_id, nodeId: task.node_id, nodeName: task.node_name,
+            state: task.state, attempt: task.attempt, createdAt: task.created_at, completedAt: task.completed_at,
+            checks: task.result_json ? JSON.parse(task.result_json) : null
+        }));
+        return {
+            agent: agentSummary(row, checkedAt), records, total,
+            nextOffset: offset + records.length < total ? offset + records.length : null,
+            checkedAt, retentionDays: PROBE_RETENTION_DAYS
+        };
     }
     async addAgent(name) {
         requireValue(typeof name === 'string' && name.trim().length > 0 && name.length <= 60 && !/[\x00-\x1f\x7f]/.test(name), 'invalid_agent_name');
@@ -50,7 +117,7 @@ export class ProbeStore {
         await this.db.batch([
             this.q("UPDATE probe_tasks SET state='expired', node_payload=NULL, completed_at=? WHERE state IN ('queued','running') AND job_id IN (SELECT id FROM probe_jobs WHERE expires_at<=?)", now, now),
             this.q("UPDATE probe_tasks SET state='expired', node_payload=NULL, completed_at=? WHERE state='running' AND lease_until<=? AND attempt>=?", now, now, MAX_ATTEMPTS),
-            this.q('DELETE FROM probe_jobs WHERE created_at<?', now - 7 * 86400000)
+            this.q('DELETE FROM probe_jobs WHERE created_at<?', now - PROBE_RETENTION_DAYS * 86400000)
         ]);
     }
     async createJob({ nodes, agentIds, types, options }, key) {

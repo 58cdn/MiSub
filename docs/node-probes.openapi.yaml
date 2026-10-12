@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: MiSub multi-detector API
-  version: 1.1.0
+  version: 1.2.0
   description: |
     HTTPS only. Separate from /api/ext/v1 and /api/nodes/diagnostics.
     Admin writes require the same-origin Origin header and a valid auth_session.
@@ -74,6 +74,31 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Envelope' }
         default: { $ref: '#/components/responses/Error' }
+  /agents/overview:
+    get:
+      operationId: detectorOverview
+      description: |
+        Paginated public detector summaries, active identities first, then createdAt descending and id ascending.
+        Status uses the server's latest claim or accepted heartbeat. Online means communication within two
+        minutes, inclusive; it does not prove node connectivity or service availability. A detector with no
+        valid communication timestamp has unknown status. Revocation takes precedence over communication.
+        Task counts and last task/result times cover retained jobs created within the past seven days.
+        Older jobs are lazily removed; expired or cancelled tasks are stopped, never received results.
+        No credentials, lease capabilities or inferred detector capabilities are returned.
+      parameters:
+        - { $ref: '#/components/parameters/ManagementOffset' }
+        - { $ref: '#/components/parameters/ManagementLimit' }
+      responses:
+        '200':
+          description: Public detector page and server time used for status calculation.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Envelope' }
+                  - properties:
+                      data: { $ref: '#/components/schemas/DetectorOverviewPage' }
+        default: { $ref: '#/components/responses/Error' }
   /agents/{id}:
     parameters: [{ $ref: '#/components/parameters/Id' }]
     delete:
@@ -86,6 +111,36 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Envelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /agents/{id}/history:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    get:
+      operationId: detectorTaskHistory
+      description: |
+        Persisted tasks assigned to this detector, including unfinished and stopped tasks.
+        Records cover jobs created within the past seven days and remain visible after revocation.
+        Newest job creation time first, then task id ascending; 404 for an unknown identity.
+        The creation timestamp is the job's enqueue time, not a probe execution start time.
+        Completion is the server's accepted result or stop time, not an inferred provider observation time.
+        checks contains only sanitized persisted evidence; no node URI, configuration, token or lease.
+        An optional state filters records, total and nextOffset. The agent summary retains all task states.
+      parameters:
+        - { $ref: '#/components/parameters/ManagementOffset' }
+        - { $ref: '#/components/parameters/ManagementLimit' }
+        - in: query
+          name: state
+          schema: { type: string, enum: [queued, running, done, cancelled, expired] }
+          description: Optional exact task state; omit for all states. Empty, unknown or duplicate values return 400 invalid_state.
+      responses:
+        '200':
+          description: Public detector summary and task history page.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Envelope' }
+                  - properties:
+                      data: { $ref: '#/components/schemas/DetectorHistoryPage' }
         default: { $ref: '#/components/responses/Error' }
   /jobs:
     get:
@@ -256,6 +311,16 @@ components:
       name: id
       required: true
       schema: { type: string, minLength: 1, maxLength: 128 }
+    ManagementOffset:
+      in: query
+      name: offset
+      schema: { type: integer, minimum: 0, maximum: 100000, default: 0 }
+      description: One canonical decimal value. No sign, whitespace, leading zeroes, exponent or duplicate parameter.
+    ManagementLimit:
+      in: query
+      name: limit
+      schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      description: One canonical decimal value. No sign, whitespace, leading zeroes, exponent or duplicate parameter.
   responses:
     Error:
       description: |
@@ -326,6 +391,66 @@ components:
         revokedAt: { type: [integer, 'null'] }
         version: { type: string }
         platform: { type: string }
+    DetectorOverview:
+      allOf:
+        - { $ref: '#/components/schemas/Detector' }
+        - type: object
+          required: [status, lastTaskAt, lastResultAt, taskCounts]
+          properties:
+            status:
+              type: string
+              enum: [online, offline, unknown, revoked]
+              description: Server communication status, not node or provider health. Future or invalid lastSeen is unknown.
+            lastTaskAt:
+              type: [integer, 'null']
+              description: Latest retained job creation time for this detector, Unix milliseconds; null if absent.
+            lastResultAt:
+              type: [integer, 'null']
+              description: Latest retained done task's server result receipt time, including failed checks; excludes stops. Null if absent.
+            taskCounts:
+              type: object
+              required: [queued, running, done, stopped]
+              properties:
+                queued: { type: integer, minimum: 0 }
+                running: { type: integer, minimum: 0 }
+                done: { type: integer, minimum: 0 }
+                stopped: { type: integer, minimum: 0, description: Expired or cancelled tasks. }
+    DetectorOverviewPage:
+      type: object
+      required: [agents, total, nextOffset, checkedAt, onlineWindowMs, retentionDays]
+      properties:
+        agents: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/DetectorOverview' } }
+        total: { type: integer, minimum: 0, description: Total identities including revoked detectors. }
+        nextOffset: { type: [integer, 'null'], minimum: 0 }
+        checkedAt: { type: integer, description: Server time in Unix milliseconds. }
+        onlineWindowMs: { type: integer, const: 120000 }
+        retentionDays: { type: integer, const: 7 }
+    DetectorHistoryPage:
+      type: object
+      required: [agent, records, total, nextOffset, checkedAt, retentionDays]
+      properties:
+        agent: { $ref: '#/components/schemas/DetectorOverview' }
+        records: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/DetectorHistoryRecord' } }
+        total: { type: integer, minimum: 0, description: Total retained tasks assigned to this identity matching the optional state filter. }
+        nextOffset: { type: [integer, 'null'], minimum: 0 }
+        checkedAt: { type: integer, description: Server time in Unix milliseconds. }
+        retentionDays: { type: integer, const: 7 }
+    DetectorHistoryRecord:
+      type: object
+      required: [id, jobId, nodeId, nodeName, state, attempt, createdAt, completedAt, checks]
+      properties:
+        id: { type: string }
+        jobId: { type: string }
+        nodeId: { type: string }
+        nodeName: { type: string }
+        state: { type: string, enum: [queued, running, done, expired, cancelled] }
+        attempt: { type: integer, minimum: 0, maximum: 3 }
+        createdAt: { type: integer, description: Job creation time in Unix milliseconds. }
+        completedAt: { type: [integer, 'null'], description: Server result receipt or stop time in Unix milliseconds; null while unfinished. }
+        checks:
+          oneOf:
+            - { $ref: '#/components/schemas/Checks' }
+            - { type: 'null' }
     Lease:
       type: object
       required: [leaseToken]

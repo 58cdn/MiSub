@@ -2,7 +2,8 @@
     import { useI18n } from '../../i18n/index.js';
 
     const { t } = useI18n();
-    import { ref, watch } from 'vue';
+    import { ref } from 'vue';
+    import { useRouter } from 'vue-router';
     import Modal from '../forms/Modal.vue';
     import SettingsPanel from './SettingsPanel.vue';
 
@@ -15,6 +16,19 @@
     const emit = defineEmits(['update:show']);
 
     const settingsPanelRef = ref(null);
+    const router = useRouter();
+    const navigationError = ref(false);
+
+    async function openDetectorSettings() {
+        navigationError.value = false;
+        try {
+            const failure = await router.push('/dashboard/settings?focus=detectors');
+            if (failure) navigationError.value = true;
+            else emit('update:show', false);
+        } catch {
+            navigationError.value = true;
+        }
+    }
 
     const handleConfirm = async () => {
         if (!settingsPanelRef.value) return;
@@ -44,10 +58,18 @@
             </div>
         </template>
         <template #body>
+            <p
+                v-if="navigationError"
+                role="alert"
+                class="mb-3 text-sm text-red-600 dark:text-red-400"
+            >
+                {{ t('settings.detectorNavigationError') }}
+            </p>
             <SettingsPanel
                 ref="settingsPanelRef"
                 :export-backup="props.exportBackup"
                 :import-backup="props.importBackup"
+                @open-detector-settings="openDetectorSettings"
             />
         </template>
     </Modal>

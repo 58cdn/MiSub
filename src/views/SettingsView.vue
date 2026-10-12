@@ -88,7 +88,7 @@
     watch(
         () => route.path,
         (path) => {
-            if (path === '/settings' && !resolveSettingsFocusTab(route.query?.focus)) {
+            if (path === '/dashboard/settings' && !resolveSettingsFocusTab(route.query?.focus)) {
                 activeTab.value = 'basic';
                 loadSettings();
             }

@@ -1,8 +1,10 @@
-﻿<script setup>
+<script setup>
     import { ref, onMounted } from 'vue';
     import MigrationModal from './MigrationModal.vue';
     import { useSettingsLogic } from '../../composables/useSettingsLogic.js';
     import SettingsContent from '../settings/SettingsContent.vue';
+
+    const emit = defineEmits(['open-detector-settings']);
 
     const {
         settings,
@@ -22,6 +24,10 @@
     } = useSettingsLogic();
 
     const activeTab = ref('basic');
+    function changeTab(tab) {
+        if (tab === 'detectors') emit('open-detector-settings');
+        else activeTab.value = tab;
+    }
 
     // 组件挂载时加载设置
     onMounted(() => {
@@ -41,7 +47,8 @@
         class="w-full h-full min-h-[520px] overflow-hidden bg-white/50 dark:bg-gray-900/50 misub-radius-lg"
     >
         <SettingsContent
-            v-model:activeTab="activeTab"
+            :active-tab="activeTab"
+            @update:active-tab="changeTab"
             :settings="settings"
             :disguise-config="disguiseConfig"
             :is-loading="isLoading"

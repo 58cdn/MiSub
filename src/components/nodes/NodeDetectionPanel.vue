@@ -45,9 +45,7 @@
         downloadMiB = ref(5),
         consent = ref(false),
         allowMetered = ref(false);
-    const agentName = ref(''),
-        enrollment = ref(null),
-        submission = ref(null),
+    const submission = ref(null),
         completedBatches = ref(0);
     const viewedJob = ref(''),
         resultData = ref(null),
@@ -135,7 +133,6 @@
             budget.value <= 1024 ** 3
     );
     const locked = computed(() => busy.value || submission.value !== null);
-    const isOnline = (a) => a.lastSeen > Date.now() - 180000;
     const date = (value) => (value ? new Date(value).toLocaleString(locale.value) : '—');
     const rows = computed(() => {
         const list = viewedJob.value ? resultData.value?.nodes || [] : localResults.value;
@@ -244,7 +241,6 @@
         resultGeneration++;
         resultBusy.value = false;
         resultIdentity = '';
-        enrollment.value = null;
         submission.value = null;
         localResults.value = [];
         resultData.value = null;
@@ -262,65 +258,8 @@
         submissionController?.abort();
         resultController?.abort();
         resultGeneration++;
-        enrollment.value = null;
         submission.value = null;
     });
-    async function addAgent() {
-        if (busy.value || !agentName.value.trim()) return;
-        busy.value = true;
-        error.value = '';
-        try {
-            enrollment.value = await probeRequest('agents', {
-                method: 'POST',
-                body: { name: agentName.value.trim() },
-            });
-            agents.value = await probeRequest('agents');
-            agentName.value = '';
-        } catch (e) {
-            error.value = errorText(e.message);
-        } finally {
-            busy.value = false;
-        }
-    }
-    function downloadConfig() {
-        if (!enrollment.value) return;
-        const config = {
-            version: 1,
-            server: window.location.origin,
-            token: enrollment.value.token,
-            pollSeconds: 60,
-        };
-        const url = URL.createObjectURL(
-            new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' })
-        );
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'probe.json';
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-    }
-    async function revoke(id) {
-        if (
-            !window.confirm(
-                L(
-                    '撤销后，该检测器立即失去领取与回传权限，其未完成任务将取消。继续？',
-                    'Revoke this detector? Its unfinished tasks will be cancelled and access removed.'
-                )
-            )
-        )
-            return;
-        busy.value = true;
-        try {
-            await probeRequest(`agents/${encodeURIComponent(id)}`, { method: 'DELETE' });
-            agentIds.value = agentIds.value.filter((x) => x !== id);
-            if (enrollment.value?.id === id) enrollment.value = null;
-            agents.value = await probeRequest('agents');
-        } catch (e) {
-            error.value = errorText(e.message);
-        } finally {
-            busy.value = false;
-        }
-    }
     async function submit() {
         if (busy.value || (!submission.value && !ready.value)) return;
         busy.value = true;
@@ -638,6 +577,13 @@
                         <legend>
                             {{ L('检测地点（最多 8 个）', 'Detector locations (up to 8)') }}
                         </legend>
+                        <a
+                            href="/dashboard/settings?focus=detectors"
+                            data-testid="probe-manage-detectors"
+                            class="inline-flex min-h-11 items-center rounded-lg px-2 focus-visible:outline-2"
+                        >
+                            {{ L('添加 / 管理检测器', 'Add / manage detectors') }}
+                        </a>
                         <div class="probe-agent-list">
                             <label v-for="a in activeAgents" :key="a.id"
                                 ><input
@@ -647,17 +593,17 @@
                                     :data-testid="`probe-agent-${a.id}`"
                                 />{{ a.name }}
                                 <small>{{
-                                    isOnline(a)
-                                        ? L('在线', 'Online')
-                                        : L('离线 / 等待首次连接', 'Offline / not connected')
+                                    a.lastSeen
+                                        ? `${L('最近通信', 'Last contact')}: ${date(a.lastSeen)}`
+                                        : L('尚无通信记录', 'No contact recorded')
                                 }}</small></label
                             >
                         </div>
                         <p v-if="!activeAgents.length" class="probe-muted">
                             {{
                                 L(
-                                    '先在右侧创建检测器，再到检测机器运行它。',
-                                    'Create a detector, then run it on your machine.'
+                                    '在设置中添加检测器，再到检测机器运行它。',
+                                    'Add a detector in Settings, then run it on your machine.'
                                 )
                             }}
                         </p>
@@ -704,92 +650,6 @@
                         </button>
                     </div>
                 </div>
-                <aside>
-                    <details>
-                        <summary>{{ L('添加 / 管理检测器', 'Add / manage detectors') }}</summary>
-                        <p class="probe-muted">
-                            {{
-                                L(
-                                    '每台机器一个身份。无需公网端口；配置只显示一次，关闭面板后不会保留。',
-                                    'One identity per machine. No public port. Configuration is shown once and discarded when this panel closes.'
-                                )
-                            }}
-                        </p>
-                        <div class="probe-toolbar">
-                            <input
-                                v-model="agentName"
-                                maxlength="60"
-                                :aria-label="L('检测器名称', 'Detector name')"
-                                :placeholder="L('例如：新加坡云服务器', 'e.g. Singapore server')"
-                            /><button
-                                type="button"
-                                :disabled="
-                                    busy ||
-                                    !capabilities?.storageReady ||
-                                    !agentName.trim() ||
-                                    !!enrollment
-                                "
-                                @click="addAgent"
-                            >
-                                {{ L('创建', 'Create') }}
-                            </button>
-                        </div>
-                        <div v-if="enrollment" class="probe-warning">
-                            <strong>{{ enrollment.name }}</strong>
-                            <button type="button" @click="downloadConfig">
-                                {{ L('下载私密配置 probe.json', 'Download private probe.json') }}
-                            </button>
-                            <button type="button" @click="enrollment = null">
-                                {{
-                                    L(
-                                        '已保存，清除页面中的凭据',
-                                        'Saved; clear credentials from page'
-                                    )
-                                }}
-                            </button>
-                        </div>
-                        <p>
-                            <a
-                                href="https://github.com/58cdn/MiSub/tree/main/detector"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                >{{
-                                    L(
-                                        '检测器运行说明与版本要求',
-                                        'Detector run guide and version requirements'
-                                    )
-                                }}</a
-                            >
-                        </p>
-                        <p class="probe-muted">
-                            {{
-                                L(
-                                    '来源观测需要新版检测器。已发布的 probe-v0.1.0 不包含此功能及后续安全修复；新版分发仍待验收。',
-                                    'Source observations require an updated detector. Published probe-v0.1.0 lacks this feature and later safety fixes; an updated distribution is pending acceptance.'
-                                )
-                            }}
-                        </p>
-                        <ul class="probe-agents">
-                            <li v-for="a in agents" :key="a.id">
-                                <div>
-                                    <b>{{ a.name }}</b>
-                                    <small
-                                        >{{ a.platform }} {{ a.version }} ·
-                                        {{ date(a.lastSeen) }}</small
-                                    >
-                                </div>
-                                <button
-                                    v-if="!a.revokedAt"
-                                    type="button"
-                                    :disabled="locked"
-                                    @click="revoke(a.id)"
-                                >
-                                    {{ L('撤销', 'Revoke') }}</button
-                                ><span v-else>{{ L('已撤销', 'Revoked') }}</span>
-                            </li>
-                        </ul>
-                    </details>
-                </aside>
             </div>
             <details v-if="jobs.length" class="probe-history" open>
                 <summary>{{ L('最近任务', 'Recent jobs') }}</summary>
@@ -957,9 +817,6 @@
 </template>
 
 <style scoped>
-    .probe-embedded .probe-columns {
-        grid-template-columns: 1fr;
-    }
     .probe-panel {
         margin: 1rem 0;
         border: 1px solid #d1d5db;
@@ -987,7 +844,7 @@
     }
     .probe-columns {
         display: grid;
-        grid-template-columns: minmax(0, 3fr) minmax(240px, 2fr);
+        grid-template-columns: minmax(0, 1fr);
         gap: 1rem;
     }
     .probe-options {
@@ -1053,7 +910,8 @@
     .probe-panel button:focus-visible,
     .probe-panel input:focus-visible,
     .probe-panel select:focus-visible,
-    .probe-panel summary:focus-visible {
+    .probe-panel summary:focus-visible,
+    .probe-panel a:focus-visible {
         outline: 2px solid #6366f1;
         outline-offset: 2px;
     }
@@ -1121,14 +979,6 @@
         color: #6366f1;
         text-decoration: underline;
     }
-    .probe-agents {
-        list-style: none;
-        margin: 1rem 0;
-        padding: 0;
-        max-height: 18rem;
-        overflow: auto;
-    }
-    .probe-agents li,
     .probe-job {
         display: flex;
         justify-content: space-between;

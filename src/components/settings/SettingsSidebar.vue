@@ -31,6 +31,7 @@
             tabs: [
                 { id: 'global', labelKey: 'settings.tabs.global' },
                 { id: 'service', labelKey: 'settings.tabs.service' },
+                { id: 'detectors', labelKey: 'settings.tabs.detectors' },
                 { id: 'client', labelKey: 'settings.tabs.client' },
             ],
         },
@@ -59,6 +60,9 @@
             <button
                 v-for="tab in group.tabs"
                 :key="tab.id"
+                type="button"
+                :aria-current="activeTab === tab.id ? 'page' : undefined"
+                :data-testid="`settings-tab-${tab.id}`"
                 @click="emit('update:activeTab', tab.id)"
                 class="relative flex items-center justify-center md:justify-start px-4 py-3 text-sm font-medium misub-radius-lg transition-all duration-200"
                 :class="
@@ -72,6 +76,7 @@
                     class="absolute left-2 top-1/2 -translate-y-1/2 h-6 w-1 rounded-full bg-white/90"
                 ></span>
                 <svg
+                    aria-hidden="true"
                     class="mr-2 md:mr-3 flex-shrink-0 h-5 w-5 md:h-6 md:w-6"
                     :class="
                         activeTab === tab.id ? 'text-white' : 'text-gray-500 dark:text-gray-400'
@@ -114,6 +119,13 @@
                         stroke-linecap="round"
                         stroke-linejoin="round"
                         d="M13 10V3L4 14h7v7l9-11h-7z"
+                    />
+
+                    <path
+                        v-if="tab.id === 'detectors'"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M3 7h18M3 17h18M6 4v6m6 4v6m6-16v6M3 12h18"
                     />
 
                     <path
