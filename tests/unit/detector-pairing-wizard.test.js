@@ -4,6 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils';
 import DetectorPairingWizard from '../../src/components/settings/sections/DetectorPairingWizard.vue';
 import DetectorSettings from '../../src/components/settings/sections/DetectorSettings.vue';
 import { setLocale } from '../../src/i18n/index.js';
+import { syntheticProbeInstallation } from '../fixtures/probe-release.js';
 
 const origin = 'https://misub.fixture.invalid';
 const windowId = '00000000-0000-4000-8000-000000000001';
@@ -62,7 +63,7 @@ const deferred = () => {
 const get = (wrapper, id) => wrapper.get(`[data-testid="${id}"]`);
 const create = (options = {}) => {
     const wrapper = mount(DetectorPairingWizard, {
-        props: { enabled: true, ...options },
+        props: { enabled: true, installation: syntheticProbeInstallation(), ...options },
         attachTo: document.body,
     });
     wrappers.push(wrapper);
@@ -130,8 +131,8 @@ describe('detector pairing wizard', () => {
         const wrapper = create();
         await flushPromises();
         expect(calls).toHaveLength(0);
-        expect(wrapper.text()).toContain('Installation packages await release verification');
-        expect(wrapper.text()).toContain('0.1.0 release does not support');
+        expect(wrapper.text()).toContain('Compatible release packages are verified');
+        expect(wrapper.text()).toContain('probe-v0.1.0 does not support');
         await get(wrapper, 'pairing-open').trigger('click');
         expect(calls).toHaveLength(0);
         expect(document.activeElement).toBe(get(wrapper, 'pairing-title').element);
@@ -150,18 +151,19 @@ describe('detector pairing wizard', () => {
         expect(insecure.text()).toContain('Pairing requires this site to be accessed over HTTPS');
         expect(calls).toHaveLength(0);
     });
-    it('creates a window only by explicit action and displays an inspectable command with a public ID', async () => {
+    it('creates a synthetic-release window only by explicit action and displays only its public ID', async () => {
         const wrapper = create();
         await start(wrapper);
         expect(posts()).toHaveLength(1);
         expect(posts()[0].url).toBe('/api/probes/v1/pairings/windows');
         expect(JSON.parse(posts()[0].options.body)).toEqual({});
-        const command = get(wrapper, 'pairing-command').text();
-        expect(command).toBe(
-            `misub-probe --pair --server '${origin}' --pair-window '${windowId}' --config "$HOME/.misub-probe/probe.json"`
-        );
+        expect(get(wrapper, 'pairing-window-id').text()).toContain(windowId);
+        expect(wrapper.find('[data-testid="pairing-command"]').exists()).toBe(false);
+        expect(wrapper.text()).not.toContain('misub-probe --pair');
         expect(get(wrapper, 'pairing-status').text()).toContain('Waiting for a client code');
-        expect(wrapper.text()).toContain('private absolute path');
+        expect(wrapper.text()).toContain(
+            'Private device credentials and configuration stay off this page'
+        );
     });
     it('requires reviewed metadata and a fresh explicit confirmation before approval', async () => {
         const wrapper = create();
@@ -314,7 +316,7 @@ describe('detector pairing wizard', () => {
         fetch.mockImplementation(async (url, options = {}) => {
             if (url.endsWith('/capabilities')) {
                 calls.push({ url, options });
-                return response({ storageReady: true });
+                return response({ storageReady: true, installation: syntheticProbeInstallation() });
             }
             if (url.includes('/agents/overview?')) {
                 calls.push({ url, options });
@@ -625,8 +627,9 @@ describe('detector pairing wizard', () => {
     it('clears short-code confirmation and stops polling across KeepAlive deactivation', async () => {
         const shell = defineComponent({
             components: { DetectorPairingWizard, KeepAlive },
-            data: () => ({ visible: true }),
-            template: '<KeepAlive><DetectorPairingWizard v-if="visible" enabled /></KeepAlive>',
+            data: () => ({ visible: true, installation: syntheticProbeInstallation() }),
+            template:
+                '<KeepAlive><DetectorPairingWizard v-if="visible" enabled :installation="installation" /></KeepAlive>',
         });
         const wrapper = mount(shell, { attachTo: document.body });
         wrappers.push(wrapper);

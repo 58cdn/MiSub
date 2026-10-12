@@ -10,14 +10,53 @@
     } from 'vue';
     import { useI18n } from '@/i18n/index.js';
     import { probeRequest } from '@/utils/probe-client.js';
+    import { readProbeInstallation } from '@/shared/probe-release.js';
 
-    const props = defineProps({ enabled: { type: Boolean, default: false } });
-    const emit = defineEmits(['agents-changed']);
+    const props = defineProps({
+        enabled: { type: Boolean, default: false },
+        installation: { type: Object, default: null },
+        installationLoading: { type: Boolean, default: false },
+        installationError: { type: Boolean, default: false },
+    });
+    const emit = defineEmits(['agents-changed', 'refresh-installation']);
     const { locale } = useI18n();
     const L = (zh, en) => (locale.value.startsWith('zh') ? zh : en);
     const origin = window.location.origin;
     const secure = window.location.protocol === 'https:' && validCommandOrigin(origin);
     const terminalChoice = ref('unix');
+    const installation = computed(() => readProbeInstallation(props.installation));
+    const terminalReady = (terminal) => {
+        if (
+            props.installationLoading ||
+            props.installationError ||
+            !installation.value?.distributionReady
+        )
+            return false;
+        const targets = installation.value.targets.filter(({ target }) =>
+            terminal === 'windows' ? target === 'windows-amd64' : target !== 'windows-amd64'
+        );
+        return targets.length > 0 && targets.every(({ available }) => available);
+    };
+    const installationAvailable = computed(() => terminalReady('unix') || terminalReady('windows'));
+    const selectedTerminalAvailable = computed(() => terminalReady(terminalChoice.value));
+    const installationText = computed(() => {
+        if (props.installationLoading)
+            return L('正在核对兼容发行包…', 'Checking compatible release packages…');
+        if (props.installationError || !installation.value)
+            return L(
+                '无法确认兼容发行包，请刷新发行状态后重试。',
+                'Compatible release packages could not be verified. Refresh release status and try again.'
+            );
+        if (!installationAvailable.value)
+            return L(
+                '兼容安装包尚未发行，一键安装暂不可用。可使用下方高级方式管理已有检测器。',
+                'Compatible installation packages have not been released. One-command installation is unavailable. The advanced option below remains available for existing detectors.'
+            );
+        return L(
+            '兼容发行包已核验，选择检测器所在设备的终端。',
+            'Compatible release packages are verified. Select the terminal on the detector device.'
+        );
+    });
     function validCommandOrigin(value) {
         try {
             const parsed = new URL(value);
@@ -111,13 +150,6 @@
     const coolingDown = computed(() => monotonicNow.value < nextPollAt.value);
     const retryIn = computed(() =>
         Math.max(0, Math.ceil((nextPollAt.value - monotonicNow.value) / 1000))
-    );
-    const command = computed(() =>
-        secure && pairingWindow.value
-            ? terminalChoice.value === 'windows'
-                ? `.\\misub-probe-windows-amd64.exe --pair --server '${origin}' --pair-window '${pairingWindow.value.id}' --config "$env:LOCALAPPDATA\\MiSubProbe\\probe.json"`
-                : `misub-probe --pair --server '${origin}' --pair-window '${pairingWindow.value.id}' --config "$HOME/.misub-probe/probe.json"`
-            : ''
     );
     const canResolve = computed(
         () =>
@@ -409,13 +441,14 @@
         }
     }
     async function openWizard() {
+        if (!props.enabled || !secure || !installationAvailable.value) return;
         open.value = true;
         await nextTick();
         heading.value?.focus();
         schedule(0);
     }
     function createWindow() {
-        if (pairingWindow.value) return;
+        if (pairingWindow.value || !selectedTerminalAvailable.value) return;
         return action('start', 'pairings/windows', {}, acceptWindow);
     }
     function resolveCode() {
@@ -574,11 +607,25 @@
                 <h4 class="font-semibold text-gray-900 dark:text-white">
                     {{ L('安装并连接检测器', 'Install and connect a detector') }}
                 </h4>
-                <p class="text-sm">
+                <p
+                    id="pairing-release-status"
+                    data-testid="pairing-installation-status"
+                    role="status"
+                    aria-atomic="true"
+                    class="text-sm"
+                >
+                    {{ installationText }}
+                </p>
+                <p
+                    v-if="
+                        installation?.legacyReleases.some((release) => release.version === '0.1.0')
+                    "
+                    class="text-xs text-gray-500 dark:text-gray-400"
+                >
                     {{
                         L(
-                            '安装包待发行校验。已安装支持配对的客户端可连接；当前 0.1.0 发行版不支持此流程。',
-                            'Installation packages await release verification. An already installed pairing-capable client can connect; the existing 0.1.0 release does not support this flow.'
+                            'probe-v0.1.0 不支持配对或安装命令，请勿用于本向导。',
+                            'probe-v0.1.0 does not support pairing or installation commands and cannot be used with this guide.'
                         )
                     }}
                 </p>
@@ -588,7 +635,8 @@
                 ref="startButton"
                 class="pair-button pair-primary"
                 data-testid="pairing-open"
-                :disabled="!enabled || !secure"
+                :disabled="!enabled || !secure || !installationAvailable"
+                aria-describedby="pairing-release-status"
                 @click="openWizard"
             >
                 {{ L('安装并连接检测器', 'Install and connect a detector') }}
@@ -601,6 +649,25 @@
                 @click="closeWizard"
             >
                 {{ L('收起向导', 'Close guide') }}
+            </button>
+        </div>
+        <div class="space-y-2">
+            <p v-if="open && !selectedTerminalAvailable" class="pair-warning" role="status">
+                {{
+                    L(
+                        '此终端对应的平台尚无完整兼容发行包，暂不能开启安装窗口。',
+                        'Compatible packages are not available for every platform supported by this terminal. An installation window cannot be opened.'
+                    )
+                }}
+            </p>
+            <button
+                v-if="!installationAvailable"
+                data-testid="pairing-release-refresh"
+                class="pair-button"
+                :disabled="installationLoading || !!busy"
+                @click="emit('refresh-installation')"
+            >
+                {{ L('刷新发行状态', 'Refresh release status') }}
             </button>
         </div>
         <p v-if="!secure" class="pair-warning">
@@ -649,8 +716,8 @@
                 <p class="text-xs text-gray-500 dark:text-gray-400">
                     {{
                         L(
-                            '选择你将运行检测器的终端。此选择只更改命令说明。',
-                            'Choose the terminal where you will run the detector. This only changes the command instructions.'
+                            '选择你将运行检测器的终端。此选择不会创建身份或安装软件。',
+                            'Choose the terminal where you will run the detector. This selection does not create an identity or install software.'
                         )
                     }}
                 </p>
@@ -678,7 +745,9 @@
                 <button
                     data-testid="pairing-start"
                     class="pair-button pair-primary"
-                    :disabled="!enabled || !secure || !!busy || coolingDown"
+                    :disabled="
+                        !enabled || !secure || !selectedTerminalAvailable || !!busy || coolingDown
+                    "
                     @click="createWindow"
                 >
                     {{
@@ -702,36 +771,15 @@
                             )
                         }}
                     </p>
-                    <p>
-                        {{
-                            terminalChoice === 'windows'
-                                ? L(
-                                      '使用已安装且支持配对的匹配 Windows amd64 构建，在该可执行文件所在目录打开你控制的 PowerShell，审查后运行此命令。',
-                                      'Use an already installed, matching Windows amd64 build with pairing support. Open PowerShell in the executable’s directory on a device you control, then review and run this command.'
-                                  )
-                                : L(
-                                      '在你控制的 Linux / macOS 终端中审查并运行命令，需要预先安装支持配对的客户端。',
-                                      'Review and run this command in a Linux / macOS terminal you control with a pairing-capable client already installed.'
-                                  )
-                        }}
+                    <p class="break-all" data-testid="pairing-window-id">
+                        {{ L('公开窗口编号：', 'Public window ID: ')
+                        }}<code>{{ pairingWindow.id }}</code>
                     </p>
-                    <p>
-                        {{
-                            L(
-                                '配置保存到专用私有目录，已有文件不会覆盖；需要时可另选私有绝对路径。Windows 已有目录必须满足客户端的私有访问权限要求。',
-                                'Configuration is saved in a dedicated private directory; existing files are not overwritten. Choose another private absolute path if needed. An existing Windows directory must meet the client’s private access requirements.'
-                            )
-                        }}
-                    </p>
-                    <pre
-                        data-testid="pairing-command"
-                        class="whitespace-pre-wrap break-all rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs leading-relaxed dark:border-gray-700 dark:bg-gray-950"
-                    ><code>{{ command }}</code></pre>
                     <p class="text-xs text-gray-500 dark:text-gray-400">
                         {{
                             L(
-                                '命令仅含本站及公开窗口编号；终端中的私密设备凭据和配置不会传到本页面。此向导不安装系统服务或设置自启。',
-                                'The command contains only this site and a public window ID. Private device credentials and configuration stay off this page. This guide does not install system services or configure startup.'
+                                '窗口编号用于关联客户端请求；终端中的私密设备凭据和配置不会传到本页面。只有明确批准后才可创建身份。',
+                                'The public window ID associates a client request. Private device credentials and configuration stay off this page. Creating an identity requires your explicit approval.'
                             )
                         }}
                     </p>

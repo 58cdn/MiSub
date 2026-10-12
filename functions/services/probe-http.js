@@ -4,6 +4,8 @@ import { agentManagementQuery, agentActionConfirmation } from './probe-agent-man
 import { PAIRING_BODY_BYTES, pairingBody } from './probe-pairing.js';
 import { OBSERVATIONS_VERSION, OBSERVATION_SOURCES } from './probe-observations.js';
 import { PROBE_TYPES, PROBE_SERVICES, MAX_NODES, MAX_AGENTS, MAX_ATTEMPTS, MAX_JOB_BYTES, normalizeOptions, probeError, requireValue } from './probe-contract.js';
+import probeReleaseCatalog from '../../detector/release-catalog.json' with { type: 'json' };
+import { probeInstallationCapabilities } from '../../src/shared/probe-release.js';
 const PREFIX = '/api/probes/v1';
 const LIMIT = 1024 * 1024;
 export async function readProbeJson(request, limit = LIMIT) {
@@ -120,7 +122,7 @@ export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNod
                 }
                 throw probeError('not_found', 404);
             }
-            if (path.length === 1 && path[0] === 'capabilities' && method === 'GET') return json({ success: true, data: { version: 1, types: PROBE_TYPES, services: PROBE_SERVICES, observationsVersion: OBSERVATIONS_VERSION, sources: OBSERVATION_SOURCES, storageReady: Boolean(env.MISUB_PROBE_DB), maxNodes: MAX_NODES, maxAgents: MAX_AGENTS, maxAttempts: MAX_ATTEMPTS, maxJobDownloadBytes: MAX_JOB_BYTES } });
+            if (path.length === 1 && path[0] === 'capabilities' && method === 'GET') return json({ success: true, data: { version: 1, types: PROBE_TYPES, services: PROBE_SERVICES, observationsVersion: OBSERVATIONS_VERSION, sources: OBSERVATION_SOURCES, storageReady: Boolean(env.MISUB_PROBE_DB), installation: probeInstallationCapabilities(probeReleaseCatalog), maxNodes: MAX_NODES, maxAgents: MAX_AGENTS, maxAttempts: MAX_ATTEMPTS, maxJobDownloadBytes: MAX_JOB_BYTES } });
             if (path.length === 1 && path[0] === 'format' && method === 'POST') {
                 const nodes = await resolveNodes(await readProbeJson(request), env);
                 return json({ success: true, data: { checkedAt: Date.now(), nodes: nodes.map(n=>({id:n.id,name:n.name,checks:{format:n.format}})) } });
