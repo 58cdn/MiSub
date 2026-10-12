@@ -70,6 +70,23 @@ HTTP 429 在读取响应体前保留为 `unknown/rate_limited`，合法 `Retry-A
 
 默认空闲 60 秒轮询、任务结束后继续领取下一条；配置 `pollSeconds` 可设 30–300。多台检测器会产生 Pages/D1 请求与写入，注意账户额度。任务不会删除、禁用、重命名原始节点。
 
+## 用户级安装管理
+
+已取得本版本可执行文件后，可用以下命令管理 Linux/macOS 用户安装。二进制分发仍暂停；既有 `probe-v0.1.0` 不包含这些命令。示例使用 Linux amd64 文件，macOS 请替换为对应平台文件名。
+
+```sh
+./misub-probe-linux-amd64 --install --config "$HOME/.misub-probe/probe.json"
+./misub-probe-linux-amd64 --start
+./misub-probe-linux-amd64 --status --json
+./misub-probe-linux-amd64 --stop
+./misub-probe-linux-amd64 --reinstall
+./misub-probe-linux-amd64 --uninstall
+```
+
+安装只复制当前程序并生成私有清单与服务描述，不联网配对、不启动服务。配置可先配对生成，也可在安装后配对；显式启动前必须存在有效私密配置。Linux 使用当前用户的 systemd 会话和临时关联，macOS 使用当前用户 GUI 会话的显式 launchd 加载。登录自动启动、系统服务、`linger`、提权、系统代理和 TUN 均不由这些命令配置。
+
+重装和卸载要求服务已停止；文件内容、归属或注册信息不明时拒绝修改。重装复用原配置路径且不自动启动，卸载保留配置及服务器撤销状态。`--status` 表示本机进程状态，连接 MiSub 仍以管理页实际通信为准。进程运行时可在断网后继续等待恢复，凭据失效则退出；没有自动崩溃重启。具体目录与恢复限制见[用户安装说明](../docs/detector-user-install.md)。
+
 ## 可选开机运行
 
 先完成前台 `--self-test` 与一条任务验收。仓库提供 `services/misub-probe.service`（Linux 用户服务）和 `services/com.misub.probe.plist`（macOS LaunchAgent）模板，替换绝对路径后再安装。不会自动要求 sudo、创建系统用户或修改防火墙。日志只输出固定状态，不输出配置、Token、URI 或内核原始日志。

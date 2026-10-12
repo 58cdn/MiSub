@@ -68,6 +68,21 @@ jobs:
         env:
           MISUB_PROBE_REQUIRE_KERNEL: '1'
         run: go test -race -count=1 -v ./...
+      - name: Verify native user service command syntax without registering services
+        run: |
+          case '${{ matrix.target }}' in
+            linux-*)
+              systemctl --version
+              systemctl --help
+              systemd-analyze --version
+              ;;
+            darwin-*)
+              /bin/launchctl help bootstrap
+              /bin/launchctl help bootout
+              /bin/launchctl help kickstart
+              /bin/launchctl help print
+              ;;
+          esac
       - name: Build standalone executable and native smoke
         env:
           CGO_ENABLED: '0'

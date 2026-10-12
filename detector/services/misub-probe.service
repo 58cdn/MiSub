@@ -1,16 +1,12 @@
-# Install as a user service after replacing both absolute paths.
+# Manual-start user-service example. Replace both absolute paths.
 [Unit]
 Description=MiSub outbound node detector
-After=network-online.target
 
 [Service]
-Type=simple
-ExecStart=/ABSOLUTE/PATH/misub-probe-linux-amd64 --config /ABSOLUTE/PATH/probe.json
-Restart=on-failure
-RestartSec=30
+Type=exec
+ExecStart=:"/ABSOLUTE/PATH/misub-probe-linux-amd64" --config "/ABSOLUTE/PATH/probe.json"
+Restart=no
 UMask=0077
 NoNewPrivileges=true
-PrivateTmp=true
-
-[Install]
-WantedBy=default.target
+KillMode=control-group
+TimeoutStopSec=20

@@ -21,7 +21,36 @@ func main() {
 	pairServer := flag.String("server", "", "HTTPS MiSub origin for pairing")
 	pairWindow := flag.String("pair-window", "", "Public pairing window ID from MiSub settings")
 	pairName := flag.String("pair-name", "MiSub Probe", "Detector display name; no machine username is sent")
+	managementFlags := map[string]*bool{}
+	for _, action := range []string{"install", "start", "stop", "status", "uninstall", "reinstall"} {
+		managementFlags[action] = flag.Bool(action, false, "User installation management: "+action+" (Linux/macOS; no login startup)")
+	}
+	jsonOutput := flag.Bool("json", false, "Print installation --status as JSON")
 	flag.Parse()
+	selected := map[string]bool{}
+	visited := map[string]bool{}
+	for action, value := range managementFlags {
+		selected[action] = *value
+	}
+	flag.Visit(func(f *flag.Flag) { visited[f.Name] = true })
+	action, managementErr := installationAction(selected, visited, flag.NArg())
+	if managementErr != nil {
+		fmt.Fprintln(os.Stderr, "probe:", managementErr)
+		os.Exit(1)
+	}
+	if action != "" {
+		configPath := ""
+		if visited["config"] {
+			configPath = *path
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := manageInstallation(ctx, action, configPath, *jsonOutput, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "probe:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if *pair {
 		if *once || *showVersion || *checkConfig || *selfTest || flag.NArg() != 0 {
 			fmt.Fprintln(os.Stderr, "probe: pairing_flags_conflict")
