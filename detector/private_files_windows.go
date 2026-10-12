@@ -75,9 +75,52 @@ func privateSecurityAttributes(directory bool) (*syscall.SecurityAttributes, fun
 	return attrs, func() { _, _ = syscall.LocalFree(syscall.Handle(descriptor)) }, nil
 }
 
-// The OS renders the DACL as SDDL. Accept only the exact two full-access grants
-// created above; null, inherited, conditional, broad and extra ACEs fail closed.
-// This avoids interpreting variable-length ACE memory in Go.
+// Both DACLs use the OS renderer so a numeric SID and its Windows SDDL alias
+// compare identically without interpreting variable-length ACE memory in Go.
+func renderWindowsDACL(descriptor uintptr) (string, error) {
+	var rendered *uint16
+	var length uint32
+	ok, _, _ := winConvertSDString.Call(descriptor, 1, 4, uintptr(unsafe.Pointer(&rendered)), uintptr(unsafe.Pointer(&length)))
+	if ok == 0 || rendered == nil {
+		return "", errors.New("private_file_acl_unreadable")
+	}
+	defer syscall.LocalFree(syscall.Handle(uintptr(unsafe.Pointer(rendered))))
+	if length == 0 || length > 65536 {
+		return "", errors.New("private_file_acl_unreadable")
+	}
+	return syscall.UTF16ToString(unsafe.Slice(rendered, int(length))), nil
+}
+
+// sid comes from the current token; flags and rights are fixed object policies.
+// Only these two exact grants, in either order, may match. No alias is trusted
+// independently of the numeric identity supplied by the caller.
+func matchesPrivateWindowsDACL(actual, sid, flags, rights string) bool {
+	system := "(A;" + flags + ";" + rights + ";;;SY)"
+	user := "(A;" + flags + ";" + rights + ";;;" + sid + ")"
+	for _, expected := range []string{"D:P" + system + user, "D:P" + user + system} {
+		text, err := syscall.UTF16PtrFromString(expected)
+		if err != nil {
+			return false
+		}
+		var descriptor uintptr
+		ok, _, _ := winConvertStringSD.Call(uintptr(unsafe.Pointer(text)), 1, uintptr(unsafe.Pointer(&descriptor)), 0)
+		if ok == 0 || descriptor == 0 {
+			return false
+		}
+		canonical, err := renderWindowsDACL(descriptor)
+		syscall.LocalFree(syscall.Handle(descriptor))
+		if err != nil {
+			return false
+		}
+		if actual == canonical {
+			return true
+		}
+	}
+	return false
+}
+
+// Accept only the exact private grants created above; null, inherited,
+// conditional, broad and extra ACEs fail closed.
 func validatePrivateHandle(handle syscall.Handle, directory bool) error {
 	var info syscall.ByHandleFileInformation
 	if syscall.GetFileInformationByHandle(handle, &info) != nil || info.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0 || (info.FileAttributes&syscall.FILE_ATTRIBUTE_DIRECTORY != 0) != directory {
@@ -112,24 +155,15 @@ func validatePrivateHandle(handle syscall.Handle, directory bool) error {
 	if ok == 0 || control&winDACLProtected == 0 {
 		return errors.New("private_file_acl_not_protected")
 	}
-	var rendered *uint16
-	var length uint32
-	ok, _, _ = winConvertSDString.Call(descriptor, 1, 4, uintptr(unsafe.Pointer(&rendered)), uintptr(unsafe.Pointer(&length)))
-	if ok == 0 || rendered == nil {
-		return errors.New("private_file_acl_unreadable")
+	text, err := renderWindowsDACL(descriptor)
+	if err != nil {
+		return err
 	}
-	defer syscall.LocalFree(syscall.Handle(uintptr(unsafe.Pointer(rendered))))
-	if length == 0 || length > 65536 {
-		return errors.New("private_file_acl_unreadable")
-	}
-	text := syscall.UTF16ToString(unsafe.Slice(rendered, int(length)))
 	flags := ""
 	if directory {
 		flags = "OICI"
 	}
-	system := "(A;" + flags + ";FA;;;SY)"
-	user := "(A;" + flags + ";FA;;;" + sid + ")"
-	if text != "D:P"+system+user && text != "D:P"+user+system {
+	if !matchesPrivateWindowsDACL(text, sid, flags, "FA") {
 		return errors.New("private_file_acl_not_private")
 	}
 	return nil

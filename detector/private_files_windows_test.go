@@ -16,8 +16,10 @@ import (
 
 func windowsFixtureDir(t *testing.T) string {
 	t.Helper()
-	dir, cleanup, err := createPrivateTempDir(t.TempDir(), "private-")
+	parent := t.TempDir()
+	dir, cleanup, err := createPrivateTempDir(parent, "private-")
 	if err != nil {
+		diagnoseWindowsPrivateFixture(t, parent)
 		t.Fatal(err)
 	}
 	t.Cleanup(cleanup)

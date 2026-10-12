@@ -243,19 +243,11 @@ func validateWindowsEvent(handle syscall.Handle) error {
 	if ok == 0 || control&winDACLProtected == 0 {
 		return errors.New("managed_event_acl_not_private")
 	}
-	var rendered *uint16
-	var length uint32
-	ok, _, _ = winConvertSDString.Call(descriptor, 1, 4, uintptr(unsafe.Pointer(&rendered)), uintptr(unsafe.Pointer(&length)))
-	if ok == 0 || rendered == nil {
+	text, err := renderWindowsDACL(descriptor)
+	if err != nil {
 		return errors.New("managed_event_acl_unreadable")
 	}
-	defer syscall.LocalFree(syscall.Handle(uintptr(unsafe.Pointer(rendered))))
-	if length == 0 || length > 65536 {
-		return errors.New("managed_event_acl_unreadable")
-	}
-	text := syscall.UTF16ToString(unsafe.Slice(rendered, int(length)))
-	system, user := "(A;;0x1f0003;;;SY)", "(A;;0x1f0003;;;"+sid+")"
-	if text != "D:P"+system+user && text != "D:P"+user+system {
+	if !matchesPrivateWindowsDACL(text, sid, "", "0x1f0003") {
 		return errors.New("managed_event_acl_not_private")
 	}
 	return nil

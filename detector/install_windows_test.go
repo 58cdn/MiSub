@@ -223,6 +223,55 @@ func TestWindowsInstallationPrivateEventsRejectExistingOrBroadACL(t *testing.T) 
 	}
 }
 
+func TestWindowsInstallationEventACLRequiresExactPrivatePermissions(t *testing.T) {
+	sid, err := windowsUserSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	system := "(A;;0x1f0003;;;SY)"
+	user := "(A;;0x1f0003;;;" + sid + ")"
+	for _, test := range []struct {
+		name       string
+		dacl       string
+		protection uintptr
+		valid      bool
+	}{
+		{"reverse-order", "D:P" + user + system, 0x80000000, true},
+		{"incomplete-access-mask", "D:P" + system + "(A;;0x120002;;;" + sid + ")", 0x80000000, false},
+		{"extra-principal", "D:P" + system + user + "(A;;0x1f0003;;;WD)", 0x80000000, false},
+		{"extra-user-entry", "D:P" + system + user + user, 0x80000000, false},
+		{"foreign-user", "D:P" + system + "(A;;0x1f0003;;;S-1-5-21-1-2-3-500)", 0x80000000, false},
+		{"missing-system", "D:P" + user, 0x80000000, false},
+		{"inherited-entry", "D:P" + system + "(A;ID;0x1f0003;;;" + sid + ")", 0x80000000, false},
+		{"unprotected", "D:" + system + user, 0x20000000, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			id, err := newSecret()
+			if err != nil {
+				t.Fatal(err)
+			}
+			handle, err := createWindowsEvent(id[:32], "stop")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer syscall.CloseHandle(handle)
+			text, _ := syscall.UTF16PtrFromString(test.dacl)
+			var descriptor uintptr
+			if ok, _, _ := winConvertStringSD.Call(uintptr(unsafe.Pointer(text)), 1, uintptr(unsafe.Pointer(&descriptor)), 0); ok == 0 {
+				t.Fatal("fixture descriptor failed")
+			}
+			defer syscall.LocalFree(syscall.Handle(descriptor))
+			setSecurity := winAdvapi32.NewProc("SetKernelObjectSecurity")
+			if ok, _, _ := setSecurity.Call(uintptr(handle), test.protection|4, descriptor); ok == 0 {
+				t.Fatal("fixture event ACL setup failed")
+			}
+			if err := validateWindowsEvent(handle); (err == nil) != test.valid {
+				t.Fatalf("event ACL validation: valid=%t, error=%v", test.valid, err)
+			}
+		})
+	}
+}
+
 func TestWindowsInstallationChild(t *testing.T) {
 	index := -1
 	for i, arg := range os.Args {
