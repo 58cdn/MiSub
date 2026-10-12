@@ -10,6 +10,7 @@ export const PROBE_SCHEMA = [
 const initialized = new WeakMap();
 export const PROBE_AGENT_ONLINE_WINDOW_MS = 120000;
 export const PROBE_RETENTION_DAYS = 7;
+export const PROBE_HISTORY_STATES = ['queued', 'running', 'done', 'cancelled', 'expired'];
 const AGENT_PUBLIC_COLUMNS = 'id,name,created_at,last_seen,revoked_at,version,platform';
 const AGENT_SUMMARY_COLUMNS = `a.id,a.name,a.created_at,a.last_seen,a.revoked_at,a.version,a.platform,
     MAX(j.created_at) AS last_task_at,
@@ -62,18 +63,20 @@ export class ProbeStore {
             checkedAt, onlineWindowMs: PROBE_AGENT_ONLINE_WINDOW_MS, retentionDays: PROBE_RETENTION_DAYS
         };
     }
-    async agentHistory(id, offset = 0, limit = 20) {
+    async agentHistory(id, offset = 0, limit = 20, state = null) {
         validateManagementPage(offset, limit);
+        requireValue(state === null || PROBE_HISTORY_STATES.includes(state), 'invalid_state');
         await this.sweep();
         const checkedAt = this.now();
         const row = await this.q(`SELECT ${AGENT_SUMMARY_COLUMNS} FROM probe_agents a
             LEFT JOIN probe_tasks t ON t.agent_id=a.id LEFT JOIN probe_jobs j ON j.id=t.job_id
             WHERE a.id=? GROUP BY a.id`, id).first();
         requireValue(row, 'agent_not_found', 404);
-        const total = row.queued + row.running + row.done + row.stopped;
+        const total = (await this.q(`SELECT COUNT(*) AS n FROM probe_tasks t JOIN probe_jobs j ON j.id=t.job_id
+            WHERE t.agent_id=? AND (? IS NULL OR t.state=?)`, id, state, state).first()).n;
         const rows = await this.q(`SELECT t.id,t.job_id,t.node_id,t.node_name,t.state,t.attempt,j.created_at,t.completed_at,t.result_json
-            FROM probe_tasks t JOIN probe_jobs j ON j.id=t.job_id WHERE t.agent_id=?
-            ORDER BY j.created_at DESC,t.id LIMIT ? OFFSET ?`, id, limit, offset).all();
+            FROM probe_tasks t JOIN probe_jobs j ON j.id=t.job_id WHERE t.agent_id=? AND (? IS NULL OR t.state=?)
+            ORDER BY j.created_at DESC,t.id LIMIT ? OFFSET ?`, id, state, state, limit, offset).all();
         const records = rows.results.map(task => ({
             id: task.id, jobId: task.job_id, nodeId: task.node_id, nodeName: task.node_name,
             state: task.state, attempt: task.attempt, createdAt: task.created_at, completedAt: task.completed_at,

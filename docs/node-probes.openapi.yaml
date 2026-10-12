@@ -123,9 +123,14 @@ paths:
         The creation timestamp is the job's enqueue time, not a probe execution start time.
         Completion is the server's accepted result or stop time, not an inferred provider observation time.
         checks contains only sanitized persisted evidence; no node URI, configuration, token or lease.
+        An optional state filters records, total and nextOffset. The agent summary retains all task states.
       parameters:
         - { $ref: '#/components/parameters/ManagementOffset' }
         - { $ref: '#/components/parameters/ManagementLimit' }
+        - in: query
+          name: state
+          schema: { type: string, enum: [queued, running, done, cancelled, expired] }
+          description: Optional exact task state; omit for all states. Empty, unknown or duplicate values return 400 invalid_state.
       responses:
         '200':
           description: Public detector summary and task history page.
@@ -426,7 +431,7 @@ components:
       properties:
         agent: { $ref: '#/components/schemas/DetectorOverview' }
         records: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/DetectorHistoryRecord' } }
-        total: { type: integer, minimum: 0, description: Total retained tasks assigned to this identity. }
+        total: { type: integer, minimum: 0, description: Total retained tasks assigned to this identity matching the optional state filter. }
         nextOffset: { type: [integer, 'null'], minimum: 0 }
         checkedAt: { type: integer, description: Server time in Unix milliseconds. }
         retentionDays: { type: integer, const: 7 }

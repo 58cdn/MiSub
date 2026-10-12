@@ -280,6 +280,100 @@ describe('detector settings', () => {
         await flushPromises();
         expect(get(wrapper, 'detector-history').text()).not.toContain('STALE_HISTORY');
     });
+    it('filters task states on the server, preserves filters across pages, and resets the offset for a new filter', async () => {
+        historyHandler = async (url) => {
+            const query = new URL(url, window.location.origin).searchParams;
+            if (query.get('state') === 'expired') return response(history([]));
+            if (query.get('state') === 'done')
+                return response(
+                    history(
+                        [record(query.get('offset') === '20' ? 'DONE_PAGE_TWO' : 'DONE_PAGE_ONE')],
+                        { total: 21, nextOffset: query.get('offset') === '20' ? null : 20 }
+                    )
+                );
+            return response(history([record('ALL_STATES')], { total: 42, nextOffset: 20 }));
+        };
+        const wrapper = create();
+        await flushPromises();
+        await get(wrapper, 'detector-history-one').trigger('click');
+        await flushPromises();
+        expect(calls.at(-1).url).toBe('/api/probes/v1/agents/one/history?offset=0&limit=20');
+        await get(wrapper, 'detector-history-filter').setValue('done');
+        await flushPromises();
+        expect(get(wrapper, 'detector-history-total').text()).toBe('Matching records: 21 · Done');
+        expect(get(wrapper, 'detector-history-total').attributes('aria-atomic')).toBe('true');
+        expect(get(wrapper, 'detector-history').text()).toContain('Done means the task finished');
+        await get(wrapper, 'detector-history-next').trigger('click');
+        await flushPromises();
+        expect(calls.at(-1).url).toBe(
+            '/api/probes/v1/agents/one/history?offset=20&limit=20&state=done'
+        );
+        expect(get(wrapper, 'detector-history').text()).toContain('DONE_PAGE_TWO');
+        await get(wrapper, 'detector-history-filter').setValue('expired');
+        await flushPromises();
+        expect(calls.at(-1).url).toBe(
+            '/api/probes/v1/agents/one/history?offset=0&limit=20&state=expired'
+        );
+        expect(get(wrapper, 'detector-history').text()).not.toContain('DONE_PAGE_TWO');
+        expect(get(wrapper, 'detector-history').text()).toContain(
+            'No records match this task state within the retention period'
+        );
+        expect(get(wrapper, 'detector-history-total').text()).toBe('Matching records: 0 · Expired');
+        expect(get(wrapper, 'detector-history-prev').attributes('disabled')).toBeDefined();
+        await get(wrapper, 'detector-history-reset').trigger('click');
+        await flushPromises();
+        expect(calls.at(-1).url).toBe('/api/probes/v1/agents/one/history?offset=0&limit=20');
+        expect(get(wrapper, 'detector-history').text()).toContain('ALL_STATES');
+    });
+    it('clears old history immediately and ignores a late response from an earlier task-state filter', async () => {
+        const wrapper = create();
+        await flushPromises();
+        await get(wrapper, 'detector-history-one').trigger('click');
+        await flushPromises();
+        const pending = deferred();
+        historyHandler = () => pending.promise;
+        await get(wrapper, 'detector-history-filter').setValue('queued');
+        const signal = calls.at(-1).options.signal;
+        expect(get(wrapper, 'detector-history').text()).not.toContain('Fixture node');
+        expect(wrapper.find('[data-testid="detector-history-total"]').exists()).toBe(false);
+        historyHandler = async () =>
+            response(history([record('RUNNING_FILTER', { state: 'running', checks: {} })]));
+        await get(wrapper, 'detector-history-filter').setValue('running');
+        await flushPromises();
+        expect(signal.aborted).toBe(true);
+        expect(get(wrapper, 'detector-history').text()).toContain('RUNNING_FILTER');
+        pending.resolve(response(history([record('STALE_QUEUED_FILTER')])));
+        await flushPromises();
+        expect(get(wrapper, 'detector-history').text()).not.toContain('STALE_QUEUED_FILTER');
+        expect(get(wrapper, 'detector-history-filter').element.value).toBe('running');
+    });
+    it('moves keyboard focus to history only when opened and returns focus on close without polling jumps', async () => {
+        vi.useFakeTimers({
+            toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+        });
+        const wrapper = create();
+        await flushPromises();
+        const trigger = get(wrapper, 'detector-history-one');
+        trigger.element.focus();
+        await trigger.trigger('click');
+        await flushPromises();
+        expect(document.activeElement).toBe(get(wrapper, 'detector-history-title').element);
+        expect(get(wrapper, 'detector-history-title').attributes('tabindex')).toBe('-1');
+        const filter = get(wrapper, 'detector-history-filter');
+        filter.element.focus();
+        await filter.setValue('done');
+        await flushPromises();
+        expect(document.activeElement).toBe(filter.element);
+        await vi.advanceTimersByTimeAsync(30000);
+        await flushPromises();
+        expect(document.activeElement).toBe(filter.element);
+        expect(calls.at(-1).url).toContain('state=done');
+        await get(wrapper, 'detector-history')
+            .findAll('button')
+            .find((button) => button.text() === 'Close history')
+            .trigger('click');
+        expect(document.activeElement).toBe(trigger.element);
+    });
     it('shows history errors and recovers with explicit retry', async () => {
         historyHandler = async () => {
             throw new Error('credentials');

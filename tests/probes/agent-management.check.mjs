@@ -331,3 +331,98 @@ test('unauthenticated management requests never initialize storage', async () =>
     }
     assert.equal(touched, false);
 });
+
+test('history state filters paginate persisted records and count only matching tasks for the chosen identity', async () => {
+    const { store, job, read, advance } = await fixture();
+    const a = await store.addAgent('A');
+    const b = await store.addAgent('B');
+    await job([a.id], 'filter-expired');
+    advance(86400001);
+    await store.sweep();
+    const completed = [];
+    for (let i = 0; i < 3; i++) {
+        advance(1);
+        await job([a.id], `filter-done-${i}`);
+        const task = await store.claim(a);
+        advance(1);
+        await store.finish(a, task.id, task.leaseToken, {
+            tcp: { status: 'failed', code: 'connect_failed' },
+        });
+        completed.unshift(task.id);
+    }
+    const cancelled = await job([a.id], 'filter-cancelled');
+    await store.cancel(cancelled.id);
+    await job([a.id], 'filter-running');
+    const running = await store.claim(a);
+    await job([a.id], 'filter-queued', [node, { ...node, id: 'second' }]);
+    await job([b.id], 'filter-other-identity');
+    const first = await read(`agents/${a.id}/history?state=done&limit=2`);
+    const second = await read(`agents/${a.id}/history?state=done&limit=2&offset=2`);
+    assert.equal(first.total, 3);
+    assert.equal(first.nextOffset, 2);
+    assert.equal(second.total, 3);
+    assert.equal(second.nextOffset, null);
+    assert.deepEqual([...first.records, ...second.records].map(record => record.id), completed);
+    assert.deepEqual(first.agent.taskCounts, { queued: 2, running: 1, done: 3, stopped: 2 });
+    const pages = [first, second];
+    for (const [state, count] of Object.entries({ queued: 2, running: 1, done: 3, cancelled: 1, expired: 1 })) {
+        const page = await read(`agents/${a.id}/history?state=${state}`);
+        assert.equal(page.total, count, state);
+        assert.equal(page.records.length, count, state);
+        assert.equal(page.nextOffset, null);
+        assert.ok(page.records.every(record => record.state === state));
+        pages.push(page);
+    }
+    assert.equal((await read(`agents/${a.id}/history`)).total, 8);
+    assert.equal((await read(`agents/${b.id}/history?state=queued`)).total, 1);
+    const serialized = JSON.stringify(pages);
+    for (const sensitive of [
+        a.token, b.token, running.leaseToken, await digest(a.token), await digest(running.leaseToken),
+        'private-node-password', 'node_payload', 'token_hash', 'lease_hash', 'lease_until',
+    ]) {
+        assert.ok(!serialized.includes(sensitive));
+    }
+});
+
+test('filtered history has a true empty state and still obeys seven-day retention', async () => {
+    const { store, job, read, advance } = await fixture();
+    const a = await store.addAgent('A');
+    await job([a.id], 'filter-retention');
+    const missing = await read(`agents/${a.id}/history?state=done`);
+    assert.equal(missing.total, 0);
+    assert.equal(missing.nextOffset, null);
+    assert.deepEqual(missing.records, []);
+    assert.equal(missing.agent.taskCounts.queued, 1);
+    const beyond = await read(`agents/${a.id}/history?state=queued&offset=1`);
+    assert.equal(beyond.total, 1);
+    assert.equal(beyond.nextOffset, null);
+    assert.deepEqual(beyond.records, []);
+    advance(PROBE_RETENTION_DAYS * 86400000);
+    assert.equal((await read(`agents/${a.id}/history?state=expired`)).total, 1);
+    advance(1);
+    const removed = await read(`agents/${a.id}/history?state=expired`);
+    assert.equal(removed.total, 0);
+    assert.equal(removed.nextOffset, null);
+    assert.deepEqual(removed.records, []);
+});
+
+test('history rejects empty, unknown, duplicate and injection-shaped state values', async () => {
+    const { store, handle, request, env } = await fixture();
+    const a = await store.addAgent('A');
+    for (const query of [
+        'state=', 'state=all', 'state=unknown', 'state=stopped', 'state=Done', 'state=done%20',
+        'state=+done', 'state=done,queued', 'state=done&state=done', 'state=queued&state=done',
+        'state=done%27%20OR%201%3D1--',
+    ]) {
+        const response = await handle(request(`agents/${a.id}/history?${query}`), env);
+        assert.equal(response.status, 400, query);
+        assert.deepEqual(await response.json(), { success: false, error: { code: 'invalid_state' } });
+    }
+    for (const state of ['', 'all', 'done\' OR 1=1--', ['done'], 0]) {
+        await assert.rejects(store.agentHistory(a.id, 0, 20, state), /invalid_state/);
+    }
+    const unauthorized = await handle(request(`agents/${a.id}/history?state=done`, {
+        Authorization: `Bearer ${a.token}`,
+    }), env);
+    assert.equal(unauthorized.status, 401);
+});

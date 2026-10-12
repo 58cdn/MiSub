@@ -22,7 +22,8 @@ const server = await createServer({
 const errors = [],
     external = [],
     calls = [],
-    overflow = [];
+    overflow = [],
+    contrasts = [];
 const fakeToken = `mp1_${'a'.repeat(64)}`;
 let browser,
     configured = true,
@@ -130,7 +131,11 @@ try {
             assert.ok(agent);
             const offset = Number(url.searchParams.get('offset') || 0),
                 limit = Number(url.searchParams.get('limit') || 20);
-            const all = agent.id === 'a3' ? [] : records;
+            const state = url.searchParams.get('state');
+            const all =
+                agent.id === 'a3'
+                    ? []
+                    : records.filter((record) => !state || record.state === state);
             return send({
                 agent,
                 records: all.slice(offset, offset + limit),
@@ -162,8 +167,12 @@ try {
     const page = await context.newPage();
     page.on('pageerror', (error) => errors.push(error.message));
     for (const [name, width, height, dark] of [
-        ['desktop', 1280, 900, false],
+        ['desktop', 1440, 900, false],
         ['mobile', 375, 812, true],
+        ['tablet', 768, 1024, false],
+        ['laptop', 1024, 768, true],
+        ['mobile-light', 375, 812, false],
+        ['landscape', 812, 375, true],
     ]) {
         resetAgents();
         await page.setViewportSize({ width, height });
@@ -177,8 +186,75 @@ try {
         assert.equal(posts, 0, 'Opening management cannot enroll an identity');
         assert.ok(!(await page.locator('body').textContent()).includes(fakeToken));
         await page.screenshot({ path: resolve(evidence, `detector-manager-${name}-overview.png`) });
+        const contrast = await page.evaluate(() => {
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = 1;
+            const context = canvas.getContext('2d', { willReadFrequently: true });
+            const rgba = (color) => {
+                context.clearRect(0, 0, 1, 1);
+                context.fillStyle = color;
+                context.fillRect(0, 0, 1, 1);
+                return [...context.getImageData(0, 0, 1, 1).data];
+            };
+            const luminance = (rgb) =>
+                rgb
+                    .slice(0, 3)
+                    .map((v) => {
+                        const n = v / 255;
+                        return n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
+                    })
+                    .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
+            return [
+                'header p',
+                'form label',
+                'article dt',
+                'article dd',
+                'article > div > span',
+                '[data-testid="detector-history-a1"]',
+            ].map((selector) => {
+                const element = document.querySelector(
+                    `[data-testid="detector-settings"] ${selector}`
+                );
+                const foreground = rgba(getComputedStyle(element).color);
+                let background = [255, 255, 255, 255];
+                for (let ancestor = element; ancestor; ancestor = ancestor.parentElement) {
+                    const candidate = rgba(getComputedStyle(ancestor).backgroundColor);
+                    if (candidate[3] === 255) {
+                        background = candidate;
+                        break;
+                    }
+                }
+                const levels = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+                return { selector, ratio: (levels[0] + 0.05) / (levels[1] + 0.05) };
+            });
+        });
+        contrasts.push({ viewport: name, samples: contrast });
+        assert.ok(
+            contrast.every((sample) => sample.ratio >= 4.5),
+            `Text contrast: ${JSON.stringify(contrast)}`
+        );
         await page.getByTestId('detector-history-a1').click();
         await page.getByTestId('detector-history').waitFor();
+        assert.ok(
+            await page
+                .getByTestId('detector-history-title')
+                .evaluate((element) => element === document.activeElement)
+        );
+        await page.getByTestId('detector-history-filter').selectOption('done');
+        await page.getByText('Fixture node 0', { exact: true }).waitFor();
+        await page.getByTestId('detector-history-next').click();
+        await page.getByText('Fixture node 20', { exact: true }).waitFor();
+        assert.equal(new URL(calls.at(-1).path, origin).searchParams.get('state'), 'done');
+        await page.getByTestId('detector-history-filter').selectOption('cancelled');
+        await page
+            .getByText(
+                'No records match this task state within the retention period. Choose All states to see other records.',
+                { exact: true }
+            )
+            .waitFor();
+        assert.ok(await page.getByTestId('detector-history-prev').isDisabled());
+        await page.getByTestId('detector-history-filter').selectOption('done');
+        await page.getByText('Fixture node 0', { exact: true }).waitFor();
         await page.getByTestId('detector-history-next').click();
         await page.getByText('Fixture node 20', { exact: true }).waitFor();
         await page.getByTestId('detector-history-prev').click();
@@ -243,10 +319,14 @@ try {
         externalRequests: external,
         pageErrors: errors,
         overflow,
+        contrasts,
         tests: [
             'lazy settings entry',
             'status and independent times',
             'history and overview pagination',
+            'server task-state filtering and empty result',
+            'history keyboard focus',
+            'representative text contrast >= 4.5:1',
             'private fixture download',
             'explicit revoke confirmation',
             'Escape focus restoration',

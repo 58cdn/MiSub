@@ -1,4 +1,4 @@
-import { ProbeStore } from './probe-store.js';
+import { ProbeStore, PROBE_HISTORY_STATES } from './probe-store.js';
 import { OBSERVATIONS_VERSION, OBSERVATION_SOURCES } from './probe-observations.js';
 import { PROBE_TYPES, PROBE_SERVICES, MAX_NODES, MAX_AGENTS, MAX_ATTEMPTS, MAX_JOB_BYTES, normalizeOptions, probeError, requireValue } from './probe-contract.js';
 const PREFIX = '/api/probes/v1';
@@ -97,7 +97,9 @@ export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNod
                 if (path.length === 3 && path[2] === 'history' && method === 'GET') {
                     requireValue(/^[\w-]{1,128}$/.test(path[1]), 'not_found', 404);
                     const { offset, limit } = managementPage(url.searchParams);
-                    return json({ success: true, data: await store.agentHistory(path[1], offset, limit) });
+                    const states = url.searchParams.getAll('state');
+                    requireValue(states.length === 0 || (states.length === 1 && PROBE_HISTORY_STATES.includes(states[0])), 'invalid_state');
+                    return json({ success: true, data: await store.agentHistory(path[1], offset, limit, states[0] ?? null) });
                 }
                 if (path.length === 1 && method === 'GET') return json({ success: true, data: await store.agents() });
                 if (path.length === 1 && method === 'POST') return json({ success: true, data: await store.addAgent((await readProbeJson(request)).name) }, 201);

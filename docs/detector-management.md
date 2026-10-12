@@ -11,6 +11,9 @@ dialog layer. Detector requests start only when the section is opened.
 
 `GET /agents/overview?offset=0&limit=20` returns a paged administrator-only overview.
 `GET /agents/{id}/history?offset=0&limit=20` returns persisted tasks for that detector.
+The history task-state filter accepts `queued`, `running`, `done`, `cancelled` or
+`expired`; omitting `state` returns all tasks. The total count and pagination apply
+to the selected state. `done` means a task returned results, including failed checks.
 Both use the existing probe database and seven-day task retention. No new database,
 credential protocol or detector deployment is introduced.
 Each page contains 20 records. API callers can request 1–50 records and an offset up

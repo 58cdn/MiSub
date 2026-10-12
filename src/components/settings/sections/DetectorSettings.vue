@@ -1,5 +1,13 @@
 <script setup>
-    import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from 'vue';
+    import {
+        computed,
+        nextTick,
+        onActivated,
+        onBeforeUnmount,
+        onDeactivated,
+        onMounted,
+        ref,
+    } from 'vue';
     import Modal from '@/components/forms/Modal.vue';
     import NodeObservationReport from '@/components/nodes/NodeObservationReport.vue';
     import { useI18n } from '@/i18n/index.js';
@@ -17,8 +25,11 @@
     const selectedAgent = ref(null),
         history = ref(null),
         historyOffset = ref(0),
+        historyState = ref(''),
+        historyTitle = ref(null),
         historyBusy = ref(false),
         historyError = ref(false);
+    const historyStates = ['queued', 'running', 'done', 'cancelled', 'expired'];
     const autoRefresh = ref(true),
         elapsed = ref(0),
         receivedAt = ref(null),
@@ -41,6 +52,7 @@
         mounted = false,
         clock = null,
         refreshTimer = null;
+    let historyTrigger = null;
     let initialController = null,
         overviewController = null,
         historyController = null,
@@ -216,7 +228,7 @@
         historyBusy.value = true;
         try {
             const result = await probeRequest(
-                `agents/${encodeURIComponent(id)}/history?offset=${historyOffset.value}&limit=20`,
+                `agents/${encodeURIComponent(id)}/history?offset=${historyOffset.value}&limit=20${historyState.value ? `&state=${historyState.value}` : ''}`,
                 { signal: controller.signal }
             );
             if (!active || controller.signal.aborted || generation !== historyGeneration) return;
@@ -267,6 +279,20 @@
         historyError.value = false;
         return loadHistory();
     }
+    async function openHistory(agent, event) {
+        historyTrigger = event?.currentTarget || null;
+        historyState.value = '';
+        const request = selectHistory(agent),
+            generation = historyGeneration;
+        await nextTick();
+        if (active && generation === historyGeneration) historyTitle.value?.focus();
+        return request;
+    }
+    function changeHistoryState(state) {
+        if (!selectedAgent.value || (state !== '' && !historyStates.includes(state))) return;
+        historyState.value = state;
+        return selectHistory(selectedAgent.value, 0);
+    }
     function closeHistory() {
         historyController?.abort();
         historyController = null;
@@ -274,6 +300,8 @@
         selectedAgent.value = null;
         history.value = null;
         historyBusy.value = false;
+        if (historyTrigger?.isConnected) historyTrigger.focus();
+        historyTrigger = null;
     }
     function refresh() {
         if (!capabilities.value || initializationError.value) return initialize();
@@ -454,6 +482,7 @@
         downloadUrls.clear();
         clearEnrollment();
         showRevoke.value = false;
+        historyTrigger = null;
     }
     onMounted(() => {
         mounted = true;
@@ -700,7 +729,7 @@
                         <button
                             :data-testid="`detector-history-${agent.id}`"
                             class="detector-button"
-                            @click="selectHistory(agent)"
+                            @click="openHistory(agent, $event)"
                         >
                             {{ L('检测记录', 'Detection history') }}
                         </button>
@@ -748,7 +777,12 @@
                 :aria-label="L('检测记录', 'Detection history')"
             >
                 <div class="flex flex-wrap items-start justify-between gap-3">
-                    <h4 class="break-words font-semibold text-gray-900 dark:text-white">
+                    <h4
+                        ref="historyTitle"
+                        data-testid="detector-history-title"
+                        tabindex="-1"
+                        class="scroll-mt-24 break-words rounded font-semibold text-gray-900 dark:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                    >
                         {{ selectedAgent.name }} · {{ L('检测记录', 'Detection history') }}
                     </h4>
                     <button class="detector-button" @click="closeHistory">
@@ -764,6 +798,35 @@
                         )
                     }}
                 </p>
+                <div class="flex flex-wrap items-end justify-between gap-3">
+                    <div class="min-w-0 space-y-1">
+                        <label for="detector-history-filter" class="block font-medium">{{
+                            L('任务状态', 'Task state')
+                        }}</label>
+                        <select
+                            id="detector-history-filter"
+                            data-testid="detector-history-filter"
+                            :value="historyState"
+                            class="min-h-11 max-w-full rounded-lg border border-gray-300 bg-white px-3 dark:border-gray-600 dark:bg-gray-800"
+                            @change="changeHistoryState($event.target.value)"
+                        >
+                            <option value="">{{ L('全部状态', 'All states') }}</option>
+                            <option v-for="state in historyStates" :key="state" :value="state">
+                                {{ statusText(state) }}
+                            </option>
+                        </select>
+                    </div>
+                    <p
+                        v-if="history"
+                        data-testid="detector-history-total"
+                        role="status"
+                        aria-atomic="true"
+                        class="break-words text-sm text-gray-500 dark:text-gray-400"
+                    >
+                        {{ L('匹配记录：', 'Matching records: ') }}{{ history.total }} ·
+                        {{ historyState ? statusText(historyState) : L('全部状态', 'All states') }}
+                    </p>
+                </div>
                 <p v-if="historyBusy && !history" role="status">
                     {{ L('正在加载记录…', 'Loading history…') }}
                 </p>
@@ -780,14 +843,29 @@
                         {{ L('重试', 'Retry') }}
                     </button>
                 </div>
-                <p v-if="history && !history.records.length">
-                    {{
-                        L(
-                            '保留期内暂无检测记录。',
-                            'No detection history within the retention period.'
-                        )
-                    }}
-                </p>
+                <div v-if="history && !history.records.length" class="space-y-3">
+                    <p>
+                        {{
+                            historyState
+                                ? L(
+                                      '保留期内没有符合当前任务状态的记录，可切换为全部状态查看。',
+                                      'No records match this task state within the retention period. Choose All states to see other records.'
+                                  )
+                                : L(
+                                      '保留期内暂无检测记录。',
+                                      'No detection history within the retention period.'
+                                  )
+                        }}
+                    </p>
+                    <button
+                        v-if="historyState"
+                        class="detector-button"
+                        data-testid="detector-history-reset"
+                        @click="changeHistoryState('')"
+                    >
+                        {{ L('查看全部状态', 'Show all states') }}
+                    </button>
+                </div>
                 <article
                     v-for="record in history?.records || []"
                     :key="record.id"
@@ -1098,7 +1176,8 @@
         @apply text-gray-700 dark:text-gray-200;
     }
     button:focus-visible,
-    input:focus-visible {
+    input:focus-visible,
+    select:focus-visible {
         @apply outline outline-2 outline-offset-2 outline-indigo-500;
     }
     @media (prefers-reduced-motion: reduce) {
