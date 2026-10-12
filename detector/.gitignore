@@ -1,0 +1,8 @@
+/embedded/kernel.gz
+/embedded/kernel.sha256
+/embedded/kernel-source.txt
+/embedded/LICENSE.mihomo
+/misub-probe
+/dist/
+/probe.json
+__pycache__/
