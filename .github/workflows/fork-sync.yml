@@ -29,8 +29,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          git config user.name "GitHub Actions Bot"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "tdou@ChatGPT"
+          git config user.email "tdou@chatgpt.com"
 
           git checkout main || git checkout -b main
 
@@ -51,6 +51,8 @@ jobs:
           git fetch --prune upstream main
 
       - name: Fast-forward upstream without overwriting fork commits
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -71,3 +73,4 @@ jobs:
           git merge --ff-only upstream/main
           git push origin main
           echo "✅ 已安全快进至上游 main。"
+          gh workflow run cloudflare-pages.yml --ref main
