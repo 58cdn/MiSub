@@ -7,9 +7,6 @@ on:
   workflow_dispatch:  # 可在 Actions 页面手动触发
 
 permissions:
-  contents: write  # 允许 push 回 fork
-
-permissions:
   contents: write
   actions: write
 
