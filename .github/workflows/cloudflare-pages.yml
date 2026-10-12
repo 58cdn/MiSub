@@ -6,6 +6,15 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      provision_node_probes:
+        description: Explicitly provision missing probe D1 (production resource change)
+        type: boolean
+        default: false
+      accept_node_probes:
+        description: Run production smoke that creates and revokes temporary detector identities
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -48,14 +57,14 @@ jobs:
         run: npm run build
 
       - name: Set up Go for production acceptance
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.accept_node_probes
         uses: actions/setup-go@v5
         with:
           go-version: stable
           cache: false
 
       - name: Build real detector for production acceptance
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.accept_node_probes
         working-directory: detector
         env:
           CGO_ENABLED: '0'
@@ -66,7 +75,7 @@ jobs:
 
       # PRs from forks must never receive production credentials.
       - name: Deploy to Cloudflare Pages
-        if: github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -76,12 +85,13 @@ jobs:
           CLOUDFLARE_KV_NAMESPACE_ID: ${{ secrets.CLOUDFLARE_KV_NAMESPACE_ID }}
           CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
           CLOUDFLARE_D1_DATABASE_NAME: ${{ secrets.CLOUDFLARE_D1_DATABASE_NAME }}
-          PROVISION_NODE_PROBES: 'true'
+          PROVISION_NODE_PROBES: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.provision_node_probes }}
         run: bash scripts/deploy-cloudflare-pages.sh
 
       - name: Accept deployed two-detector task loop
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.accept_node_probes
         env:
+          RUN_NODE_PROBE_ACCEPTANCE: 'true'
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}

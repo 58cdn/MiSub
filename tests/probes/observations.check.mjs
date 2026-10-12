@@ -17,6 +17,14 @@ function report(id='fixture-task') {
 }
 const checks=report=>({observations:{status:'unknown',code:'probe_inconclusive',report}});
 const clean=r=>sanitizeResult(checks(r),['observations'],[],options,context).observations.report;
+test('provider timestamps remain independent, optional for legacy detectors and bounded',()=>{
+    const provider={service:'netflix',status:'unknown',code:'service_reachable',httpStatus:200,checkedAt:new Date(timestamp).toISOString()};
+    const input=v=>({unlock:{status:'unknown',code:'probe_inconclusive',services:[v]}});
+    const clean=v=>sanitizeResult(input(v),['unlock'],['netflix'],{},context).unlock.services[0];
+    assert.equal(clean(provider).checkedAt,provider.checkedAt);
+    const legacy={...provider};delete legacy.checkedAt;assert.equal(clean(legacy).checkedAt,undefined);
+    for(const checkedAt of [null,{},'invalid',new Date(timestamp+1001).toISOString(),new Date(timestamp-180002).toISOString()]) assert.throws(()=>clean({...provider,checkedAt}),/invalid_service_time/);
+});
 
 test('Go parser and control plane share the same versioned JSON wire fixture',()=>{
     const fixture=JSON.parse(readFileSync(new URL('../../detector/testdata/observations-v1.json',import.meta.url),'utf8'));

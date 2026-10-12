@@ -2,11 +2,11 @@
 
 This feature extends the existing `/api/probes/v1` task/lease protocol and native
 Go detector. It does not add a second executor or an automatic network probe in
-Workers. The implementation will integrate the TLS/rate-limit fixes from PR #11
-before acceptance. The source research and licenses are recorded in
+Workers. The implementation includes the native TLS/rate-limit boundary from PR #11.
+The source research and licenses are recorded in
 [node-diagnostics.md](node-diagnostics.md); no GPL checker code is copied.
 
-Implemented wire and execution contract (offline acceptance in progress):
+Wire and execution contract:
 
 - Add an opt-in `observations` check with version 1 and explicit source IDs. Old
   detector claim requests must not consume tasks requiring this capability.
@@ -65,6 +65,12 @@ no country is inferred for plain IP-only services. IPPure's `fraudScore` remains
 its own 0–100 measure; absent/invalid score or boolean values stay null/partial.
 IPinfo is currently not configured: this version does not accept or create an
 IPinfo token. Ping0 is not in the registry and receives no request.
+
+Unlock provider results also retain an independent `checkedAt` completion time
+from the native detector, including failures, cancellation and rate limits. The
+control plane validates its age with the same three-minute/one-second bounds and
+keeps replay validation fixed to first acceptance. Older detectors may omit it;
+the UI must not invent a provider time from the task's delivery timestamp.
 
 ## Limits and acceptance
 

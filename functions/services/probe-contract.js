@@ -91,7 +91,16 @@ export function sanitizeResult(input, types, services = PROBE_SERVICES, options 
             out[type].services = input[type].services.map(v => {
                 requireValue(services.includes(v.service) && !seen.has(v.service), 'invalid_service_result');
                 seen.add(v.service);
-                return { service: v.service, ...cleanCheck(v) };
+                const clean = { service: v.service, ...cleanCheck(v) };
+                // Old detectors omit provider time. Never substitute job delivery
+                // time; new detectors preserve each completed provider observation.
+                if (v.checkedAt !== undefined) {
+                    const time = typeof v.checkedAt === 'string' ? Date.parse(v.checkedAt) : NaN;
+                    const now = context.now ?? Date.now();
+                    requireValue(Number.isFinite(time) && time >= Math.max(context.startedAt ?? 0, now - 180000) - 1000 && time <= now + 1000, 'invalid_service_time');
+                    clean.checkedAt = new Date(time).toISOString();
+                }
+                return clean;
             });
         }
     }

@@ -75,16 +75,20 @@ func classifyService(service string, status int, body []byte) Check {
 	// 200, generic 403/404 and redirects do NOT prove unlock, blocking or playback rights.
 	return r
 }
+func serviceEvidence(service string, check Check) ServiceCheck {
+	return ServiceCheck{Service: service, CheckedAt: time.Now().UTC().Format(time.RFC3339Nano), Check: check}
+}
+
 func checkServices(ctx context.Context, client *http.Client, services []string, timeout time.Duration) Check {
 	overall := failure("unknown", "probe_inconclusive")
 	for _, service := range services {
 		if ctx.Err() != nil {
-			overall.Services = append(overall.Services, ServiceCheck{service, failure("cancelled", "cancelled")})
+			overall.Services = append(overall.Services, serviceEvidence(service, failure("cancelled", "cancelled")))
 			continue
 		}
 		target, ok := serviceRegistry[service]
 		if !ok {
-			overall.Services = append(overall.Services, ServiceCheck{service, failure("unsupported", "probe_inconclusive")})
+			overall.Services = append(overall.Services, serviceEvidence(service, failure("unsupported", "probe_inconclusive")))
 			continue
 		}
 		func() {
@@ -93,7 +97,7 @@ func checkServices(ctx context.Context, client *http.Client, services []string, 
 			start := time.Now()
 			req, err := http.NewRequestWithContext(child, "GET", target, nil)
 			if err != nil {
-				overall.Services = append(overall.Services, ServiceCheck{service, failure("failed", "request_failed")})
+				overall.Services = append(overall.Services, serviceEvidence(service, failure("failed", "request_failed")))
 				return
 			}
 			req.Header.Set("User-Agent", "MiSub-Probe/"+version)
@@ -102,14 +106,14 @@ func checkServices(ctx context.Context, client *http.Client, services []string, 
 			if err != nil {
 				r := networkFailure(err, start)
 				r.LatencyMs = nil
-				overall.Services = append(overall.Services, ServiceCheck{service, r})
+				overall.Services = append(overall.Services, serviceEvidence(service, r))
 				return
 			}
 			defer resp.Body.Close()
 			// A rate-limit is established by headers. Never read a stalled,
 			// oversized or malformed body before preserving this evidence.
 			if resp.StatusCode == http.StatusTooManyRequests {
-				overall.Services = append(overall.Services, ServiceCheck{service, rateLimited(resp.Header, time.Now())})
+				overall.Services = append(overall.Services, serviceEvidence(service, rateLimited(resp.Header, time.Now())))
 				return
 			}
 			// Inspect a bounded prefix, not the whole page. Missing evidence remains unknown.
@@ -117,10 +121,10 @@ func checkServices(ctx context.Context, client *http.Client, services []string, 
 			if err != nil {
 				r := networkFailure(err, start)
 				r.LatencyMs = nil
-				overall.Services = append(overall.Services, ServiceCheck{service, r})
+				overall.Services = append(overall.Services, serviceEvidence(service, r))
 				return
 			}
-			overall.Services = append(overall.Services, ServiceCheck{service, classifyService(service, resp.StatusCode, body)})
+			overall.Services = append(overall.Services, serviceEvidence(service, classifyService(service, resp.StatusCode, body)))
 		}()
 	}
 	if ctx.Err() != nil {

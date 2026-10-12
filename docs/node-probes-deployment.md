@@ -6,7 +6,9 @@
 
 已有三个 Repository Secrets 仍为 `CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`、`ADMIN_PASSWORD`。无需提交数据库 ID 或新增检测器 Token Secret。Cloudflare API Token 除原来的 Pages/KV 权限，还需要目标账户的 **D1 Edit/Write**（控制台通常显示 Account / D1 / Edit）。仅需在 Cloudflare 调整现有 Token 的权限；不要把 Token 值粘贴到 issue、聊天或日志。
 
-工作流设置 `PROVISION_NODE_PROBES=true`，`scripts/provision-probe-d1.sh` 先保留已绑定的 `MISUB_PROBE_DB`，否则按稳定名称 `<Pages项目名>-probes` 查找/创建独立数据库。重复执行重用数据库，不重复创建，不切换既有 ID；403 会明确停止，不伪装成不存在后另建资源。未指定此开关的手工运行仍保留已有绑定，但不会自动创建。
+普通 main push 只测试、构建并发布 Pages，保留已绑定的 `MISUB_PROBE_DB`，不创建检测数据库或检测器身份。PR 只做离线测试和构建。需要新增检测数据库时，必须在 main 上手动 `workflow_dispatch` 并主动勾选默认关闭的 `provision_node_probes`；只有此路径设置 `PROVISION_NODE_PROBES=true`。脚本另行拒绝 Actions 的自动事件，防止开关被误接。
+
+手动路径的 `scripts/provision-probe-d1.sh` 先保留已绑定数据库，否则按稳定名称 `<Pages项目名>-probes` 查找/创建独立数据库。重复执行重用数据库，不切换既有 ID；403 明确停止，不自动修改 Token 权限或其他安全配置。未开启此开关时，不查询或创建未绑定的检测库。
 
 现有 KV、业务 D1 或检测 D1 的显式覆盖 ID 如与当前生产绑定冲突，部署直接失败。检测库不能和业务 D1 使用同一 ID。其他未知资源绑定仍沿用已有的防覆盖保护。首次创建检测库后，在管理员首次调用管理接口时初始化 `probe_agents`、`probe_jobs`、`probe_tasks` 等独立表。
 
@@ -16,13 +18,13 @@ D1、Pages 请求和检测节点流量由自己的 Cloudflare/服务器账户承
 
 `Probe detector` 在 Linux amd64/arm64、macOS Intel/Apple Silicon 四个原生 runner 上执行带内核测试、禁止直接回退测试、单文件构建和 `--self-test`，并生成锁定 Mihomo 版本的源码与 vendor 依赖归档。
 
-相关变更合并 main 后，只有本次四平台和源码任务全部通过才首次发布 `probe-v0.1.0`。已经存在的同名 Release 不会覆盖；新的版本必须显式更新版本与 tag。手动 workflow_dispatch 仍可使用 `publish=true` 触发同样门槛。PR 不发布、不获取生产 Secrets。
+push/PR 不发布二进制或源码制品。手动 main `workflow_dispatch` 保留默认关闭的 `publish` 输入，但当前分发材料验收门槛仍为关闭状态：即使选择发布也不会上传或发布。后续需独立审核对应源码、生成的 CA 数据及所有依赖 LICENSE/NOTICE，再通过 PR 打开这道门槛；四平台测试通过本身不足以解锁发布。既有同名 Release 不覆盖、不删除，新版本需显式更新版本与 tag。
 
-Release 含四个运行包、SHA256SUMS 和内核对应源码。用户运行无需下载内核或安装编程运行时；只需要下载对应包、在 MiSub 创建检测器并保存私密配置。
+现有 `probe-v0.1.0` 已由此前 PR #14 于 2026-10-12 发布，含四个运行包、SHA256SUMS 和源码归档；它不含后续 #11 安全修复。现有生产资源和发布资产不会被本次修复修改或撤回。详见[分发材料检查](./detector-hardening.md)。
 
-## 自动生产验收
+## 手动生产验收
 
-`Cloudflare Pages` 在主项目全量测试/构建之后构建 Linux 检测器、部署 Pages，再执行 `scripts/smoke-node-probes.mjs`：
+只有 main 上手动 `workflow_dispatch` 并主动勾选默认关闭的 `accept_node_probes`，才会构建 Linux 检测器并在 Pages 发布后执行 `scripts/smoke-node-probes.mjs`。它独立于数据库配置开关。脚本还要求 `RUN_NODE_PROBE_ACCEPTANCE=true` 并拒绝 Actions 的 push/PR/非 main 调用，在任何网络访问和凭据检查之前停止。此手动验收会产生以下生产副作用，必须单独授权，本轮不执行：
 
 1. 从 Cloudflare API 核对实际生产域名、部署状态与本次 Git SHA，不猜测 `pages.dev` 子域名。
 2. 检查检测 API 未登录返回 401，然后使用已有登录密码登录；失败时不改密码、不重置会话 Secret。
