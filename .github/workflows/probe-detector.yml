@@ -1,0 +1,119 @@
+name: Probe detector
+on:
+  pull_request:
+    paths: ['detector/**', '.github/workflows/probe-detector.yml']
+  push:
+    branches: [main]
+    paths: ['detector/**', '.github/workflows/probe-detector.yml']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish probe-v0.1.0 after all native tests and source packaging pass
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: probe-detector-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux-amd64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+          - runner: macos-15-intel
+            target: darwin-amd64
+          - runner: macos-15
+            target: darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: detector
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Verify runner architecture and locked binary
+        run: |
+          test "$(go env GOOS)-$(go env GOARCH)" = '${{ matrix.target }}'
+          python3 scripts/bundle.py '${{ matrix.target }}'
+      - name: Unit, race and actual core routing tests
+        env:
+          MISUB_PROBE_REQUIRE_KERNEL: '1'
+        run: go test -race -count=1 -v ./...
+      - name: Build standalone executable and native smoke
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags "-s -w -X main.version=0.1.0 -X main.commit=${GITHUB_SHA}" -o 'dist/misub-probe-${{ matrix.target }}' .
+          './dist/misub-probe-${{ matrix.target }}' --self-test
+          './dist/misub-probe-${{ matrix.target }}' --version
+          cp README.md kernel-lock.json dist/
+          cp ../LICENSE dist/LICENSE.MiSub
+          cp embedded/LICENSE.mihomo dist/
+          cp -R services dist/
+          cd dist
+          python3 -c 'import hashlib,pathlib; p=next(pathlib.Path(".").glob("misub-probe-*")); pathlib.Path("SHA256SUMS").write_text(hashlib.sha256(p.read_bytes()).hexdigest()+"  "+p.name+"\n")'
+          tar -czf '../misub-probe-${{ matrix.target }}.tar.gz' .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: misub-probe-${{ matrix.target }}
+          path: detector/misub-probe-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Prepare matching kernel source and vendored dependency sources
+        shell: bash
+        run: |
+          source_sha="$(python3 -c 'import json;print(json.load(open("detector/kernel-lock.json"))["sourceCommit"])')"
+          test "$source_sha" = 88dcbf7f1614a67c3b36b848ee3592dfa92ada36
+          mkdir mihomo-source
+          git -C mihomo-source init
+          git -C mihomo-source remote add origin https://github.com/MetaCubeX/mihomo.git
+          git -C mihomo-source fetch --depth=1 origin "$source_sha"
+          git -C mihomo-source checkout --detach FETCH_HEAD
+          test "$(git -C mihomo-source rev-parse HEAD)" = "$source_sha"
+          (cd mihomo-source && go mod vendor)
+          tar --exclude=.git -czf mihomo-source-v1.19.32.tar.gz mihomo-source
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mihomo-corresponding-source
+          path: mihomo-source-v1.19.32.tar.gz
+          if-no-files-found: error
+  publish:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'
+    needs: [native, source]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: release
+      - name: Publish only this tested commit; never replace an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          cd release
+          sha256sum *.tar.gz > SHA256SUMS
+          gh release create probe-v0.1.0 *.tar.gz SHA256SUMS --target "$GITHUB_SHA" --title 'MiSub Probe v0.1.0' --notes 'Standalone Linux/macOS amd64/arm64 detectors. Native routing/no-direct-fallback tests run before publishing. Mihomo GPL license and corresponding vendored source are included. Network-side service evidence is not an account or playback guarantee.'
