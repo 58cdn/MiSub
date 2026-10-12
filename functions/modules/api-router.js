@@ -73,6 +73,10 @@ import { normalizeSubconverterBackend } from './subscription/main-handler.js';
 import { maybeRunScheduledTasks } from './scheduled-task-runner.js';
 import { handleExternalNodesCallbackRequest } from '../services/external-nodes-callback-service.js';
 import { handleExternalApiRequest } from './external-api-router.js';
+import {
+    handleDiagnosticsCapabilities,
+    handleNodeDiagnostics,
+} from './handlers/diagnostics-handler.js';
 
 // 常量定义
 const OLD_KV_KEY = 'misub_data_v1';
@@ -412,6 +416,12 @@ export async function handleApiRequest(request, env, context = null) {
     }
 
     switch (path) {
+        case '/nodes/diagnostics/capabilities':
+            return handleDiagnosticsCapabilities(request, env);
+
+        case '/nodes/diagnostics':
+            return await handleNodeDiagnostics(request, env);
+
         case '/misubs':
             return await handleMisubsSave(request, env);
 
