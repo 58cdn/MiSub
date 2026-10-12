@@ -45,6 +45,9 @@ export function sanitizeResult(input, types, services = PROBE_SERVICES) {
     const cleanCheck = (v) => {
         requireValue(v && typeof v === 'object' && PROBE_STATUSES.includes(v.status), 'invalid_result_status');
         requireValue(CODES.has(v.code), 'invalid_result_code');
+        if (v.code === 'rate_limited' || v.httpStatus === 429) {
+            requireValue(v.status === 'unknown' && v.code === 'rate_limited' && v.httpStatus === 429 && ['latencyMs', 'bytes', 'bytesPerSecond', 'region'].every(key => v[key] === undefined), 'invalid_rate_limit');
+        }
         const out = { status: v.status, code: v.code };
         for (const [key, max] of Object.entries({ latencyMs: 180000, bytes: 20 * 1024 * 1024, bytesPerSecond: 1e12, httpStatus: 599 })) {
             if (v[key] !== undefined) {
@@ -55,6 +58,10 @@ export function sanitizeResult(input, types, services = PROBE_SERVICES) {
         if (v.region !== undefined) {
             requireValue(typeof v.region === 'string' && /^[A-Z]{2}$/.test(v.region), 'invalid_result_region');
             out.region = v.region;
+        }
+        if (v.retryAfterSeconds !== undefined) {
+            requireValue(v.code === 'rate_limited' && v.httpStatus === 429 && Number.isInteger(v.retryAfterSeconds) && v.retryAfterSeconds >= 0 && v.retryAfterSeconds <= 86400, 'invalid_retry_after');
+            out.retryAfterSeconds = v.retryAfterSeconds;
         }
         return out;
     };
