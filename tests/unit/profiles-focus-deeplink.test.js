@@ -41,7 +41,10 @@ import { useDataStore } from '../../src/stores/useDataStore.js';
 
 const scrollSpy = vi.fn();
 const mountedWrappers = [];
-afterEach(() => {
+afterEach(async () => {
+    // Async modal loaders can still be resolving when a synchronous anchor test
+    // finishes. Settle them before Vitest tears down this file's mocked modules.
+    await vi.dynamicImportSettled();
     mountedWrappers.splice(0).forEach((wrapper) => wrapper.unmount());
 });
 

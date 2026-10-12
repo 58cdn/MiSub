@@ -30,7 +30,7 @@
         },
     });
 
-    const emit = defineEmits(['copy', 'toggle-select']);
+    const emit = defineEmits(['copy', 'toggle-select', 'diagnose']);
 
     const handleCardClick = (node) => {
         if (props.selectionMode) {
@@ -105,6 +105,14 @@
                 </div>
 
                 <!-- 右侧：操作按钮 -->
+                <button
+                    v-if="!selectionMode"
+                    type="button"
+                    class="min-h-11 shrink-0 rounded-lg px-2 text-sm text-indigo-700 dark:text-indigo-300"
+                    @click.stop="emit('diagnose', node)"
+                >
+                    {{ t('diagnostics.action') }}
+                </button>
                 <button
                     v-if="!selectionMode"
                     @click.stop="emit('copy', node, node.url)"
@@ -230,6 +238,14 @@
                             </div>
 
                             <!-- 复制按钮 (Floating when hovered, only in non-selection mode) -->
+                            <button
+                                v-if="!selectionMode"
+                                type="button"
+                                class="min-h-11 shrink-0 rounded-lg px-2 text-sm text-indigo-700 dark:text-indigo-300"
+                                @click.stop="emit('diagnose', node)"
+                            >
+                                {{ t('diagnostics.action') }}
+                            </button>
                             <button
                                 v-if="!selectionMode"
                                 @click.stop="emit('copy', node, node.url)"

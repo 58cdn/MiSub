@@ -3,6 +3,7 @@
     import { extractHostAndPort } from '../../lib/utils.js';
     import { useToastStore } from '../../stores/toast.js';
     import { useI18n } from '@/i18n/index.js';
+    import NodeDiagnosticsButton from './NodeDiagnosticsButton.vue';
 
     const props = defineProps({
         node: {
@@ -163,6 +164,7 @@
 
                         <!-- Header Actions for Mobile -->
                         <div v-if="!isSelectionMode" class="flex shrink-0 items-center gap-0.5">
+                            <NodeDiagnosticsButton :node="node" />
                             <button
                                 @click.stop="emit('ping')"
                                 class="rounded-md p-2 text-gray-500 dark:text-gray-400 transition-colors hover:bg-green-500/10 hover:text-green-500"
@@ -435,8 +437,9 @@
 
             <div
                 v-if="!isSelectionMode"
-                class="shrink-0 flex items-center gap-1 opacity-100 transition-opacity duration-200 group-hover:opacity-100 lg:opacity-0"
+                class="shrink-0 flex items-center gap-1 opacity-100 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100 lg:opacity-0"
             >
+                <NodeDiagnosticsButton v-if="!isSelectionMode" :node="node" />
                 <button
                     @click.stop="emit('ping')"
                     class="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md p-2 text-gray-500 dark:text-gray-400 transition-colors hover:bg-green-500/10 hover:text-green-500 lg:min-h-0 lg:min-w-0"

@@ -61,7 +61,9 @@
 
     function getFocusableElements() {
         return modalPanelRef.value
-            ? Array.from(modalPanelRef.value.querySelectorAll(FOCUSABLE))
+            ? Array.from(modalPanelRef.value.querySelectorAll(FOCUSABLE)).filter(
+                  (element) => !element.closest('[inert]')
+              )
             : [];
     }
 
@@ -249,6 +251,14 @@
         .modal-inner-leave-to {
             opacity: 0;
             transform: scale(0.95);
+        }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .modal-fade-enter-active,
+        .modal-fade-leave-active,
+        .modal-inner-enter-active,
+        .modal-inner-leave-active {
+            transition: none;
         }
     }
 </style>

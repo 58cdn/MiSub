@@ -1,6 +1,7 @@
 <script setup>
     import { computed } from 'vue';
     import { useI18n } from '@/i18n/index.js';
+    import NodeDiagnosticsButton from './NodeDiagnosticsButton.vue';
 
     const props = defineProps({
         node: {
@@ -167,6 +168,7 @@
             </p>
 
             <!-- Ping Result Badge -->
+            <NodeDiagnosticsButton v-if="!isSelectionMode" :node="node" />
             <div
                 v-if="pingResult"
                 class="flex shrink-0 flex-row items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium"
