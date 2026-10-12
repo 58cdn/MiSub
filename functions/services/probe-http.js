@@ -1,12 +1,14 @@
 import { ProbeStore, PROBE_HISTORY_STATES } from './probe-store.js';
+import { ProbePairingStore } from './probe-pairing-store.js';
+import { PAIRING_BODY_BYTES, pairingBody } from './probe-pairing.js';
 import { OBSERVATIONS_VERSION, OBSERVATION_SOURCES } from './probe-observations.js';
 import { PROBE_TYPES, PROBE_SERVICES, MAX_NODES, MAX_AGENTS, MAX_ATTEMPTS, MAX_JOB_BYTES, normalizeOptions, probeError, requireValue } from './probe-contract.js';
 const PREFIX = '/api/probes/v1';
 const LIMIT = 1024 * 1024;
-export async function readProbeJson(request) {
+export async function readProbeJson(request, limit = LIMIT) {
     requireValue((request.headers.get('content-type') || '').split(';')[0].trim() === 'application/json', 'json_required', 415);
     const declared = request.headers.get('content-length');
-    if (declared) requireValue(/^\d+$/.test(declared) && Number(declared) <= LIMIT, 'body_too_large', 413);
+    if (declared) requireValue(/^\d+$/.test(declared) && Number(declared) <= limit, 'body_too_large', 413);
     const reader = request.body?.getReader();
     requireValue(reader, 'invalid_json');
     const parts = []; let size = 0; let timedOut = false;
@@ -19,7 +21,7 @@ export async function readProbeJson(request) {
             const { done, value } = await reader.read();
             if (done) break;
             size += value.byteLength;
-            if (size > LIMIT) { await reader.cancel(); throw probeError('body_too_large', 413); }
+            if (size > limit) { await reader.cancel(); throw probeError('body_too_large', 413); }
             parts.push(value);
         }
         if (timedOut) throw probeError('body_timeout', 408);
@@ -32,8 +34,8 @@ export async function readProbeJson(request) {
         return body;
     } finally { clearTimeout(timer); request.signal.removeEventListener('abort', stop); reader.releaseLock(); }
 }
-function json(data, status = 200) {
-    return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' } });
+function json(data, status = 200, headers = {}) {
+    return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', ...headers } });
 }
 function managementPage(searchParams) {
     const read = (name, fallback, min, max) => {
@@ -66,6 +68,16 @@ export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNod
             const path = url.pathname.slice(PREFIX.length + 1).split('/');
             const method = request.method;
             let store;
+            if (path[0] === 'device-pairing') {
+                requireValue(!['cookie', 'origin', 'authorization'].some(header => request.headers.has(header)), 'pairing_native_request_required', 403);
+                requireValue(method === 'POST' && path.length === 2 && ['start', 'token'].includes(path[1]), 'not_found', 404);
+                requireValue(url.protocol === 'https:' && !url.search, 'invalid_pairing_request');
+                const body = await readProbeJson(request, PAIRING_BODY_BYTES);
+                store = makeStore(env);
+                const pairing = new ProbePairingStore(store.db, store.now);
+                const data = path[1] === 'start' ? await pairing.start(body, url.origin) : await pairing.token(body, url.origin);
+                return json({ success: true, data }, path[1] === 'start' ? 201 : data.status === 'pending' ? 202 : 200);
+            }
             if (path[0] === 'agent') {
                 requireValue(method === 'POST', 'method_not_allowed', 405);
                 requireValue(!request.headers.has('cookie') && !request.headers.has('origin'), 'agent_browser_request_forbidden', 403);
@@ -73,7 +85,7 @@ export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNod
                 requireValue(/^Bearer mp1_[0-9a-f]{64}$/.test(auth), 'unauthorized', 401);
                 // Enrollment initializes the schema; unauthenticated agents must not issue DDL.
                 store = makeStore(env);
-                const agent = await store.authenticate(auth.slice(7));
+                const agent = await store.authenticate(auth.slice(7), url.origin);
                 const body = await readProbeJson(request);
                 if (path.length === 2 && path[1] === 'claim') return json({ success: true, data: await store.claim(agent, body) });
                 requireValue(path.length === 4 && path[1] === 'tasks' && /^[\w-]{1,128}$/.test(path[2]), 'not_found', 404);
@@ -83,6 +95,30 @@ export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNod
             }
             requireValue(await authorizeAdmin(request, env), 'unauthorized', 401);
             if (!['GET','HEAD'].includes(method)) requireValue(request.headers.get('origin') === url.origin, 'invalid_origin', 403);
+            if (path[0] === 'pairings') {
+                requireValue(url.protocol === 'https:' && !url.search, 'invalid_pairing_request');
+                store = await makeStore(env).init();
+                const pairing = new ProbePairingStore(store.db, store.now);
+                if (path.length === 2 && path[1] === 'windows' && method === 'POST') {
+                    pairingBody(await readProbeJson(request, PAIRING_BODY_BYTES), []);
+                    return json({ success: true, data: await pairing.createWindow(url.origin) }, 201);
+                }
+                if (path.length === 3 && path[1] === 'windows' && method === 'GET') return json({ success: true, data: await pairing.window(path[2], url.origin) });
+                if (path.length === 4 && path[1] === 'windows' && path[3] === 'cancel' && method === 'POST') {
+                    pairingBody(await readProbeJson(request, PAIRING_BODY_BYTES), []);
+                    return json({ success: true, data: await pairing.cancelWindow(path[2], url.origin) });
+                }
+                if (path.length === 2 && path[1] === 'resolve' && method === 'POST') {
+                    const body = pairingBody(await readProbeJson(request, PAIRING_BODY_BYTES), ['windowId', 'userCode']);
+                    return json({ success: true, data: await pairing.resolve(body.windowId, body.userCode, url.origin) });
+                }
+                if (path.length === 3 && path[1] === 'requests' && method === 'GET') return json({ success: true, data: await pairing.request(path[2], url.origin) });
+                if (path.length === 4 && path[1] === 'requests' && path[3] === 'approve' && method === 'POST') {
+                    const body = pairingBody(await readProbeJson(request, PAIRING_BODY_BYTES), ['userCode', 'confirmed']);
+                    return json({ success: true, data: await pairing.approve(path[2], body.userCode, body.confirmed, url.origin) });
+                }
+                throw probeError('not_found', 404);
+            }
             if (path.length === 1 && path[0] === 'capabilities' && method === 'GET') return json({ success: true, data: { version: 1, types: PROBE_TYPES, services: PROBE_SERVICES, observationsVersion: OBSERVATIONS_VERSION, sources: OBSERVATION_SOURCES, storageReady: Boolean(env.MISUB_PROBE_DB), maxNodes: MAX_NODES, maxAgents: MAX_AGENTS, maxAttempts: MAX_ATTEMPTS, maxJobDownloadBytes: MAX_JOB_BYTES } });
             if (path.length === 1 && path[0] === 'format' && method === 'POST') {
                 const nodes = await resolveNodes(await readProbeJson(request), env);
@@ -129,7 +165,8 @@ export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNod
         } catch (error) {
             const trusted = Number.isInteger(error?.status) && error.status >= 400 && error.status < 600;
             const code = trusted ? error.code : 'probe_unavailable';
-            return json({ success: false, error: { code } }, trusted ? error.status : 503);
+            const retry = trusted && error.status === 429 && Number.isInteger(error.retryAfterSeconds) && error.retryAfterSeconds >= 1 && error.retryAfterSeconds <= 3600 ? error.retryAfterSeconds : null;
+            return json({ success: false, error: { code, ...(retry === null ? {} : { retryAfterSeconds: retry }) } }, trusted ? error.status : 503, retry === null ? {} : { 'Retry-After': String(retry) });
         }
     };
 }

@@ -34,6 +34,14 @@ inferred from version strings or past results.
 
 ## Actions and privacy
 
+The installation and connection wizard opens a short-lived window for an already
+installed pairing-capable client. The administrator enters the terminal's short
+code, compares its site and request fingerprint, and explicitly approves. The page
+distinguishes identity creation from the first authenticated communication; it never
+receives the permanent credential. See [pairing](detector-pairing.md) and the
+[API contract](detector-pairing-api.md). Package distribution remains paused.
+
+Private configuration enrollment remains available as an advanced option.
 Creation and revocation reuse the existing administrator session and same-origin
 checks. Creation is an explicit action; its private configuration is offered once
 and kept only in component memory until dismissed or the page is left. Lists and
