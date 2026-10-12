@@ -33,7 +33,7 @@
         },
     });
 
-    const emit = defineEmits(['copy', 'toggle-select']);
+    const emit = defineEmits(['copy', 'toggle-select', 'diagnose']);
 
     const nodesRef = computed(() => props.nodes);
     const containerHeight = 500;
@@ -75,14 +75,14 @@
                             >
                                 Pick
                             </div>
-                            <div :class="selectionMode ? 'col-span-3' : 'col-span-4'">
+                            <div :class="selectionMode ? 'col-span-2' : 'col-span-3'">
                                 Node Name
                             </div>
                             <div class="col-span-3 hidden sm:block">Server Address</div>
                             <div class="col-span-2 hidden md:block text-center">Port</div>
                             <div class="col-span-1 hidden sm:block text-center">Type</div>
                             <div class="col-span-1 hidden sm:block text-center">Region</div>
-                            <div class="col-span-1 text-center">Action</div>
+                            <div class="col-span-2 text-center">Action</div>
                         </div>
                     </div>
 
@@ -137,7 +137,7 @@
                                     </div>
 
                                     <!-- 节点名称 -->
-                                    <div :class="selectionMode ? 'col-span-3' : 'col-span-4'">
+                                    <div :class="selectionMode ? 'col-span-2' : 'col-span-3'">
                                         <span
                                             class="text-sm font-bold text-gray-900 dark:text-white block overflow-hidden group-hover:text-indigo-600 transition-colors"
                                             :title="parseNodeInfo(node).name"
@@ -190,7 +190,15 @@
                                     </div>
 
                                     <!-- 操作 (所有设备) -->
-                                    <div class="col-span-1 flex justify-center">
+                                    <div class="col-span-2 flex items-center justify-center gap-1">
+                                        <button
+                                            v-if="!selectionMode"
+                                            type="button"
+                                            class="min-h-11 shrink-0 rounded-lg px-2 text-sm text-indigo-700 dark:text-indigo-300"
+                                            @click.stop="emit('diagnose', node)"
+                                        >
+                                            {{ t('diagnostics.action') }}
+                                        </button>
                                         <button
                                             v-if="!selectionMode"
                                             @click.stop="emit('copy', node, node.url)"
