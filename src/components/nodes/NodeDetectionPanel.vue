@@ -6,6 +6,7 @@
         PROBE_SERVICES,
         PROBE_SOURCES,
         DEFAULT_PROBE_SOURCES,
+        DEFAULT_PROBE_SERVICES,
         selectedProbeNodes,
         makeProbePlan,
         probeRequest,
@@ -37,7 +38,7 @@
         jobs = ref([]),
         agentIds = ref([]);
     const types = ref(['format', 'tcp', 'proxy']),
-        services = ref(['netflix', 'youtube', 'openai']);
+        services = ref([...DEFAULT_PROBE_SERVICES]);
     const sources = ref([...DEFAULT_PROBE_SOURCES]),
         now = ref(Date.now());
     const observationsAvailable = computed(() => capabilities.value?.observationsVersion === 1);
@@ -525,9 +526,12 @@
                         <template v-if="types.includes('unlock')">
                             <div class="probe-options">
                                 <label v-for="service in PROBE_SERVICES" :key="service"
-                                    ><input v-model="services" type="checkbox" :value="service" />{{
-                                        service
-                                    }}</label
+                                    ><input
+                                        v-model="services"
+                                        type="checkbox"
+                                        :value="service"
+                                        :data-testid="`probe-service-${service}`"
+                                    />{{ service }}</label
                                 >
                             </div>
                             <p class="probe-warning">

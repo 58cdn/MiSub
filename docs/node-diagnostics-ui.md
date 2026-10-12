@@ -5,8 +5,9 @@ using existing Vue components. It shows source-specific evidence, errors, freshn
 conflicts; requires consent before sending the selected node to an administrator-managed
 executor; and clears pending work on cancel, close or node change.
 
-The existing browser probe must be labelled HTTP reachability timing, not TCP RTT or
-node latency. Browser fetch failures must not be presented as a successful measurement.
+The separate [basic connectivity check](node-basic-connectivity.md) connects to a saved
+node's TCP port from Cloudflare. Its timing is a Worker observation, not local latency
+or proof that proxy authentication and forwarding work.
 
 Acceptance uses fixture-only UI tests and a local browser preview. No production node,
 subscription, credential, public listener or network configuration is used.
@@ -23,9 +24,9 @@ subscription, credential, public listener or network configuration is used.
   work. No diagnostic state is written to localStorage, KV/D1 or exports.
 - Existing Modal focus management is reused; inactive preview content is inert
   and excluded from the focus trap. Return restores the diagnostic trigger.
-- Browser HTTP failures now have unknown node availability and no latency. A
-  successful browser HTTP observation is labelled as HTTP time, not TCP RTT or
-  through-node latency. Node URLTest remains an executor-only measurement.
+- Basic connectivity failures do not determine proxy availability. Platform
+  restrictions, UDP inapplicability, DNS uncertainty and timeouts have distinct
+  labels. Node URLTest remains an executor-only measurement.
 
 UI/UX Pro Max guidance was applied to this component extension: existing Vue and
 Tailwind visual conventions, text status labels, keyboard focus, 44px controls,

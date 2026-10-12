@@ -4,7 +4,7 @@ import { storeToRefs } from 'pinia';
 import { useDataStore } from '../stores/useDataStore.js';
 import { useSettingsStore } from '../stores/settings.js';
 import { useToastStore } from '../stores/toast.js'; // Restored
-import { extractNodeName, extractHostAndPort } from '../lib/utils.js';
+import { extractNodeName } from '../lib/utils.js';
 import { pingNode } from '../utils/ping.js';
 import { filterManualNodes, isManualNodeEntry } from './manual-nodes/filters.js';
 import { readRawPreference, writeRawPreference } from '../utils/local-preference.js';
@@ -364,21 +364,34 @@ export function useManualNodes(markDirty) {
         markDirty();
     }
 
-    // --- 连通性测试 (Ping) ---
-    const pingResults = ref({}); // { [nodeId]: { status: 'ok'|'error'|'timeout', latency: 120 } }
+    // --- Worker 基础 TCP 连通性 ---
+    const pingResults = ref({});
     const pingingNodes = ref(new Set());
+    let batchRunning = false;
+    watch(
+        () => manualNodes.value.map((node) => [node.id, node.url]),
+        (next, previous = []) => {
+            const old = new Map(previous);
+            pingResults.value = Object.fromEntries(
+                Object.entries(pingResults.value).filter(([id]) =>
+                    next.some(([key, url]) => key === id && url === old.get(id))
+                )
+            );
+        },
+        { flush: 'sync' }
+    );
 
     async function pingNodeId(nodeId) {
         if (pingingNodes.value.has(nodeId)) return;
         const node = manualNodes.value.find((n) => n.id === nodeId);
         if (!node) return;
 
-        const { host, port } = extractHostAndPort(node.url);
-        if (!host || !port) {
+        const checkedUrl = node.url;
+        if (!dataStore.isSavedNode(node)) {
             pingResults.value[nodeId] = {
-                status: 'error',
+                status: 'unknown',
                 latency: -1,
-                message: t('manualNodes.parseAddressFailed'),
+                code: 'unsaved_node',
             };
             return;
         }
@@ -387,13 +400,13 @@ export function useManualNodes(markDirty) {
         pingResults.value = { ...pingResults.value, [nodeId]: { status: 'loading', latency: 0 } };
 
         try {
-            // 由于 fetch ping 主要看 tcp 连通性，给个 3000ms 兜底即可
-            const result = await pingNode(host, port, 3000);
-            pingResults.value = { ...pingResults.value, [nodeId]: result };
+            const result = await pingNode(nodeId);
+            if (manualNodes.value.some((item) => item.id === nodeId && item.url === checkedUrl))
+                pingResults.value = { ...pingResults.value, [nodeId]: result };
         } catch (e) {
             pingResults.value = {
                 ...pingResults.value,
-                [nodeId]: { status: 'error', latency: -1 },
+                [nodeId]: { status: 'unknown', code: 'request_failed', latency: -1 },
             };
         } finally {
             pingingNodes.value.delete(nodeId);
@@ -402,13 +415,21 @@ export function useManualNodes(markDirty) {
 
     // 批量并发测试所有开启的手动节点
     async function pingAllNodes() {
-        const nodesToTest = enabledManualNodes.value.map((n) => n.id);
+        if (batchRunning) return;
+        const pending = enabledManualNodes.value.filter(
+            (node) =>
+                !pingResults.value[node.id] || pingResults.value[node.id].code === 'rate_limited'
+        );
+        const nodesToTest = (pending.length ? pending : enabledManualNodes.value)
+            .slice(0, 60)
+            .map((n) => n.id);
         if (nodesToTest.length === 0) return;
 
         showToast(t('manualNodes.pingStarted', { count: nodesToTest.length }), 'info');
 
-        // 控制并发数 (比如最大 10 并发)
-        const CONCURRENCY = 10;
+        batchRunning = true;
+        // A batch is bounded; larger lists can continue after the cooldown.
+        const CONCURRENCY = 3;
         let currentIndex = 0;
 
         const workers = Array(Math.min(CONCURRENCY, nodesToTest.length))
@@ -422,6 +443,7 @@ export function useManualNodes(markDirty) {
             });
 
         await Promise.allSettled(workers);
+        batchRunning = false;
         showToast(t('manualNodes.pingCompleted', { count: nodesToTest.length }), 'success');
     }
 
