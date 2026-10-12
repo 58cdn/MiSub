@@ -1,0 +1,11 @@
+# Detector list and recoverable removal
+
+The detector manager offers explicit card/list preferences, configurable columns and server-side filters/sort/pagination. Name and action columns remain visible. A user's explicit list choice keeps a separately scrollable table on small screens. The toolbar and pagination stay outside horizontal scrolling. Preferences store only validated view/column settings in the current site's browser admin namespace, never detector data, searches or credentials.
+
+Removal is a reversible archive action for revoked detectors. The server requires administrator auth, same-origin writes, explicit confirmation, a revoked identity and no active task lease. Archive/restore are idempotent and preserve the detector row, revoked credential state, task history and attribution; ordinary seven-day task retention still applies. Restore returns the revoked item to the visible list and never reauthorizes its credential. This PR does not delete real production identities.
+
+API additions: POST /api/probes/v1/agents/{id}/archive and /restore with {confirmed:true}. GET /agents/overview accepts offset, limit, q, status, visibility (visible/hidden/all), sort and direction. Unknown/duplicate parameters and unsupported filters are rejected. Sort keys are whitelisted; queries use bindings. Existing status, communication time and task/result timestamps keep their actual meaning. Missing heartbeat-only/capability reports remain explicitly unknown.
+
+Cards and table consume the same returned page. Filter/sort changes cancel stale reads and reset pagination; removal refreshes or clamps an empty last page. Column settings use native checkboxes; sorting uses buttons and aria-sort; confirmation and history keep keyboard focus behavior.
+
+Reference research uses sub2api commit ab80abc6d1f929a6864c8804fd077b509d21fda2 (LGPL-3.0). MiSub independently implements the interaction concepts within its existing Vue/Tailwind design, without copying source. UI UX Pro Max guidance applies to focus, accessibility, responsive overflow and confirmation. Offline SQLite, HTTP, component and browser fixtures precede independent review and final-HEAD CI. Existing production provisioning, identity acceptance and binary publication boundaries remain unchanged.
