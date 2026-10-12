@@ -29,7 +29,8 @@ type Check struct {
 	Report            *ObservationReport `json:"report,omitempty"`
 }
 type ServiceCheck struct {
-	Service string `json:"service"`
+	Service   string `json:"service"`
+	CheckedAt string `json:"checkedAt,omitempty"`
 	Check
 }
 type Node struct {

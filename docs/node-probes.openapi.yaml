@@ -397,6 +397,7 @@ components:
                       - required: [service]
                         properties:
                           service: { $ref: '#/components/schemas/Service' }
+                          checkedAt: { type: string, format: date-time, description: Independent provider completion time; absent for older detectors. Never inferred from task delivery. }
     ObservationReport:
       type: object
       required: [version, requestId, scope, results]

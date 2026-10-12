@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+    </head>
+    <body class="bg-gray-50 p-4 dark:bg-gray-950">
+        <div id="app"></div>
+        <script type="module">
+            import { createApp, h } from 'vue';
+            import Button from '/src/components/nodes/NodeDiagnosticsButton.vue';
+            import '/src/assets/main.css';
+            import { setLocale } from '/src/i18n/index.js';
+            setLocale('en-US');
+            createApp({
+                render: () =>
+                    h(Button, {
+                        node: {
+                            name: 'Fixture node · offline acceptance',
+                            url: 'ss://fixture-only@example.invalid:443',
+                        },
+                    }),
+            }).mount('#app');
+        </script>
+    </body>
+</html>
