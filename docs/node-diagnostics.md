@@ -58,6 +58,9 @@ The response is `no-store`; results are not saved in KV, D1 or subscription expo
 
 No executor is installed or bound by this change. An administrator can separately
 provide a `NODE_DIAGNOSTICS` service binding implementing `POST /v1/check`.
+The repository now also includes a [local CONNECT executor](local-diagnostics-executor.md)
+for HTTP/HTTPS proxy nodes. Its CLI performs real CONNECT/TLS requests, but is not
+automatically connected to this service binding or the deployed interface.
 This must be a trusted adapter to a separately operated proxy core, not a generic
 Worker fetch wrapper. It receives `{ version: 1, requestId, node, sources }` and
 must produce `{ version: 1, requestId, scope: 'node', results }`. The request ID,
