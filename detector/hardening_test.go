@@ -67,6 +67,36 @@ func TestSOCKSTLSDoesNotPretendGenericSNIWorks(t *testing.T) {
 	}
 }
 
+func TestRejectCoreDecoderAliasesBeforeDNS(t *testing.T) {
+	for _, key := range []string{"skip_cert_verify", "SKIP_CERT_VERIFY", "Skip-Cert-Verify", "dialer_proxy", "routing_mark", "interface_name", "xhttp_opts", "name_cert_verify", "realm_opts", "Realm-Opts", "tlſ", "peerſ", "ſmux"} {
+		for _, nested := range []bool{false, true} {
+			p := map[string]any{"type": "socks5", "server": "node.example", "port": 443}
+			if nested {
+				p["plugin-opts"] = map[string]any{key: true}
+			} else {
+				p[key] = true
+			}
+			called := false
+			_, err := pinProxy(context.Background(), p, func(context.Context, string, string) ([]netip.Addr, error) {
+				called = true
+				return []netip.Addr{netip.MustParseAddr("1.1.1.1")}, nil
+			})
+			if err == nil || err.Error() != "unsupported_transport" || called {
+				t.Errorf("decoder alias %q nested=%v accepted: %v", key, nested, err)
+			}
+		}
+	}
+}
+
+func TestRejectRealmSecondaryTargetsBeforeDNS(t *testing.T) {
+	p := map[string]any{"type": "hysteria2", "server": "node.example", "port": 443, "realm-opts": map[string]any{"server-url": "https://other.invalid/", "stun-servers": []any{"127.0.0.1:3478"}}}
+	called := false
+	_, err := pinProxy(context.Background(), p, func(context.Context, string, string) ([]netip.Addr, error) { called = true; return nil, nil })
+	if err == nil || err.Error() != "unsupported_transport" || called {
+		t.Fatalf("Realm secondary target accepted: %v", err)
+	}
+}
+
 type fixtureRoundTripper func(*http.Request) (*http.Response, error)
 
 func (f fixtureRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

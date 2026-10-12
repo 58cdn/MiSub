@@ -45,9 +45,13 @@ func hasUnsafeTLSOption(value any) bool {
 	switch v := value.(type) {
 	case map[string]any:
 		for key, item := range v {
-			lower := strings.ToLower(key)
-			if key != lower && contains([]string{"type", "server", "port", "tls", "sni", "servername", "name-cert-verify", "skip-cert-verify", "network", "dialer-proxy", "interface-name", "routing-mark", "peers", "xhttp-opts", "smux", "extra"}, lower) {
-				return true
+			// Match the locked core's '_' -> '-' KeyReplacer and Unicode
+			// EqualFold decoder. Reject aliases instead of validating one spelling
+			// while the core later consumes another (including duplicate keys).
+			for _, canonical := range []string{"type", "server", "port", "tls", "sni", "servername", "name-cert-verify", "skip-cert-verify", "network", "dialer-proxy", "interface-name", "routing-mark", "peers", "xhttp-opts", "smux", "extra", "realm-opts"} {
+				if strings.EqualFold(strings.ReplaceAll(key, "_", "-"), canonical) && key != canonical {
+					return true
+				}
 			}
 			if strings.EqualFold(key, "skip-cert-verify") {
 				safe, ok := item.(bool)
@@ -121,7 +125,7 @@ func pinProxy(ctx context.Context, input map[string]any, lookup lookupFunc) (map
 	if !contains([]string{"ss", "ssr", "vmess", "vless", "trojan", "hysteria", "hysteria2", "tuic", "snell", "wireguard", "anytls", "http", "socks5", "mieru"}, typ) {
 		return nil, errors.New("unsupported_protocol")
 	}
-	for _, key := range []string{"dialer-proxy", "interface-name", "routing-mark", "peers", "xhttp-opts", "smux", "extra"} {
+	for _, key := range []string{"dialer-proxy", "interface-name", "routing-mark", "peers", "xhttp-opts", "smux", "extra", "realm-opts"} {
 		if _, ok := p[key]; ok {
 			return nil, errors.New("unsupported_transport")
 		}

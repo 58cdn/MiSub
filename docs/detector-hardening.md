@@ -22,7 +22,9 @@ this safety correction, preserving independent source evidence and explicit unkn
 
 ## Implemented acceptance boundaries
 
-- Reject nested, coerced and ambiguous-case TLS verification overrides before DNS.
+- Reject nested/coerced TLS verification overrides and core-equivalent field
+  aliases (underscore and Unicode case folding) before DNS. Hysteria2 Realm
+  options are unsupported because they introduce additional unpinned targets.
 - Reject SOCKS5 TLS domain/custom-name configurations which the locked core cannot
   preserve after IP pinning; keep verified IP-literal TLS and ordinary SOCKS5.
 - Preserve HTTP 429 before reading bodies for unlock, proxy and speed checks;
