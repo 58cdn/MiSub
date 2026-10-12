@@ -26,6 +26,13 @@ test('creates missing isolated D1 and returns only UUID',t=>{
  const r=run(t,[list(),{suffix:'/d1/database',method:'POST',body:{success:true,result:{uuid:id}}}]);
  assert.equal(r.status,0,r.stderr);assert.equal(r.stdout.trim(),id);assert.deepEqual(r.steps,[]);
 });
+test('default and automatic invocations cannot create probe databases',t=>{
+ const disabled=run(t,[],{PROVISION_NODE_PROBES:''});assert.equal(disabled.status,0);assert.equal(disabled.stdout,'');assert.deepEqual(disabled.steps,[]);
+ for(const event of ['push','pull_request','schedule']) {
+  const r=run(t,[],{GITHUB_ACTIONS:'true',GITHUB_EVENT_NAME:event,GITHUB_REF:'refs/heads/main'});assert.notEqual(r.status,0);assert.match(r.stderr,/manual dispatch/);assert.deepEqual(r.steps,[]);assert.equal(r.commands,'');
+ }
+ const feature=run(t,[],{GITHUB_ACTIONS:'true',GITHUB_EVENT_NAME:'workflow_dispatch',GITHUB_REF:'refs/heads/feature'});assert.notEqual(feature.status,0);assert.deepEqual(feature.steps,[]);
+});
 test('retries reuse exact stable name without a second creation',t=>{
  const r=run(t,[list([{name:'unrelated',uuid:biz},{name:'misub-probes',uuid:id}])]);assert.equal(r.status,0);assert.equal(r.stdout.trim(),id);assert.deepEqual(r.steps,[]);
 });

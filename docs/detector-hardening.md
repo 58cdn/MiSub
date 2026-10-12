@@ -45,6 +45,20 @@ and separate production control-plane smoke are not real-node/provider acceptanc
 or verification of complete distribution materials. This PR does not remove,
 replace or retroactively repair those existing release assets.
 
+Read-only archive inspection verified the published Linux amd64 archive SHA256
+`e3aafe3ed26908ac68ffc5e89ca65177cb56c0f25cb6fdd8eedc02da65c346a0` and source archive
+`98d5bf0a7dd6b895e35aafd4a4627bbb04e6097472baefd9cb086c52eb8c7991` against GitHub's
+asset digests. The binary archive contains only `LICENSE.MiSub` and
+`LICENSE.mihomo` as license files; the source archive's
+`component/ca/ca-certificates.crt` is zero bytes. Neither binary was executed nor
+existing asset modified by this inspection.
+
+The Pages workflow now keeps ordinary main publication but requires separate,
+default-off manual inputs for new probe D1 provisioning and production acceptance
+that creates temporary detector identities. Script-level event checks also reject
+automatic invocations before network operations. Binary publication and artifact
+upload additionally remain paused pending the distribution-material review.
+
 Independent inspection of the locked core found that the existing root GPL file
 and `checkout + go mod vendor` source archive do not yet establish complete
 distribution materials. This PR disables binary/source artifact upload and Release

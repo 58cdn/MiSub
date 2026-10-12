@@ -1,4 +1,4 @@
-// Runs inside the trusted main-branch workflow. No credentials or user nodes are logged.
+// Explicit manual acceptance only. No credentials or user nodes are logged.
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtemp, writeFile, rm, appendFile } from 'node:fs/promises';
@@ -42,6 +42,7 @@ export function checkAcceptance(data, detectorIds) {
     if (JSON.stringify(data).includes('probe-fixture-only')) fail('credential_in_result');
 }
 export async function smoke(env = process.env) {
+    if (env.RUN_NODE_PROBE_ACCEPTANCE !== 'true' || (env.GITHUB_ACTIONS === 'true' && (env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || env.GITHUB_REF !== 'refs/heads/main'))) fail('manual_acceptance_required');
     for (const key of ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN', 'ADMIN_PASSWORD', 'GITHUB_SHA']) if (!env[key]) fail('missing_smoke_environment');
     const projectName = env.CLOUDFLARE_PAGES_PROJECT_NAME || 'misub';
     if (!/^[a-z0-9][a-z0-9-]*$/.test(projectName) || !/^[a-f0-9]{32}$/.test(env.CLOUDFLARE_ACCOUNT_ID) || !/^[a-f0-9]{40}$/.test(env.GITHUB_SHA)) fail('invalid_smoke_environment');

@@ -68,7 +68,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         # Do not distribute embedded binaries before complete notices and
         # corresponding build inputs have been independently verified.
-        if: ${{ false }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish && false }}
         with:
           name: misub-probe-${{ matrix.target }}
           path: detector/misub-probe-${{ matrix.target }}.tar.gz
@@ -98,7 +98,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         # checkout + vendor is not yet verified complete corresponding source:
         # upstream additionally embeds generated CA data and uses custom tags.
-        if: ${{ false }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish && false }}
         with:
           name: mihomo-corresponding-source
           path: mihomo-source-v1.19.32.tar.gz
@@ -106,7 +106,7 @@ jobs:
   publish:
     # Re-enable only in an audited PR that pairs every binary with complete
     # licenses/notices, wrapper source, kernel source and generated build inputs.
-    if: ${{ false }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish && false }}
     needs: [native, source]
     runs-on: ubuntu-24.04
     permissions:

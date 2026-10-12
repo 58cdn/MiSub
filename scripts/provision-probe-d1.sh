@@ -18,6 +18,9 @@ if [[ -n "$id" ]]; then
 fi
 # Preserve existing bindings even when provisioning is not requested.
 if [[ "${PROVISION_NODE_PROBES:-false}" != 'true' ]]; then exit 0; fi
+if [[ "${GITHUB_ACTIONS:-false}" == 'true' && ( "${GITHUB_EVENT_NAME:-}" != 'workflow_dispatch' || "${GITHUB_REF:-}" != 'refs/heads/main' ) ]]; then
+  echo '::error::Probe D1 provisioning requires explicit manual dispatch on main.' >&2; exit 1
+fi
 : "${CLOUDFLARE_API_TOKEN:?Missing Cloudflare API token}"
 : "${CLOUDFLARE_ACCOUNT_ID:?Missing Cloudflare account ID}"
 api="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database"
