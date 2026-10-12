@@ -50,6 +50,26 @@ afterEach(() => {
     vi.restoreAllMocks();
 });
 describe('node probe panel', () => {
+    it('defaults unlock only to OpenAI and Claude and retains manual selections on reopen', async () => {
+        const { w, calls } = fixture();
+        await w.get('[data-testid="probe-all"]').trigger('click');
+        await flushPromises();
+        await w.get('[data-testid="probe-type-unlock"]').setValue(true);
+        const selected = () =>
+            w
+                .findAll('[data-testid^="probe-service-"]')
+                .filter((input) => input.element.checked)
+                .map((input) => input.element.value);
+        expect(selected()).toEqual(['openai', 'claude']);
+        await w.get('[data-testid="probe-service-netflix"]').setValue(true);
+        await w.get('[data-testid="probe-service-openai"]').setValue(false);
+        await w.get('[data-testid="probe-type-unlock"]').setValue(false);
+        await w.get('[data-testid="probe-type-unlock"]').setValue(true);
+        expect(selected()).toEqual(['netflix', 'claude']);
+        expect(calls.every((call) => !call.options.method || call.options.method === 'GET')).toBe(
+            true
+        );
+    });
     it('does not fetch until opened and forwards selection intent', async () => {
         const { w, calls } = fixture();
         expect(calls).toHaveLength(0);

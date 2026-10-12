@@ -27,8 +27,9 @@ jobs:
       - run: npm ci
       - name: Prepare Chromium for isolated browser fixtures
         run: npx playwright install --with-deps chromium
-      - name: Check management, pairing and table interactions against mock APIs
+      - name: Check management, pairing, table and connectivity interactions against mock APIs
         run: |
           node tests/browser/detector-management.mjs
           node tests/browser/detector-pairing.mjs
           node tests/browser/detector-table-archive.mjs
+          node tests/browser/node-connectivity.mjs

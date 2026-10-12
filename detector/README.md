@@ -6,6 +6,8 @@
 
 ## 启动
 
+设置页在兼容发行可用时提供[一次复制的安装入口](../docs/detector-one-command-install.md)，下载、核验后进行网页批准和用户安装。Windows 默认命令直接运行已核验的 EXE；单独下载的 `install.ps1` 仅供本机执行策略已允许该脚本的高级使用者，不自动修改执行策略。Linux/macOS 使用 Bash 与系统 HTTPS、SHA256 工具；本源码发行的 macOS 最低版本为 13。
+
 分发材料可使用[离线审计器](../docs/detector-distribution-audit.md)核对本地归档摘要、模块替换及许可原文清单。清点通过只证明所供字节与归档结构，不代表完整许可覆盖或可发行；`--require-ready` 在构建对应、来源证明等验证尚未闭合时返回阻塞。
 
 ### 短码配对

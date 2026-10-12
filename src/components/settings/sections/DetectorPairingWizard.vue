@@ -11,6 +11,11 @@
     import { useI18n } from '@/i18n/index.js';
     import { probeRequest } from '@/utils/probe-client.js';
     import { readProbeInstallation } from '@/shared/probe-release.js';
+    import {
+        buildProbeBootstrapCommand,
+        isProbeCommandOrigin,
+        probeTerminalAvailable,
+    } from '@/shared/probe-bootstrap-command.js';
 
     const props = defineProps({
         enabled: { type: Boolean, default: false },
@@ -22,7 +27,7 @@
     const { locale } = useI18n();
     const L = (zh, en) => (locale.value.startsWith('zh') ? zh : en);
     const origin = window.location.origin;
-    const secure = window.location.protocol === 'https:' && validCommandOrigin(origin);
+    const secure = window.location.protocol === 'https:' && isProbeCommandOrigin(origin);
     const terminalChoice = ref('unix');
     const installation = computed(() => readProbeInstallation(props.installation));
     const terminalReady = (terminal) => {
@@ -32,10 +37,7 @@
             !installation.value?.distributionReady
         )
             return false;
-        const targets = installation.value.targets.filter(({ target }) =>
-            terminal === 'windows' ? target === 'windows-amd64' : target !== 'windows-amd64'
-        );
-        return targets.length > 0 && targets.every(({ available }) => available);
+        return probeTerminalAvailable(installation.value, terminal);
     };
     const installationAvailable = computed(() => terminalReady('unix') || terminalReady('windows'));
     const selectedTerminalAvailable = computed(() => terminalReady(terminalChoice.value));
@@ -57,20 +59,6 @@
             'Compatible release packages are verified. Select the terminal on the detector device.'
         );
     });
-    function validCommandOrigin(value) {
-        try {
-            const parsed = new URL(value);
-            return (
-                parsed.protocol === 'https:' &&
-                parsed.origin === value &&
-                !parsed.username &&
-                !parsed.password &&
-                /^[a-z0-9.:[\]-]+$/i.test(parsed.host)
-            );
-        } catch {
-            return false;
-        }
-    }
     const open = ref(false),
         heading = ref(null),
         cancelPanel = ref(null),
@@ -90,6 +78,7 @@
         pollStopped = ref(false),
         nextPollAt = ref(0),
         monotonicNow = ref(performance.now());
+    const copyState = ref('');
     let active = false,
         mounted = false,
         lifecycle = 0,
@@ -144,6 +133,50 @@
                   ? 'expired'
                   : pairing.value?.status || (pairingWindow.value ? 'waiting' : 'idle')
     );
+    function activeCommand(fresh = false) {
+        if (
+            !secure ||
+            !selectedTerminalAvailable.value ||
+            stale.value ||
+            !['waiting', 'pending', 'approved'].includes(state.value)
+        )
+            return '';
+        const now =
+            fresh && receivedAt.value !== null
+                ? (pairing.value?.checkedAt || pairingWindow.value?.checkedAt || 0) +
+                  Math.max(0, performance.now() - receivedAt.value)
+                : serverNow.value;
+        return buildProbeBootstrapCommand({
+            installation: installation.value,
+            terminal: terminalChoice.value,
+            origin,
+            window: pairingWindow.value,
+            now,
+        });
+    }
+    const command = computed(() => activeCommand());
+    const resumeCommand = computed(() =>
+        secure && selectedTerminalAvailable.value
+            ? buildProbeBootstrapCommand({
+                  installation: installation.value,
+                  terminal: terminalChoice.value,
+                  resume: true,
+              })
+            : ''
+    );
+    async function copyCommand(resume = false) {
+        const value = resume ? resumeCommand.value : activeCommand(true);
+        if (!value) {
+            copyState.value = 'unavailable';
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(value);
+            copyState.value = resume ? 'resume' : 'install';
+        } catch {
+            copyState.value = 'failed';
+        }
+    }
     const codeValid = computed(() =>
         /^[0-9A-HJKMNP-TV-Z]{5}-?[0-9A-HJKMNP-TV-Z]{5}$/i.test(userCode.value.trim())
     );
@@ -709,6 +742,7 @@
                     v-model="terminalChoice"
                     data-testid="pairing-terminal"
                     class="min-h-11 w-full min-w-0 max-w-full rounded-lg border border-gray-300 bg-white px-3 sm:max-w-xs dark:border-gray-600 dark:bg-gray-800"
+                    @change="copyState = ''"
                 >
                     <option value="unix">Linux / macOS</option>
                     <option value="windows">Windows PowerShell</option>
@@ -721,7 +755,83 @@
                         )
                     }}
                 </p>
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                        terminalChoice === 'windows'
+                            ? L(
+                                  '支持 Windows 10 / Server 2016 及以上 x64，使用普通用户 PowerShell 5.1 或以上。命令直接下载并校验原生 exe。',
+                                  'Windows 10 / Server 2016 or newer, x64, with PowerShell 5.1 or newer as a regular user. The command downloads and verifies the native exe directly.'
+                              )
+                            : L(
+                                  '支持 macOS 13 及以上、具有可用用户级 systemd 的 Linux，自动识别 amd64 / arm64。需要 Bash、curl 和 SHA-256 工具。',
+                                  'macOS 13 or newer, or Linux with a working user systemd session; amd64 / arm64 are detected automatically. Bash, curl and a SHA-256 tool are required.'
+                              )
+                    }}
+                </p>
             </div>
+            <p
+                v-if="copyState"
+                :role="['failed', 'unavailable'].includes(copyState) ? 'alert' : 'status'"
+                class="text-xs"
+            >
+                {{
+                    copyState === 'failed'
+                        ? L(
+                              '无法访问剪贴板，请展开并手动复制完整命令。',
+                              'Clipboard access failed. Expand and copy the complete command manually.'
+                          )
+                        : copyState === 'unavailable'
+                          ? L(
+                                '命令已不可用。请核对发行状态或重新开启配对窗口。',
+                                'The command is no longer available. Check release status or open a new pairing window.'
+                            )
+                          : copyState === 'resume'
+                            ? L(
+                                  '已复制恢复命令；它不会重新配对。',
+                                  'Resume command copied; it does not pair again.'
+                              )
+                            : L('已复制完整安装命令。', 'Complete installation command copied.')
+                }}
+            </p>
+            <details
+                v-if="resumeCommand"
+                data-testid="pairing-resume-guide"
+                class="rounded-lg border border-gray-200 p-3 dark:border-gray-700"
+            >
+                <summary class="min-h-11 cursor-pointer py-3 font-medium">
+                    {{
+                        L(
+                            '已有配置：恢复安装或启动',
+                            'Existing configuration: resume installation or start'
+                        )
+                    }}
+                </summary>
+                <p class="my-3">
+                    {{
+                        L(
+                            '仅用于这台设备上已有的私密配置。不会创建新身份或覆盖配置，不需要配对窗口；命令会校验已发行客户端，然后继续安装或启动。',
+                            'Use the private configuration already on this device. This creates no new identity, preserves the configuration and needs no pairing window; it verifies the released client, then completes installation or starts it.'
+                        )
+                    }}
+                </p>
+                <button
+                    class="pair-button"
+                    data-testid="pairing-copy-resume"
+                    @click="copyCommand(true)"
+                >
+                    {{ L('复制恢复命令', 'Copy resume command') }}
+                </button>
+                <details class="mt-3">
+                    <summary class="min-h-11 cursor-pointer py-3">
+                        {{ L('审查完整恢复命令', 'Review complete resume command') }}
+                    </summary>
+                    <pre
+                        data-testid="pairing-resume-command"
+                        tabindex="0"
+                        class="pair-command max-h-80 overflow-auto rounded-lg bg-gray-50 p-3 text-xs leading-relaxed dark:bg-gray-950"
+                    ><code>{{ resumeCommand }}</code></pre>
+                </details>
+            </details>
             <p
                 v-if="coolingDown"
                 data-testid="pairing-retry-after"
@@ -775,6 +885,33 @@
                         {{ L('公开窗口编号：', 'Public window ID: ')
                         }}<code>{{ pairingWindow.id }}</code>
                     </p>
+                    <div v-if="command" class="space-y-3">
+                        <p>
+                            {{
+                                L(
+                                    '复制完整命令到你控制的设备终端，一次粘贴即可自动下载、校验和配对。核对短码并在此批准后，将安装并启动检测器；已有配置会保留，不设置登录自启。无需先下载文件或切换目录。',
+                                    'Copy the complete command into a terminal on your device. One paste downloads, verifies and pairs the client. After you compare the code and approve here, it installs and starts the detector. Existing configuration is preserved; login startup is not enabled. No prior download or directory change is needed.'
+                                )
+                            }}
+                        </p>
+                        <button
+                            class="pair-button pair-primary"
+                            data-testid="pairing-copy-command"
+                            @click="copyCommand()"
+                        >
+                            {{ L('复制安装命令', 'Copy installation command') }}
+                        </button>
+                        <details>
+                            <summary class="min-h-11 cursor-pointer py-3 font-medium">
+                                {{ L('审查完整安装命令', 'Review complete installation command') }}
+                            </summary>
+                            <pre
+                                data-testid="pairing-command"
+                                tabindex="0"
+                                class="pair-command max-h-80 overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs leading-relaxed dark:border-gray-700 dark:bg-gray-950"
+                            ><code>{{ command }}</code></pre>
+                        </details>
+                    </div>
                     <p class="text-xs text-gray-500 dark:text-gray-400">
                         {{
                             L(
@@ -1033,6 +1170,11 @@
     .pair-card {
         @apply rounded-xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-700 dark:bg-gray-900;
     }
+    .pair-command {
+        white-space: break-spaces;
+        overflow-wrap: anywhere;
+        word-break: break-all;
+    }
     .pair-button {
         @apply inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-gray-300 bg-white px-3 py-2 font-medium transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700;
     }
@@ -1056,7 +1198,9 @@
     }
     button:focus-visible,
     input:focus-visible,
-    select:focus-visible {
+    select:focus-visible,
+    summary:focus-visible,
+    pre:focus-visible {
         @apply outline outline-2 outline-offset-2 outline-indigo-500;
     }
     @media (prefers-reduced-motion: reduce) {

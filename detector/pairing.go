@@ -32,6 +32,7 @@ var pairingHostPattern = regexp.MustCompile(`^[a-z0-9.-]+$`)
 
 type pairOptions struct {
 	Server, WindowID, Name, ConfigPath string
+	Setup                              bool
 }
 
 type pairingConfigStore interface {
@@ -281,7 +282,11 @@ func (c *pairingClient) pair(parent context.Context, opts pairOptions, store pai
 		if store.Save(poll.Config) != nil {
 			return errors.New("pairing_config_save_failed_revoke_in_misub_before_pairing_again")
 		}
-		_, err = fmt.Fprintln(output, "probe: pairing_saved; start the detector separately when ready")
+		message := "probe: pairing_saved; start the detector separately when ready"
+		if opts.Setup {
+			message = "probe: pairing_saved; continuing the approved installation and startup"
+		}
+		_, err = fmt.Fprintln(output, message)
 		if err != nil {
 			return errors.New("pairing_saved_output_unavailable")
 		}

@@ -25,6 +25,7 @@ var winGetVolumeInformation = winKernel32.NewProc("GetVolumeInformationW")
 
 const winReadControl = 0x00020000
 const winFileReadAttributes = 0x80
+const winFileListDirectory = 0x1
 const winDACLProtected = 0x1000
 
 func windowsSystemDirectory() string {
@@ -254,7 +255,9 @@ func openWindowsDirectory(path string, createLeaf, privateLeaf bool) (*windowsPr
 				return fail()
 			}
 		}
-		handle, err := syscall.CreateFile(name, winReadControl|winFileReadAttributes, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, nil, syscall.OPEN_EXISTING, syscall.FILE_FLAG_BACKUP_SEMANTICS|syscall.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+		// Directory data access makes Windows enforce the share-delete restriction;
+		// metadata-only handles do not independently prevent directory renames.
+		handle, err := syscall.CreateFile(name, winReadControl|winFileReadAttributes|winFileListDirectory, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, nil, syscall.OPEN_EXISTING, syscall.FILE_FLAG_BACKUP_SEMANTICS|syscall.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 		if err != nil {
 			return fail()
 		}

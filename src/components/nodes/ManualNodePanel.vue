@@ -1,5 +1,6 @@
 <script setup>
     import { ref, computed, nextTick } from 'vue';
+    import { useI18n } from '@/i18n/index.js';
     import BulkOperations from './ManualNodePanel/BulkOperations.vue';
     import NodeActions from './ManualNodePanel/NodeActions.vue';
     import NodeTable from './ManualNodePanel/NodeTable.vue';
@@ -10,6 +11,7 @@
         DEFAULT_GROUP_KEY,
     } from '@/composables/manual-nodes/groups.js';
 
+    const { t } = useI18n();
     const props = defineProps({
         manualNodes: { type: Array, default: () => [] },
         paginatedManualNodes: Array,
@@ -201,6 +203,13 @@
             @sort-by-latency="emit('sort-by-latency')"
             @manage-groups="emit('manage-groups')"
         />
+
+        <p
+            class="mb-3 text-xs leading-relaxed text-gray-500 dark:text-gray-400"
+            data-testid="basic-connectivity-help"
+        >
+            {{ t('manualNodes.latencyHint') }}
+        </p>
 
         <NodeDetectionPanel
             :nodes="manualNodes"

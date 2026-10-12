@@ -4,6 +4,7 @@
     import { useToastStore } from '../../stores/toast.js';
     import { useI18n } from '@/i18n/index.js';
     import NodeDiagnosticsButton from './NodeDiagnosticsButton.vue';
+    import NodeConnectivityBadge from './NodeConnectivityBadge.vue';
 
     const props = defineProps({
         node: {
@@ -145,7 +146,7 @@
                 </div>
 
                 <div class="flex-1 min-w-0">
-                    <div class="flex items-start justify-between gap-2">
+                    <div class="flex flex-wrap items-start justify-between gap-2">
                         <div class="flex items-center gap-2 flex-wrap min-w-0">
                             <div
                                 class="inline-block shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold"
@@ -254,56 +255,14 @@
                         </div>
                     </div>
 
-                    <div class="flex flex-row items-center gap-2 mt-1">
+                    <div class="flex flex-wrap items-center gap-2 mt-1">
                         <p
-                            class="flex-1 break-words text-sm font-semibold leading-snug text-gray-900 dark:text-white"
+                            class="min-w-0 flex-1 break-words text-sm font-semibold leading-snug text-gray-900 dark:text-white"
                             :title="node.name"
                         >
                             {{ node.name || t('manualNodes.unnamed') }}
                         </p>
-                        <div
-                            v-if="pingResult"
-                            class="flex shrink-0 flex-row items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium"
-                            :class="{
-                                'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400':
-                                    pingResult.status === 'ok' && pingResult.latency < 300,
-                                'bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400':
-                                    pingResult.status === 'ok' && pingResult.latency >= 300,
-                                'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400':
-                                    pingResult.status === 'error' ||
-                                    pingResult.status === 'timeout',
-                                'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400':
-                                    pingResult.status === 'loading',
-                            }"
-                        >
-                            <svg
-                                v-if="pingResult.status === 'loading'"
-                                class="animate-spin h-3 w-3"
-                                xmlns="http://www.w3.org/2000/svg"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                            >
-                                <circle
-                                    class="opacity-25"
-                                    cx="12"
-                                    cy="12"
-                                    r="10"
-                                    stroke="currentColor"
-                                    stroke-width="4"
-                                ></circle>
-                                <path
-                                    class="opacity-75"
-                                    fill="currentColor"
-                                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                                ></path>
-                            </svg>
-                            <span v-if="pingResult.status === 'loading'">{{
-                                t('manualNodes.pinging')
-                            }}</span
-                            ><span v-else-if="pingResult.status === 'ok'"
-                                >{{ pingResult.latency }}ms</span
-                            ><span v-else>{{ t('manualNodes.unreachable') }}</span>
-                        </div>
+                        <NodeConnectivityBadge v-if="pingResult" :result="pingResult" />
                     </div>
 
                     <p class="mt-1 text-xs text-gray-500 dark:text-gray-400 font-mono">
@@ -370,54 +329,14 @@
                 {{ protocolStyle.text }}
             </div>
 
-            <div class="min-w-0 flex items-center gap-2 pr-4">
+            <div class="min-w-0 flex flex-wrap items-center gap-2 pr-4">
                 <p
-                    class="truncate text-sm font-semibold text-gray-900 dark:text-white"
+                    class="min-w-0 w-full truncate text-sm font-semibold text-gray-900 dark:text-white"
                     :title="node.name"
                 >
                     {{ node.name || t('manualNodes.unnamed') }}
                 </p>
-                <div
-                    v-if="pingResult"
-                    class="flex shrink-0 flex-row items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium"
-                    :class="{
-                        'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400':
-                            pingResult.status === 'ok' && pingResult.latency < 300,
-                        'bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400':
-                            pingResult.status === 'ok' && pingResult.latency >= 300,
-                        'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400':
-                            pingResult.status === 'error' || pingResult.status === 'timeout',
-                        'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400':
-                            pingResult.status === 'loading',
-                    }"
-                >
-                    <svg
-                        v-if="pingResult.status === 'loading'"
-                        class="animate-spin h-3 w-3"
-                        xmlns="http://www.w3.org/2000/svg"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                    >
-                        <circle
-                            class="opacity-25"
-                            cx="12"
-                            cy="12"
-                            r="10"
-                            stroke="currentColor"
-                            stroke-width="4"
-                        ></circle>
-                        <path
-                            class="opacity-75"
-                            fill="currentColor"
-                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                        ></path>
-                    </svg>
-                    <span v-if="pingResult.status === 'loading'">{{
-                        t('manualNodes.pinging')
-                    }}</span
-                    ><span v-else-if="pingResult.status === 'ok'">{{ pingResult.latency }}ms</span
-                    ><span v-else>{{ t('manualNodes.unreachable') }}</span>
-                </div>
+                <NodeConnectivityBadge v-if="pingResult" :result="pingResult" />
             </div>
 
             <div class="min-w-0">
