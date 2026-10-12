@@ -12,6 +12,17 @@ function fixture() {
     return {env,handle,request};
 }
 const admin={'x-test-admin':'yes',Origin:'https://misub.example'};
+test('installation capabilities are authenticated and fail closed for the current unpublished packages',async()=>{
+    const {handle,request}=fixture();
+    assert.equal((await handle(request('capabilities'),{})).status,401);
+    const response=await handle(request('capabilities',undefined,admin),{});
+    assert.equal(response.status,200);assert.equal(response.headers.get('Cache-Control'),'no-store');
+    const {data}=await response.json();
+    assert.equal(data.storageReady,false);assert.equal(data.installation.distributionReady,false);
+    assert.equal(data.installation.release,null);assert.equal(data.installation.targets.length,5);
+    assert.ok(data.installation.targets.every(target=>target.available===false));
+    assert.deepEqual(data.installation.legacyReleases,[{version:'0.1.0',tag:'probe-v0.1.0',capabilities:[]}]);
+});
 test('admin auth and CSRF are enforced before mutations',async()=>{
     const {env,handle,request}=fixture();
     assert.equal((await handle(request('agents'),env)).status,401);

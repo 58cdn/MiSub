@@ -751,10 +751,14 @@
             }}
         </div>
         <DetectorPairingWizard
+            :installation="capabilities?.installation"
+            :installation-loading="initializing"
+            :installation-error="!!initializationError"
             :enabled="
                 storageReady && !mutationBusy && !showEnrollment && !showArchive && !showRevoke
             "
             @agents-changed="reloadAfterMutation"
+            @refresh-installation="initialize"
         />
         <details class="detector-card">
             <summary
