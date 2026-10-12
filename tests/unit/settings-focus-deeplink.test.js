@@ -53,6 +53,7 @@ function mountView() {
                 GlobalSettings: true,
                 ServiceSettings: true,
                 ClientSettings: true,
+                DetectorSettings: true,
                 CustomPageSettings: true,
                 SystemSettings: true,
                 WebdavBackupSettings: true,
@@ -102,6 +103,17 @@ describe('SettingsView 深链 focus (?focus=mytoken / profileToken)', () => {
 
         expect(wrapper.vm.activeTab).toBe('basic');
         expect(wrapper.vm.highlightedFocusId).toBe('');
+    });
+
+    it('opens the detector management tab directly without highlighting a token field', async () => {
+        route.query = { focus: 'detectors' };
+        const wrapper = mountView();
+        await wrapper.vm.$nextTick();
+        expect(wrapper.vm.activeTab).toBe('detectors');
+        expect(wrapper.findComponent({ name: 'DetectorSettings' }).exists()).toBe(true);
+        expect(wrapper.vm.highlightedFocusId).toBe('');
+        expect(wrapper.text()).not.toContain('保存更改');
+        wrapper.unmount();
     });
 
     it('re-applies the focus when the query changes while mounted', async () => {

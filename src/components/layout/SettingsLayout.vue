@@ -23,6 +23,7 @@
 
             <!-- Sticky Footer Area -->
             <div
+                v-if="$slots.footer"
                 class="shrink-0 px-4 md:px-6 py-3 bg-white/80 dark:bg-gray-900/70 border-t border-gray-100/70 dark:border-white/10 flex justify-end sticky bottom-0 z-10 backdrop-blur-sm md:rounded-br-2xl md:rounded-bl-none"
             >
                 <slot name="footer"></slot>

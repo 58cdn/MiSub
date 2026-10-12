@@ -85,6 +85,7 @@ export function getSubscriptionTrafficState(sub, now = Date.now()) {
  * Lookups are case-insensitive, so keys are stored lowercased.
  */
 export const SETTINGS_FOCUS_TABS = {
+    detectors: 'detectors',
     mytoken: 'basic',
     profiletoken: 'basic',
 };

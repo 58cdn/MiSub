@@ -11,6 +11,7 @@
     import CustomPageSettings from './sections/CustomPageSettings.vue';
     import WebdavBackupSettings from './sections/WebdavBackupSettings.vue';
     import SystemSettings from './sections/SystemSettings.vue';
+    import DetectorSettings from './sections/DetectorSettings.vue';
 
     /**
      * 设置界面的共享内容区。
@@ -105,6 +106,8 @@
                 return t('settings.tabs.service');
             case 'client':
                 return t('settings.tabs.client');
+            case 'detectors':
+                return t('settings.tabs.detectors');
             case 'custom-page':
                 return t('settings.tabs.customPage');
             case 'system':
@@ -163,6 +166,7 @@
                     </p>
                 </div>
                 <div
+                    v-if="activeTab !== 'detectors'"
                     class="text-xs text-gray-500 dark:text-gray-400 bg-white/70 dark:bg-white/5 border border-gray-200/60 dark:border-white/10 px-3 py-1.5 misub-radius-pill"
                 >
                     {{ t('settings.saveHint') }}
@@ -195,6 +199,7 @@
             <GlobalSettings v-show="activeTab === 'global'" :settings="settings" />
             <ServiceSettings v-show="activeTab === 'service'" :settings="settings" />
             <ClientSettings v-show="activeTab === 'client'" />
+            <DetectorSettings v-if="activeTab === 'detectors'" />
             <CustomPageSettings v-show="activeTab === 'custom-page'" :settings="settings" />
             <div v-show="activeTab === 'system'" class="space-y-6">
                 <WebdavBackupSettings :settings="settings" />
@@ -208,7 +213,7 @@
             </div>
         </div>
 
-        <template #footer>
+        <template v-if="activeTab !== 'detectors'" #footer>
             <button
                 @click="emit('save')"
                 :disabled="saveDisabled"

@@ -35,6 +35,17 @@ export async function readProbeJson(request) {
 function json(data, status = 200) {
     return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' } });
 }
+function managementPage(searchParams) {
+    const read = (name, fallback, min, max) => {
+        const values = searchParams.getAll(name);
+        if (!values.length) return fallback;
+        requireValue(values.length === 1 && /^(0|[1-9]\d{0,5})$/.test(values[0]), `invalid_${name}`);
+        const value = Number(values[0]);
+        requireValue(value >= min && value <= max, `invalid_${name}`);
+        return value;
+    };
+    return { offset: read('offset', 0, 0, 100000), limit: read('limit', 20, 1, 50) };
+}
 /** Explicit dependencies make the HTTP/auth boundary testable without a Cloudflare runtime. */
 export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNodes, makeStore = env => new ProbeStore(env.MISUB_PROBE_DB) }) {
     async function resolveNodes(input, env) {
@@ -79,6 +90,15 @@ export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNod
             }
             store = await makeStore(env).init();
             if (path[0] === 'agents') {
+                if (path.length === 2 && path[1] === 'overview' && method === 'GET') {
+                    const { offset, limit } = managementPage(url.searchParams);
+                    return json({ success: true, data: await store.agentsOverview(offset, limit) });
+                }
+                if (path.length === 3 && path[2] === 'history' && method === 'GET') {
+                    requireValue(/^[\w-]{1,128}$/.test(path[1]), 'not_found', 404);
+                    const { offset, limit } = managementPage(url.searchParams);
+                    return json({ success: true, data: await store.agentHistory(path[1], offset, limit) });
+                }
                 if (path.length === 1 && method === 'GET') return json({ success: true, data: await store.agents() });
                 if (path.length === 1 && method === 'POST') return json({ success: true, data: await store.addAgent((await readProbeJson(request)).name) }, 201);
                 if (path.length === 2 && method === 'DELETE') return json({ success: true, data: { revoked: await store.revokeAgent(path[1]) } });

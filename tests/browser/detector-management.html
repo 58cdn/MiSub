@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Detector settings fixture</title>
+    </head>
+    <body class="bg-gray-50 p-2 md:p-6 dark:bg-gray-950">
+        <div id="app"></div>
+        <script type="module">
+            import { createApp, h, ref } from 'vue';
+            import SettingsLayout from '/src/components/layout/SettingsLayout.vue';
+            import SettingsSidebar from '/src/components/settings/SettingsSidebar.vue';
+            import DetectorSettings from '/src/components/settings/sections/DetectorSettings.vue';
+            import '/src/assets/main.css';
+            import { setLocale } from '/src/i18n/index.js';
+            setLocale(new URLSearchParams(location.search).get('locale') || 'en-US');
+            createApp({
+                setup() {
+                    const tab = ref('basic');
+                    return () =>
+                        h(
+                            SettingsLayout,
+                            {},
+                            {
+                                sidebar: () =>
+                                    h(SettingsSidebar, {
+                                        activeTab: tab.value,
+                                        'onUpdate:activeTab': (value) => {
+                                            tab.value = value;
+                                        },
+                                    }),
+                                default: () =>
+                                    tab.value === 'detectors'
+                                        ? h(DetectorSettings)
+                                        : h(
+                                              'p',
+                                              { class: 'text-gray-700 dark:text-gray-200' },
+                                              'Offline settings fixture'
+                                          ),
+                            }
+                        );
+                },
+            }).mount('#app');
+        </script>
+    </body>
+</html>
