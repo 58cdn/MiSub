@@ -1,5 +1,21 @@
 import { digest, requireValue, MAX_NODES } from './probe-contract.js';
 const TYPES = new Set(['ss','ssr','vmess','vless','trojan','hysteria','hysteria2','tuic','snell','wireguard','anytls','http','https','socks5','socks5-tls','mieru']);
+// Reject credential-bearing JSON/URI parse errors before the shared converter can log them.
+function preflightUri(uri) {
+    decodeURIComponent(uri);
+    const scheme = uri.slice(0, uri.indexOf(':')).toLowerCase();
+    if (!['ss', 'ssr', 'vmess', 'vless', 'trojan', 'hysteria2', 'hy2', 'tuic', 'snell', 'wireguard', 'anytls', 'http', 'https', 'socks5', 'mierus'].includes(scheme)) return false;
+    if (scheme === 'vmess') {
+        const encoded = uri.slice(8).split('#')[0].split('?')[0].replace(/-/g, '+').replace(/_/g, '/');
+        const binary = atob(encoded.padEnd(Math.ceil(encoded.length / 4) * 4, '='));
+        const payload = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(binary, c => c.charCodeAt(0))));
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('invalid_format');
+    }
+    const query = uri.split('?')[1]?.split('#')[0];
+    const extra = query ? new URLSearchParams(query).get('extra') : null;
+    if (extra) JSON.parse(extra);
+    return true;
+}
 /** The converter is the same one used by MiSub subscription generation. */
 export function createProbeNodePreparer(convert) {
     return async function prepareNodes(nodes) {
@@ -13,7 +29,10 @@ export function createProbeNodePreparer(convert) {
             seen.add(id);
             let proxy = null;
             let format = { status: 'failed', code: 'invalid_format' };
-            try { proxy = convert(node.url.trim()); } catch { /* Never log the URI or parser exception. */ }
+            try {
+                if (preflightUri(node.url.trim())) proxy = convert(node.url.trim());
+                else format = { status: 'unsupported', code: 'unsupported_protocol' };
+            } catch { /* Never log the URI or parser exception. */ }
             if (proxy && TYPES.has(proxy.type) && typeof proxy.server === 'string' && proxy.server.length > 0 && proxy.server.length <= 253 && Number.isInteger(Number(proxy.port)) && Number(proxy.port) > 0 && Number(proxy.port) <= 65535) {
                 const p = { ...proxy, name: 'probe-target', port: Number(proxy.port) };
                 delete p.metadata;

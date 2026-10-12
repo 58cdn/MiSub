@@ -1,0 +1,384 @@
+openapi: 3.1.0
+info:
+  title: MiSub multi-detector API
+  version: 1.0.0
+  description: |
+    HTTPS only. Separate from /api/ext/v1 and /api/nodes/diagnostics.
+    Admin writes require the same-origin Origin header and a valid auth_session.
+    Agent endpoints accept a per-detector Bearer token, never Cookie or Origin headers.
+    JSON bodies are at most 1 MiB; responses are no-store. Timestamps are Unix milliseconds.
+    Five check categories do not imply every proxy protocol or service yields a positive verdict.
+servers:
+  - url: /api/probes/v1
+security:
+  - AdminSession: []
+paths:
+  /capabilities:
+    get:
+      operationId: probeCapabilities
+      responses:
+        '200':
+          description: Types, service IDs, storageReady, version, maxNodes, maxAgents, maxAttempts and maxJobDownloadBytes.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /format:
+    post:
+      operationId: validateNodeFormats
+      description: No D1 or external detector required. Never returns credentials or a connectivity verdict.
+      parameters: [{ $ref: '#/components/parameters/Origin' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NodeSelection' }
+      responses:
+        '200':
+          description: data contains checkedAt and nodes (id, name, checks.format).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /agents:
+    get:
+      operationId: listDetectors
+      responses:
+        '200':
+          description: Public detector records, never tokens or hashes.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Envelope' }
+                  - properties:
+                      data: { type: array, items: { $ref: '#/components/schemas/Detector' } }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: enrollDetector
+      parameters: [{ $ref: '#/components/parameters/Origin' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 60 }
+      responses:
+        '201':
+          description: data contains id, name, createdAt and a token returned ONCE. Save privately as probe.json; never log it.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /agents/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    delete:
+      operationId: revokeDetector
+      parameters: [{ $ref: '#/components/parameters/Origin' }]
+      description: Revokes token and cancels unfinished tasks for this detector. Does not delete original nodes.
+      responses:
+        '200':
+          description: data.revoked is a boolean.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /jobs:
+    get:
+      operationId: listProbeJobs
+      description: Latest 50 jobs; expires pending work and lazily removes records older than seven days.
+      responses:
+        '200':
+          description: data array with id, created_at, expires_at, cancelled_at, types, options, total, queued, running, done, stopped.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createProbeJob
+      parameters:
+        - { $ref: '#/components/parameters/Origin' }
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, pattern: '^[A-Za-z0-9_-]{8,100}$' }
+      description: |
+        Creates a snapshot task matrix (nodes x selected detectors), expires after 24 hours.
+        Each detector sees only assigned tasks. A different body with the same idempotency key is rejected.
+        Downloads include a worst-case budget for three attempts, at most 1 GiB per job.
+        consent=true explicitly authorizes transfer of node credentials to selected detectors.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: '#/components/schemas/NodeSelection' }
+                - type: object
+                  required: [types, agentIds, consent]
+                  properties:
+                    consent: { const: true }
+                    types: { type: array, minItems: 1, maxItems: 5, uniqueItems: true, items: { $ref: '#/components/schemas/CheckType' } }
+                    agentIds: { type: array, minItems: 1, maxItems: 8, uniqueItems: true, items: { type: string } }
+                    options: { $ref: '#/components/schemas/Options' }
+      responses:
+        '202':
+          description: data.id is the job ID; data.replay indicates an idempotent retry.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /jobs/{id}:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    get:
+      operationId: probeJobResults
+      parameters:
+        - in: query
+          name: offset
+          schema: { type: integer, minimum: 0, maximum: 4000, default: 0 }
+      responses:
+        '200':
+          description: |
+            data.job has public job metadata; data.nodes has at most 200 records:
+            id, node_id, node_name, agent_id, agent_name, state, attempt, completed_at, checks.
+            nextOffset is null at the end. No node URI, proxy configuration, token or lease.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /jobs/{id}/cancel:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      operationId: cancelProbeJob
+      parameters: [{ $ref: '#/components/parameters/Origin' }]
+      responses:
+        '200':
+          description: data.cancelled=true. Finished results remain; queued/running payloads are removed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /agent/claim:
+    post:
+      operationId: claimProbeTask
+      security: [{ DetectorToken: [] }]
+      description: |
+        At most one unexpired task lease per identity. An idle response is data=null.
+        Default polling is every 60 seconds. Never copy the same identity to multiple machines.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version: { type: string, maxLength: 50 }
+                platform: { type: string, maxLength: 30 }
+      responses:
+        '200':
+          description: A private task snapshot with a 90-second lease, or null.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Envelope' }
+                  - properties:
+                      data:
+                        oneOf:
+                          - { $ref: '#/components/schemas/Task' }
+                          - { type: 'null' }
+        default: { $ref: '#/components/responses/Error' }
+  /agent/tasks/{id}/heartbeat:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      operationId: renewProbeLease
+      security: [{ DetectorToken: [] }]
+      description: Renew every 20 seconds. Stop execution on failure; expired/cancelled/revoked leases cannot renew.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Lease' }
+      responses:
+        '200':
+          description: data.leaseMs=90000.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /agent/tasks/{id}/result:
+    parameters: [{ $ref: '#/components/parameters/Id' }]
+    post:
+      operationId: completeProbeTask
+      security: [{ DetectorToken: [] }]
+      description: |
+        Include every requested check type. Identical repeat delivery is accepted without rerunning tests.
+        Unknown/passed unlock results require one entry for every requested service.
+        Missing measurements are not zero. Never send raw errors, bodies or credentials.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: '#/components/schemas/Lease' }
+                - type: object
+                  required: [checks]
+                  properties:
+                    checks: { $ref: '#/components/schemas/Checks' }
+      responses:
+        '200':
+          description: data.accepted=true, data.replay boolean. Private task payload is removed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Envelope' }
+        default: { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    AdminSession: { type: apiKey, in: cookie, name: auth_session }
+    DetectorToken: { type: http, scheme: bearer, bearerFormat: 'mp1_ followed by 64 lowercase hexadecimal characters' }
+  parameters:
+    Origin:
+      in: header
+      name: Origin
+      required: true
+      schema: { type: string, format: uri }
+      description: Must exactly match the MiSub HTTPS origin. Agent requests must OMIT this header.
+    Id:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 128 }
+  responses:
+    Error:
+      description: |
+        400 invalid input/consent, 401 authentication, 403 origin/access, 404 missing resource,
+        405 method, 408 body timeout, 409 lease/idempotency conflict, 413 body size,
+        415 content type, 503 missing D1 or temporary failure. No raw internal error.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [success, error]
+            properties:
+              success: { const: false }
+              error:
+                type: object
+                required: [code]
+                properties:
+                  code: { type: string }
+  schemas:
+    Envelope:
+      type: object
+      required: [success, data]
+      properties:
+        success: { const: true }
+        data: {}
+    CheckType: { type: string, enum: [format, tcp, proxy, speed, unlock] }
+    Service: { type: string, enum: [netflix, youtube, openai, claude, gemini, disney, spotify, tiktok] }
+    NodeSelection:
+      type: object
+      required: [scope]
+      description: all/selected use persisted manual nodes; snapshot uses provided parsed node URIs. all includes disabled nodes.
+      properties:
+        scope: { type: string, enum: [all, selected, snapshot] }
+        nodeIds: { type: array, minItems: 1, maxItems: 500, uniqueItems: true, items: { type: string } }
+        nodes:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            type: object
+            required: [url]
+            properties:
+              id: { type: string, minLength: 1, maxLength: 128 }
+              name: { type: string, maxLength: 200 }
+              url: { type: string, minLength: 1, maxLength: 16384, writeOnly: true, description: Private node URI. Never log. }
+      allOf:
+        - if: { properties: { scope: { const: selected } } }
+          then: { required: [nodeIds] }
+        - if: { properties: { scope: { const: snapshot } } }
+          then: { required: [nodes] }
+    Options:
+      type: object
+      properties:
+        timeoutMs: { type: integer, minimum: 1000, maximum: 15000, default: 5000 }
+        downloadBytes: { type: integer, minimum: 65536, maximum: 20971520, default: 5242880 }
+        allowMetered: { type: boolean, default: false, description: Must be true when speed is requested. }
+        services: { type: array, minItems: 1, maxItems: 8, uniqueItems: true, default: [netflix, youtube, openai], items: { $ref: '#/components/schemas/Service' } }
+    Detector:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        createdAt: { type: integer }
+        lastSeen: { type: integer }
+        revokedAt: { type: [integer, 'null'] }
+        version: { type: string }
+        platform: { type: string }
+    Lease:
+      type: object
+      required: [leaseToken]
+      properties:
+        leaseToken: { type: string, pattern: '^[0-9a-f]{64}$', description: Private lease capability. Never log. }
+    Task:
+      allOf:
+        - { $ref: '#/components/schemas/Lease' }
+        - type: object
+          required: [id, jobId, node, types, options, attempt, leaseMs]
+          properties:
+            id: { type: string }
+            jobId: { type: string }
+            node:
+              type: object
+              required: [id, name, proxy, format]
+              properties:
+                id: { type: string }
+                name: { type: string }
+                proxy: { type: [object, 'null'], additionalProperties: true, description: Private Mihomo proxy map; only assigned detector can retrieve this. }
+                format: { $ref: '#/components/schemas/Check' }
+            types: { type: array, items: { $ref: '#/components/schemas/CheckType' } }
+            options:
+              allOf:
+                - { $ref: '#/components/schemas/Options' }
+                - properties:
+                    worstCaseDownloadBytes: { type: integer, minimum: 0, maximum: 1073741824 }
+            attempt: { type: integer, minimum: 1, maximum: 3 }
+            leaseMs: { type: integer, const: 90000 }
+    Check:
+      type: object
+      required: [status, code]
+      properties:
+        status: { type: string, enum: [passed, failed, timeout, blocked, unknown, unsupported, skipped, cancelled] }
+        code:
+          type: string
+          enum: [ok, invalid_format, unsupported_protocol, unsupported_transport, unsafe_target, dns_failed, connect_failed, tls_failed, request_failed, http_error, deadline, cancelled, prerequisite_failed, kernel_missing, kernel_failed, probe_inconclusive, region_blocked, service_reachable, native_unlocked, originals_only, rate_limited, traffic_limit, task_expired]
+        latencyMs: { type: number, minimum: 0, maximum: 180000 }
+        bytes: { type: number, minimum: 0, maximum: 20971520 }
+        bytesPerSecond: { type: number, minimum: 0, maximum: 1000000000000 }
+        httpStatus: { type: integer, minimum: 0, maximum: 599 }
+        region: { type: string, pattern: '^[A-Z]{2}$' }
+    Checks:
+      type: object
+      additionalProperties: false
+      properties:
+        format: { $ref: '#/components/schemas/Check' }
+        tcp: { $ref: '#/components/schemas/Check' }
+        proxy: { $ref: '#/components/schemas/Check' }
+        speed: { $ref: '#/components/schemas/Check' }
+        unlock:
+          allOf:
+            - { $ref: '#/components/schemas/Check' }
+            - properties:
+                services:
+                  type: array
+                  maxItems: 8
+                  items:
+                    allOf:
+                      - { $ref: '#/components/schemas/Check' }
+                      - required: [service]
+                        properties:
+                          service: { $ref: '#/components/schemas/Service' }
