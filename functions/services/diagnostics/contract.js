@@ -113,7 +113,7 @@ const nullableNumber = (value, max) =>
 
 // Only typed evidence leaves the executor boundary. Never return raw provider bodies,
 // exception messages, node URIs or arbitrary metadata that could contain credentials.
-export function validateReport(report, requestId, sources, startedAt) {
+export function validateReport(report, requestId, sources, startedAt, now = Date.now()) {
     if (
         report?.version !== 1 ||
         report.requestId !== requestId ||
@@ -122,7 +122,6 @@ export function validateReport(report, requestId, sources, startedAt) {
         report.results.length !== sources.length
     )
         throw new Error('invalid_report');
-    const now = Date.now();
     const results = sources.map((source) => {
         const matches = report.results.filter((r) => r?.source === source.id);
         if (matches.length !== 1) throw new Error('invalid_report');

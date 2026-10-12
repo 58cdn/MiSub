@@ -139,6 +139,13 @@ func checkSpeed(ctx context.Context, client *http.Client, target string, timeout
 }
 func executeTask(ctx context.Context, t Task, binary string) map[string]Check {
 	out := map[string]Check{}
+	defer func() {
+		if contains(t.Types, "observations") && out["observations"].Report == nil {
+			r := out["observations"]
+			r.Report = unavailableObservations(t)
+			out["observations"] = r
+		}
+	}()
 	if contains(t.Types, "format") {
 		out["format"] = t.Node.Format
 	}
@@ -175,7 +182,7 @@ func executeTask(ctx context.Context, t Task, binary string) map[string]Check {
 	if contains(t.Types, "tcp") {
 		out["tcp"] = checkTCP(ctx, proxy, timeout)
 	}
-	if !contains(t.Types, "proxy") && !contains(t.Types, "speed") && !contains(t.Types, "unlock") {
+	if !contains(t.Types, "proxy") && !contains(t.Types, "speed") && !contains(t.Types, "unlock") && !contains(t.Types, "observations") {
 		return out
 	}
 	kernel, err := startKernel(ctx, binary, proxy)
@@ -184,7 +191,7 @@ func executeTask(ctx context.Context, t Task, binary string) map[string]Check {
 		if !contains([]string{"kernel_missing", "kernel_failed", "cancelled"}, code) {
 			code = "kernel_failed"
 		}
-		for _, typ := range []string{"proxy", "speed", "unlock"} {
+		for _, typ := range []string{"proxy", "speed", "unlock", "observations"} {
 			if contains(t.Types, typ) {
 				out[typ] = failure("unsupported", code)
 			}
@@ -193,7 +200,10 @@ func executeTask(ctx context.Context, t Task, binary string) map[string]Check {
 	}
 	defer kernel.Close()
 	// Proxy success is independent from the TCP test (QUIC protocols do not use TCP).
-	alive := checkProxy(ctx, kernel.Client, aliveURL, timeout)
+	alive := failure("skipped", "prerequisite_failed")
+	if contains(t.Types, "proxy") || contains(t.Types, "speed") {
+		alive = checkProxy(ctx, kernel.Client, aliveURL, timeout)
+	}
 	if contains(t.Types, "proxy") {
 		out["proxy"] = alive
 	}
@@ -207,6 +217,11 @@ func executeTask(ctx context.Context, t Task, binary string) map[string]Check {
 	if contains(t.Types, "unlock") {
 		// A single URLTest site may be blocked while a service still works. Each service gets its own bounded attempt.
 		out["unlock"] = checkServices(ctx, kernel.Client, t.Options.Services, timeout)
+	}
+	if contains(t.Types, "observations") {
+		r := failure("unknown", "probe_inconclusive")
+		r.Report = sourceRunner.run(ctx, kernel.Client, t)
+		out["observations"] = r
 	}
 	return out
 }
