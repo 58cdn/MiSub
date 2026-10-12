@@ -3,6 +3,7 @@
     import BulkOperations from './ManualNodePanel/BulkOperations.vue';
     import NodeActions from './ManualNodePanel/NodeActions.vue';
     import NodeTable from './ManualNodePanel/NodeTable.vue';
+    import NodeDetectionPanel from './NodeDetectionPanel.vue';
     import { useManualNodeSearchPagination } from '@/composables/manual-nodes/useManualNodeSearchPagination.js';
     import {
         normalizeManualNodeGroupName,
@@ -199,6 +200,12 @@
             @ping-all="emit('ping-all')"
             @sort-by-latency="emit('sort-by-latency')"
             @manage-groups="emit('manage-groups')"
+        />
+
+        <NodeDetectionPanel
+            :nodes="manualNodes"
+            :selected-node-ids="selectedNodeIds"
+            @select-nodes="isSelectionMode = true"
         />
 
         <BulkOperations
