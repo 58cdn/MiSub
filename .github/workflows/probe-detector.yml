@@ -123,5 +123,9 @@ jobs:
         shell: bash
         run: |
           cd release
+          if gh release view probe-v0.1.0 >/dev/null 2>&1; then
+            echo 'probe-v0.1.0 already exists; published assets are not replaced.'
+            exit 0
+          fi
           sha256sum *.tar.gz > SHA256SUMS
           gh release create probe-v0.1.0 *.tar.gz SHA256SUMS --target "$GITHUB_SHA" --title 'MiSub Probe v0.1.0' --notes 'Standalone Linux/macOS amd64/arm64 detectors. Native routing/no-direct-fallback tests run before publishing. Mihomo GPL license and corresponding vendored source are included. Network-side service evidence is not an account or playback guarantee.'

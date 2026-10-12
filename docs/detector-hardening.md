@@ -35,7 +35,15 @@ this safety correction, preserving independent source evidence and explicit unkn
 - Windows is not a detector target. Its POSIX file-mode test fails as expected;
   targeted local tests do not replace full Linux/macOS race and core CI results.
 
-## Distribution gate (paused)
+## Proposed distribution gate
+
+This pause only takes effect after this PR is merged. The independently merged
+PR #14 published [probe-v0.1.0](https://github.com/58cdn/MiSub/releases/tag/probe-v0.1.0)
+on 2026-10-12 at 11:32:29 UTC from `b03b933d42621e7bf2169f07f8d8549ffbbf47df`.
+That release does not contain this PR's safety fixes. Its successful native CI
+and separate production control-plane smoke are not real-node/provider acceptance
+or verification of complete distribution materials. This PR does not remove,
+replace or retroactively repair those existing release assets.
 
 Independent inspection of the locked core found that the existing root GPL file
 and `checkout + go mod vendor` source archive do not yet establish complete

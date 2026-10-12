@@ -48,7 +48,7 @@ esac
 # A Wrangler config is authoritative. Refuse to silently remove other KV/D1 bindings.
 if jq -e '[
   (.result.deployment_configs.production.kv_namespaces // {} | keys[] | select(. != "MISUB_KV")),
-  (.result.deployment_configs.production.d1_databases // {} | keys[] | select(. != "MISUB_DB"))
+  (.result.deployment_configs.production.d1_databases // {} | keys[] | select(. != "MISUB_DB" and . != "MISUB_PROBE_DB"))
 ] | length > 0' "$project_json" >/dev/null; then
   echo "::error::Existing Pages project has other KV/D1 bindings. Review them before replacing its Wrangler configuration."
   exit 1
@@ -120,6 +120,14 @@ if [[ -n "$d1_id" && ! "$d1_id" =~ ^[a-fA-F0-9-]{36}$ ]]; then
   exit 1
 fi
 
+# Probe tasks use a separate database; never migrate or replace subscription storage.
+existing_probe_d1="$(jq -r '.result.deployment_configs.production.d1_databases.MISUB_PROBE_DB.id // empty' "$project_json")"
+probe_d1_id="$(bash "$(dirname "${BASH_SOURCE[0]}")/provision-probe-d1.sh" "$project_name" "$existing_probe_d1")"
+if [[ -n "$probe_d1_id" && "$probe_d1_id" == "$d1_id" ]]; then
+  echo '::error::MISUB_PROBE_DB must be separate from MISUB_DB. Refusing to share business storage.'
+  exit 1
+fi
+
 # Generate at runtime only; never check account-specific resource IDs into Git.
 # Retain the committed compatibility flags and build output directory.
 if [[ -e wrangler.toml ]]; then
@@ -127,12 +135,12 @@ if [[ -e wrangler.toml ]]; then
   exit 1
 fi
 sed -E "s/^name = .*/name = \"${project_name}\"/" wrangler-cf-pages.toml > wrangler.toml
-cat >> wrangler.toml <<EOF
+cat >> wrangler.toml <<CFG
 
 [[kv_namespaces]]
 binding = "MISUB_KV"
 id = "${kv_id}"
-EOF
+CFG
 
 if [[ -n "$d1_id" ]]; then
   d1_name="${CLOUDFLARE_D1_DATABASE_NAME:-misub}"
@@ -140,13 +148,22 @@ if [[ -n "$d1_id" ]]; then
     echo "::error::Invalid CLOUDFLARE_D1_DATABASE_NAME."
     exit 1
   fi
-  cat >> wrangler.toml <<EOF
+  cat >> wrangler.toml <<CFG
 
 [[d1_databases]]
 binding = "MISUB_DB"
 database_name = "${d1_name}"
 database_id = "${d1_id}"
-EOF
+CFG
+fi
+if [[ -n "$probe_d1_id" ]]; then
+  cat >> wrangler.toml <<CFG
+
+[[d1_databases]]
+binding = "MISUB_PROBE_DB"
+database_name = "${project_name}-probes"
+database_id = "${probe_d1_id}"
+CFG
 fi
 
 # Secrets are provisioned before the deployment that consumes them.
