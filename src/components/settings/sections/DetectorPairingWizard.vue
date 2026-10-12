@@ -16,7 +16,22 @@
     const { locale } = useI18n();
     const L = (zh, en) => (locale.value.startsWith('zh') ? zh : en);
     const origin = window.location.origin;
-    const secure = window.location.protocol === 'https:';
+    const secure = window.location.protocol === 'https:' && validCommandOrigin(origin);
+    const terminalChoice = ref('unix');
+    function validCommandOrigin(value) {
+        try {
+            const parsed = new URL(value);
+            return (
+                parsed.protocol === 'https:' &&
+                parsed.origin === value &&
+                !parsed.username &&
+                !parsed.password &&
+                /^[a-z0-9.:[\]-]+$/i.test(parsed.host)
+            );
+        } catch {
+            return false;
+        }
+    }
     const open = ref(false),
         heading = ref(null),
         cancelPanel = ref(null),
@@ -98,8 +113,10 @@
         Math.max(0, Math.ceil((nextPollAt.value - monotonicNow.value) / 1000))
     );
     const command = computed(() =>
-        pairingWindow.value
-            ? `misub-probe --pair --server '${origin}' --pair-window '${pairingWindow.value.id}' --config "$HOME/.misub-probe/probe.json"`
+        secure && pairingWindow.value
+            ? terminalChoice.value === 'windows'
+                ? `.\\misub-probe-windows-amd64.exe --pair --server '${origin}' --pair-window '${pairingWindow.value.id}' --config "$env:LOCALAPPDATA\\MiSubProbe\\probe.json"`
+                : `misub-probe --pair --server '${origin}' --pair-window '${pairingWindow.value.id}' --config "$HOME/.misub-probe/probe.json"`
             : ''
     );
     const canResolve = computed(
@@ -613,6 +630,31 @@
                 }}<span v-if="stale"> · {{ L('状态待刷新', 'State needs refresh') }}</span>
             </p>
             <div v-if="errorText" class="pair-error" role="alert">{{ errorText }}</div>
+            <div
+                v-if="!pairingWindow || ['waiting', 'pending', 'approved'].includes(state)"
+                class="min-w-0 space-y-1"
+            >
+                <label for="pairing-terminal" class="block font-medium">{{
+                    L('命令终端', 'Command terminal')
+                }}</label>
+                <select
+                    id="pairing-terminal"
+                    v-model="terminalChoice"
+                    data-testid="pairing-terminal"
+                    class="min-h-11 w-full min-w-0 max-w-full rounded-lg border border-gray-300 bg-white px-3 sm:max-w-xs dark:border-gray-600 dark:bg-gray-800"
+                >
+                    <option value="unix">Linux / macOS</option>
+                    <option value="windows">Windows PowerShell</option>
+                </select>
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                        L(
+                            '选择你将运行检测器的终端。此选择只更改命令说明。',
+                            'Choose the terminal where you will run the detector. This only changes the command instructions.'
+                        )
+                    }}
+                </p>
+            </div>
             <p
                 v-if="coolingDown"
                 data-testid="pairing-retry-after"
@@ -662,9 +704,22 @@
                     </p>
                     <p>
                         {{
+                            terminalChoice === 'windows'
+                                ? L(
+                                      '使用已安装且支持配对的匹配 Windows amd64 构建，在该可执行文件所在目录打开你控制的 PowerShell，审查后运行此命令。',
+                                      'Use an already installed, matching Windows amd64 build with pairing support. Open PowerShell in the executable’s directory on a device you control, then review and run this command.'
+                                  )
+                                : L(
+                                      '在你控制的 Linux / macOS 终端中审查并运行命令，需要预先安装支持配对的客户端。',
+                                      'Review and run this command in a Linux / macOS terminal you control with a pairing-capable client already installed.'
+                                  )
+                        }}
+                    </p>
+                    <p>
+                        {{
                             L(
-                                '在你控制的 Linux / macOS 终端中审查并运行命令，需要预先安装支持配对的客户端。配置保存到你的私有目录，已有文件不会覆盖；需要时可另选私有绝对路径。Windows 配对暂不可用。',
-                                'Review and run this command in a Linux / macOS terminal you control with a pairing-capable client already installed. Configuration is saved in your private directory; existing files are not overwritten. Choose another private absolute path if needed. Windows pairing is not available yet.'
+                                '配置保存到专用私有目录，已有文件不会覆盖；需要时可另选私有绝对路径。Windows 已有目录必须满足客户端的私有访问权限要求。',
+                                'Configuration is saved in a dedicated private directory; existing files are not overwritten. Choose another private absolute path if needed. An existing Windows directory must meet the client’s private access requirements.'
                             )
                         }}
                     </p>
@@ -952,7 +1007,8 @@
         @apply text-gray-900 dark:text-gray-100;
     }
     button:focus-visible,
-    input:focus-visible {
+    input:focus-visible,
+    select:focus-visible {
         @apply outline outline-2 outline-offset-2 outline-indigo-500;
     }
     @media (prefers-reduced-motion: reduce) {

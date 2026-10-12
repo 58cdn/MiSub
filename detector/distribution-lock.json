@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "core": {
+    "repository": "MetaCubeX/mihomo",
+    "version": "v1.19.32",
+    "sourceCommit": "88dcbf7f1614a67c3b36b848ee3592dfa92ada36"
+  },
+  "artifacts": [
+    {
+      "id": "kernel-linux-amd64",
+      "role": "kernel",
+      "format": "gzip",
+      "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-compatible-v1.19.32.gz",
+      "sha256": "ba3ce607747a07f948fc35780e108a4a7c7f552a38b9bd4d115f313ebcb89c20",
+      "target": "linux-amd64",
+      "prefix": "",
+      "requiredFiles": []
+    },
+    {
+      "id": "kernel-linux-arm64",
+      "role": "kernel",
+      "format": "gzip",
+      "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-arm64-v1.19.32.gz",
+      "sha256": "9dd862e28b46ff7d775f169cceebc28deccaa0a9e804237d421cd2571e0caba0",
+      "target": "linux-arm64",
+      "prefix": "",
+      "requiredFiles": []
+    },
+    {
+      "id": "kernel-darwin-amd64",
+      "role": "kernel",
+      "format": "gzip",
+      "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-darwin-amd64-compatible-v1.19.32.gz",
+      "sha256": "18b382df77bded2ad0fb3db27db5636cb15b20729d5ba995a357eeb9b46bf507",
+      "target": "darwin-amd64",
+      "prefix": "",
+      "requiredFiles": []
+    },
+    {
+      "id": "kernel-darwin-arm64",
+      "role": "kernel",
+      "format": "gzip",
+      "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-darwin-arm64-v1.19.32.gz",
+      "sha256": "3312a6780652c622890fd4357c6a853bbf865464fd047ac7b7f52dab8de18652",
+      "target": "darwin-arm64",
+      "prefix": "",
+      "requiredFiles": []
+    },
+    {
+      "id": "kernel-windows-amd64",
+      "role": "kernel",
+      "format": "zip",
+      "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-windows-amd64-compatible-v1.19.32.zip",
+      "sha256": "974a4d7ad69aed27aa2e8f91d61113573c14dadb14562c63e58effabf59816f0",
+      "target": "windows-amd64",
+      "prefix": "",
+      "requiredFiles": [],
+      "entry": "mihomo-windows-amd64-compatible.exe",
+      "executableSha256": "04f8d7fc2b314771e1ecbf15951d59f0e1cb7914503c88cfb6972ff6a824e314",
+      "executableBytes": 61276672
+    },
+    {
+      "id": "upstream-vendor",
+      "role": "vendor",
+      "format": "tar.gz",
+      "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/vendor.tar.gz",
+      "sha256": "0e605b54a4e2508c57f7bf64ae30d98833b3d2e0c1b399dfffa75248f6e84441",
+      "target": null,
+      "prefix": "vendor",
+      "requiredFiles": [
+        "modules.txt"
+      ]
+    },
+    {
+      "id": "upstream-toolchain",
+      "role": "toolchain",
+      "format": "tar.gz",
+      "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/toolchain.tar.gz",
+      "sha256": "341ed5617c5abfb37e7d6e35aef258665e06f21247c13f2a22757da92e281751",
+      "target": null,
+      "prefix": "go",
+      "requiredFiles": [
+        "VERSION",
+        "LICENSE",
+        "src/runtime/proc.go"
+      ]
+    },
+    {
+      "id": "historical-core-source",
+      "role": "historical-core-source",
+      "format": "tar.gz",
+      "url": "https://github.com/58cdn/MiSub/releases/download/probe-v0.1.0/mihomo-source-v1.19.32.tar.gz",
+      "sha256": "98d5bf0a7dd6b895e35aafd4a4627bbb04e6097472baefd9cb086c52eb8c7991",
+      "target": null,
+      "prefix": "mihomo-source",
+      "requiredFiles": [
+        "go.mod",
+        "go.sum",
+        "LICENSE",
+        "vendor/modules.txt",
+        "component/ca/ca-certificates.crt"
+      ]
+    }
+  ]
+}

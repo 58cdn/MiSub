@@ -5,23 +5,65 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 )
 
 func main() {
-	path := flag.String("config", "probe.json", "Private configuration file downloaded from MiSub (chmod 600)")
+	path := flag.String("config", "probe.json", "Private configuration file (owner-only POSIX permissions or Windows ACL)")
 	once := flag.Bool("once", false, "Process at most one task, then exit")
 	showVersion := flag.Bool("version", false, "Print detector and pinned kernel versions")
 	checkConfig := flag.Bool("check-config", false, "Validate configuration without sending it anywhere")
 	selfTest := flag.Bool("self-test", false, "Verify and execute the embedded kernel version; no node or API request")
-	pair := flag.Bool("pair", false, "Pair with browser approval, save private configuration, then exit (Linux/macOS)")
+	pair := flag.Bool("pair", false, "Pair with browser approval, save private configuration, then exit")
 	pairServer := flag.String("server", "", "HTTPS MiSub origin for pairing")
 	pairWindow := flag.String("pair-window", "", "Public pairing window ID from MiSub settings")
 	pairName := flag.String("pair-name", "MiSub Probe", "Detector display name; no machine username is sent")
+	managedRun := flag.String("managed-run", "", "Internal managed-process instance; requires a matching private runtime record")
+	managementFlags := map[string]*bool{}
+	for _, action := range []string{"install", "start", "stop", "status", "uninstall", "reinstall"} {
+		managementFlags[action] = flag.Bool(action, false, "User installation management: "+action+" (no login startup)")
+	}
+	jsonOutput := flag.Bool("json", false, "Print installation --status as JSON")
 	flag.Parse()
+	selected, visited := map[string]bool{}, map[string]bool{}
+	for action, value := range managementFlags {
+		selected[action] = *value
+	}
+	flag.Visit(func(f *flag.Flag) { visited[f.Name] = true })
+	action, managementErr := installationAction(selected, visited, flag.NArg())
+	if managementErr != nil {
+		fmt.Fprintln(os.Stderr, "probe:", managementErr)
+		os.Exit(1)
+	}
+	if action != "" {
+		configPath := ""
+		if visited["config"] {
+			configPath = *path
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := manageInstallation(ctx, action, configPath, *jsonOutput, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "probe:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if visited["managed-run"] {
+		if len(visited) != 2 || !visited["config"] || flag.NArg() != 0 {
+			fmt.Fprintln(os.Stderr, "probe: managed_process_flags_conflict")
+			os.Exit(1)
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := runManagedInstallation(ctx, *managedRun, *path); err != nil {
+			fmt.Fprintln(os.Stderr, "probe: managed_process_failed")
+			os.Exit(1)
+		}
+		return
+	}
 	if *pair {
 		if *once || *showVersion || *checkConfig || *selfTest || flag.NArg() != 0 {
 			fmt.Fprintln(os.Stderr, "probe: pairing_flags_conflict")
@@ -54,8 +96,8 @@ func main() {
 		defer cleanup()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, binary, "-v")
-		if cmd.Run() != nil {
+		wait, startErr := startCoreProcess(ctx, binary, []string{"-v"}, filepath.Dir(binary))
+		if startErr != nil || wait() != nil {
 			fmt.Fprintln(os.Stderr, "probe: kernel_self_test_failed")
 			cleanup()
 			os.Exit(1)
