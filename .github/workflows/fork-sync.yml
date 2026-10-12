@@ -29,8 +29,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          git config user.name "GitHub Actions Bot"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "tdou@ChatGPT"
+          git config user.email "tdou@chatgpt.com"
 
           git checkout main || git checkout -b main
 
@@ -50,29 +50,27 @@ jobs:
           git fetch --prune origin main
           git fetch --prune upstream main
 
-      - name: Mirror upstream main
+      - name: Fast-forward upstream without overwriting fork commits
         env:
-          SYNC_PAT: ${{ secrets.SYNC_PAT }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
           ORIGIN_SHA="$(git rev-parse origin/main)"
           UPSTREAM_SHA="$(git rev-parse upstream/main)"
 
-          if [ "${ORIGIN_SHA}" = "${UPSTREAM_SHA}" ]; then
-            echo "✨ Fork 已与上游完全一致，无需同步。"
+          if [ "$ORIGIN_SHA" = "$UPSTREAM_SHA" ]; then
+            echo "✨ Fork 已与上游一致。"
             exit 0
           fi
 
-          if [ -z "${SYNC_PAT:-}" ]; then
-            WORKFLOW_DIFF="$(git diff --name-only "${ORIGIN_SHA}" "${UPSTREAM_SHA}" -- .github/workflows || true)"
-            if [ -n "${WORKFLOW_DIFF}" ]; then
-              echo "::notice title=Fork Sync skipped::上游包含 workflow 文件变更，默认 GITHUB_TOKEN 不能创建或更新 workflow 文件。请在 fork 仓库配置 secret：SYNC_PAT（repo + workflow 权限）后手动重新运行，或在网页使用 Sync fork / Discard commits 对齐上游。"
-              exit 0
-            fi
+          # The fork may contain its own Actions/configuration: never reset or force-push.
+          if ! git merge-base --is-ancestor "$ORIGIN_SHA" "$UPSTREAM_SHA"; then
+            echo "::notice title=Fork Sync skipped::检测到 fork 有独立提交；不进行强制镜像，以免覆盖 CI/CD 配置。可由 sync-upstream workflow 尝试普通合并。"
+            exit 0
           fi
 
-          echo "🚀 正在镜像上游 main，fork 本地 main 上的额外提交会被丢弃。"
-          git reset --hard upstream/main
-          git push --force-with-lease origin main
-          echo "✅ Fork main 已镜像到上游 main。"
+          git merge --ff-only upstream/main
+          git push origin main
+          echo "✅ 已安全快进至上游 main。"
+          gh workflow run cloudflare-pages.yml --ref main

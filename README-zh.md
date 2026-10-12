@@ -172,7 +172,11 @@
 - Cloudflare 账号
 - GitHub 账号
 
-### 一键部署
+### GitHub Actions 自动部署（只需配置 Repository Secrets）
+
+支持使用 GitHub Actions 自动创建/复用 Cloudflare Pages 项目和 KV 存储，并在 `main` 更新时自动部署；PR 只运行测试和构建。配置所需 Secrets、使用已有 KV/D1、首次部署步骤见 [GitHub Actions 部署指南](docs/cloudflare-github-actions.md)。
+
+### 一键部署（Cloudflare Git 集成）
 
 1. **Fork 本仓库**到你的 GitHub 账号
 2. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)
