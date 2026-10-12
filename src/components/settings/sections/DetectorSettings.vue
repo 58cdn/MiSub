@@ -11,11 +11,19 @@
     import Modal from '@/components/forms/Modal.vue';
     import NodeObservationReport from '@/components/nodes/NodeObservationReport.vue';
     import DetectorPairingWizard from './DetectorPairingWizard.vue';
+    import DetectorTable from './DetectorTable.vue';
+    import {
+        DETECTOR_COLUMNS,
+        readDetectorView,
+        saveDetectorView,
+    } from '@/utils/detector-view-preferences.js';
     import { useI18n } from '@/i18n/index.js';
     import { probeRequest } from '@/utils/probe-client.js';
 
     const { locale } = useI18n();
     const L = (zh, en) => (locale.value.startsWith('zh') ? zh : en);
+    const settingsRoot = ref(null),
+        overviewHeading = ref(null);
     const capabilities = ref(null),
         initializing = ref(true),
         initializationError = ref(false);
@@ -23,6 +31,26 @@
         overviewOffset = ref(0),
         overviewBusy = ref(false),
         overviewError = ref(false);
+    const view = ref('cards'),
+        visibleColumns = ref(DETECTOR_COLUMNS.filter((key) => key !== 'lastHeartbeatAt')),
+        preferenceError = ref(false),
+        searchText = ref(''),
+        statusFilter = ref('all'),
+        visibilityFilter = ref('visible'),
+        sortKey = ref('createdAt'),
+        sortDirection = ref('desc'),
+        filterError = ref(false),
+        appliedQuery = ref('');
+    const agentStates = ['online', 'offline', 'unknown', 'revoked'];
+    const sortKeys = [
+        'createdAt',
+        'name',
+        'status',
+        'lastSeen',
+        'lastTaskAt',
+        'lastResultAt',
+        'version',
+    ];
     const selectedAgent = ref(null),
         history = ref(null),
         historyOffset = ref(0),
@@ -48,6 +76,12 @@
         showRevoke = ref(false),
         revoking = ref(false),
         revokeError = ref(false);
+    const archiveTarget = ref(null),
+        archiveMode = ref('archive'),
+        showArchive = ref(false),
+        archiving = ref(false),
+        archiveError = ref('');
+    const mutationBusy = computed(() => creating.value || revoking.value || archiving.value);
     let enrollment = null,
         active = false,
         mounted = false,
@@ -102,6 +136,94 @@
             cancelled: L('已取消', 'Cancelled'),
             expired: L('已过期', 'Expired'),
         })[status] || L('未知', 'Unknown');
+    const columnOptions = computed(() => [
+        { key: 'status', label: L('状态', 'Status'), sortable: true },
+        {
+            key: 'lastSeen',
+            label: L('最后通信（领单 / 心跳）', 'Last communication (poll / heartbeat)'),
+            sortable: true,
+        },
+        { key: 'lastTaskAt', label: L('最近任务创建', 'Latest task created'), sortable: true },
+        { key: 'lastResultAt', label: L('最近结果回传', 'Latest result received'), sortable: true },
+        { key: 'version', label: L('版本 / 平台', 'Version / platform'), sortable: true },
+        { key: 'capabilities', label: L('上报能力', 'Reported capabilities'), sortable: false },
+        {
+            key: 'lastHeartbeatAt',
+            label: L('独立心跳时间', 'Separate heartbeat time'),
+            sortable: false,
+        },
+    ]);
+    const tableColumns = computed(() =>
+        columnOptions.value.filter((column) => visibleColumns.value.includes(column.key))
+    );
+    const sortOptions = computed(() => [
+        { key: 'createdAt', label: L('添加时间', 'Date added') },
+        { key: 'name', label: L('名称', 'Name') },
+        ...columnOptions.value.filter((column) => column.sortable),
+    ]);
+    const hasFilters = computed(
+        () =>
+            !!appliedQuery.value ||
+            statusFilter.value !== 'all' ||
+            visibilityFilter.value !== 'visible'
+    );
+    function persistView() {
+        preferenceError.value = !saveDetectorView(view.value, visibleColumns.value);
+    }
+    function changeView(value) {
+        if (!['cards', 'list'].includes(value)) return;
+        view.value = value;
+        persistView();
+    }
+    function toggleColumn(key, checked) {
+        if (!DETECTOR_COLUMNS.includes(key)) return;
+        visibleColumns.value = DETECTOR_COLUMNS.filter((column) =>
+            column === key ? checked : visibleColumns.value.includes(column)
+        );
+        persistView();
+    }
+    function applyFilters() {
+        const query = searchText.value.trim();
+        if (query.length > 80 || /[\x00-\x1f\x7f]/.test(query)) {
+            filterError.value = true;
+            return;
+        }
+        appliedQuery.value = query;
+        filterError.value = false;
+        return changeOverview(0);
+    }
+    function changeFilter(key, value) {
+        if (key === 'status' && ['all', ...agentStates].includes(value)) statusFilter.value = value;
+        else if (key === 'visibility' && ['visible', 'hidden', 'all'].includes(value))
+            visibilityFilter.value = value;
+        else return;
+        return changeOverview(0);
+    }
+    async function changeSort(key, direction) {
+        if (!sortKeys.includes(key)) return;
+        const restoreFocus = document.activeElement?.dataset.testid === `detector-sort-${key}`;
+        sortDirection.value =
+            direction || (sortKey.value === key && sortDirection.value === 'asc' ? 'desc' : 'asc');
+        sortKey.value = key;
+        const request = changeOverview(0),
+            generation = overviewGeneration;
+        await request;
+        await nextTick();
+        if (
+            active &&
+            restoreFocus &&
+            generation === overviewGeneration &&
+            document.activeElement === document.body
+        )
+            settingsRoot.value?.querySelector(`[data-testid="detector-sort-${key}"]`)?.focus();
+    }
+    function resetFilters() {
+        searchText.value = appliedQuery.value = '';
+        statusFilter.value = 'all';
+        visibilityFilter.value = 'visible';
+        filterError.value = false;
+        return changeOverview(0);
+    }
     const agentStale = (agent) =>
         stale.value ||
         (agent.status === 'online' &&
@@ -194,11 +316,30 @@
         overviewController = controller;
         overviewBusy.value = true;
         try {
-            const result = await probeRequest(
-                `agents/overview?offset=${overviewOffset.value}&limit=20`,
-                { signal: controller.signal }
-            );
+            const params = new URLSearchParams({
+                offset: String(overviewOffset.value),
+                limit: '20',
+            });
+            if (appliedQuery.value) params.set('q', appliedQuery.value);
+            if (statusFilter.value !== 'all') params.set('status', statusFilter.value);
+            if (visibilityFilter.value !== 'visible')
+                params.set('visibility', visibilityFilter.value);
+            if (sortKey.value !== 'createdAt') params.set('sort', sortKey.value);
+            if (sortDirection.value !== 'desc') params.set('direction', sortDirection.value);
+            const result = await probeRequest(`agents/overview?${params}`, {
+                signal: controller.signal,
+            });
             if (!active || controller.signal.aborted || generation !== overviewGeneration) return;
+            if (
+                Number.isInteger(result.total) &&
+                result.total >= 0 &&
+                overviewOffset.value > 0 &&
+                overviewOffset.value >= result.total
+            ) {
+                overviewOffset.value = Math.floor(Math.max(0, result.total - 1) / 20) * 20;
+                overviewController = null;
+                return loadOverview();
+            }
             overview.value = result;
             overviewError.value = false;
             receivedAt.value = validTime(result.checkedAt) ? performance.now() : null;
@@ -314,6 +455,7 @@
             !storageReady.value ||
             creating.value ||
             revoking.value ||
+            archiving.value ||
             enrollment ||
             !validName.value
         )
@@ -401,12 +543,13 @@
         }
     }
     function requestRevoke(agent) {
+        if (mutationBusy.value || showEnrollment.value || showArchive.value) return;
         revokeTarget.value = { id: agent.id, name: agent.name };
         revokeError.value = false;
         showRevoke.value = true;
     }
     async function revokeAgent() {
-        if (!revokeTarget.value || revoking.value || creating.value || !active) return;
+        if (!revokeTarget.value || mutationBusy.value || !active) return;
         const controller = new AbortController(),
             generation = lifecycle,
             target = revokeTarget.value;
@@ -433,6 +576,66 @@
             if (mutationController === controller) {
                 mutationController = null;
                 revoking.value = false;
+            }
+        }
+    }
+    function requestArchive(agent, mode = 'archive') {
+        if (mutationBusy.value || showEnrollment.value || showRevoke.value) return;
+        if (
+            mode === 'archive' &&
+            (agent.hidden || (!agent.revokedAt && agent.status !== 'revoked'))
+        )
+            return;
+        if (mode === 'restore' && agent.hidden !== true) return;
+        archiveTarget.value = { id: agent.id, name: agent.name };
+        archiveMode.value = mode;
+        archiveError.value = '';
+        showArchive.value = true;
+    }
+    async function archiveAgent() {
+        if (!active || !archiveTarget.value || mutationBusy.value) return;
+        const controller = new AbortController(),
+            generation = lifecycle,
+            target = archiveTarget.value,
+            mode = archiveMode.value;
+        mutationController = controller;
+        archiving.value = true;
+        archiveError.value = '';
+        try {
+            await probeRequest(`agents/${encodeURIComponent(target.id)}/${mode}`, {
+                method: 'POST',
+                body: { confirmed: true },
+                signal: controller.signal,
+            });
+            if (!active || controller.signal.aborted || generation !== lifecycle) return;
+            const focusAfterClose = showArchive.value;
+            showArchive.value = false;
+            notice.value =
+                mode === 'archive'
+                    ? L(
+                          '检测器已从常用列表删除，可在“已删除”中恢复。历史仍按保留期限保存。',
+                          'Detector removed from the visible list. Restore it from Deleted; history keeps its retention period.'
+                      )
+                    : L(
+                          '检测器已恢复显示，凭据仍为已撤销状态。',
+                          'Detector restored to the visible list. Its credentials remain revoked.'
+                      );
+            const refreshRequest = reloadAfterMutation();
+            await nextTick();
+            if (active && focusAfterClose && generation === lifecycle)
+                overviewHeading.value?.focus();
+            await refreshRequest;
+        } catch (error) {
+            if (active && !controller.signal.aborted && generation === lifecycle)
+                archiveError.value = ['agent_must_be_revoked', 'agent_has_active_lease'].includes(
+                    error?.message
+                )
+                    ? error.message
+                    : 'unconfirmed';
+        } finally {
+            if (mutationController === controller) {
+                mutationController = null;
+                archiving.value = false;
             }
         }
     }
@@ -473,7 +676,7 @@
         mutationController = null;
         clearInterval(clock);
         clearInterval(refreshTimer);
-        creating.value = revoking.value = false;
+        creating.value = revoking.value = archiving.value = false;
         document.removeEventListener('visibilitychange', visibilityChanged);
         window.removeEventListener('beforeunload', beforeUnload);
         for (const [url, timer] of downloadUrls) {
@@ -483,9 +686,13 @@
         downloadUrls.clear();
         clearEnrollment();
         showRevoke.value = false;
+        showArchive.value = false;
         historyTrigger = null;
     }
     onMounted(() => {
+        const preferences = readDetectorView();
+        view.value = preferences.view;
+        visibleColumns.value = preferences.columns;
         mounted = true;
         start();
     });
@@ -498,8 +705,9 @@
 
 <template>
     <section
+        ref="settingsRoot"
         data-testid="detector-settings"
-        class="detector-settings space-y-6 text-sm text-gray-700 dark:text-gray-200"
+        class="detector-settings min-w-0 max-w-full space-y-6 text-sm text-gray-700 dark:text-gray-200"
     >
         <header class="space-y-2">
             <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
@@ -543,7 +751,9 @@
             }}
         </div>
         <DetectorPairingWizard
-            :enabled="storageReady && !creating && !revoking && !showEnrollment"
+            :enabled="
+                storageReady && !mutationBusy && !showEnrollment && !showArchive && !showRevoke
+            "
             @agents-changed="reloadAfterMutation"
         />
         <details class="detector-card">
@@ -575,7 +785,12 @@
                         class="detector-button"
                         type="submit"
                         :disabled="
-                            !storageReady || !validName || creating || revoking || showEnrollment
+                            !storageReady ||
+                            !validName ||
+                            mutationBusy ||
+                            showEnrollment ||
+                            showArchive ||
+                            showRevoke
                         "
                     >
                         {{ creating ? L('正在添加…', 'Adding…') : L('添加检测器', 'Add detector') }}
@@ -602,7 +817,11 @@
         <p v-if="notice" role="status" class="detector-card">{{ notice }}</p>
         <template v-if="storageReady">
             <div class="flex flex-wrap items-center justify-between gap-3">
-                <h4 class="font-semibold text-gray-900 dark:text-white">
+                <h4
+                    ref="overviewHeading"
+                    tabindex="-1"
+                    class="rounded font-semibold text-gray-900 dark:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                >
                     {{ L('我的检测器', 'My detectors')
                     }}<span v-if="overview"> · {{ overview.total }}</span>
                 </h4>
@@ -624,6 +843,224 @@
                         {{ overviewBusy ? L('刷新中…', 'Refreshing…') : L('刷新', 'Refresh') }}
                     </button>
                 </div>
+            </div>
+            <div class="detector-card min-w-0 space-y-4">
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div
+                        class="flex flex-wrap gap-2"
+                        role="group"
+                        :aria-label="L('检测器视图', 'Detector view')"
+                    >
+                        <button
+                            type="button"
+                            data-testid="detector-view-cards"
+                            class="detector-button"
+                            :class="{ 'detector-primary': view === 'cards' }"
+                            :aria-pressed="view === 'cards'"
+                            @click="changeView('cards')"
+                        >
+                            {{ L('卡片', 'Cards') }}
+                        </button>
+                        <button
+                            type="button"
+                            data-testid="detector-view-list"
+                            class="detector-button"
+                            :class="{ 'detector-primary': view === 'list' }"
+                            :aria-pressed="view === 'list'"
+                            @click="changeView('list')"
+                        >
+                            {{ L('列表', 'List') }}
+                        </button>
+                    </div>
+                    <details
+                        v-if="view === 'list'"
+                        class="min-w-0 rounded-lg border border-gray-200 px-3 dark:border-gray-700"
+                    >
+                        <summary
+                            data-testid="detector-columns-toggle"
+                            class="min-h-11 cursor-pointer rounded py-3 font-medium"
+                        >
+                            {{ L('显示列', 'Columns') }}
+                        </summary>
+                        <fieldset class="grid gap-1 pb-3 sm:grid-cols-2">
+                            <legend class="pb-2 text-xs text-gray-600 dark:text-gray-400">
+                                {{ L('名称和操作始终显示', 'Name and actions are always shown') }}
+                            </legend>
+                            <label
+                                v-for="column in columnOptions"
+                                :key="column.key"
+                                class="flex min-h-11 cursor-pointer items-center gap-2"
+                            >
+                                <input
+                                    type="checkbox"
+                                    class="h-4 w-4 shrink-0"
+                                    :data-testid="`detector-column-${column.key}`"
+                                    :checked="visibleColumns.includes(column.key)"
+                                    @change="toggleColumn(column.key, $event.target.checked)"
+                                />{{ column.label }}
+                            </label>
+                        </fieldset>
+                    </details>
+                </div>
+                <p class="text-xs text-gray-600 dark:text-gray-400">
+                    {{
+                        L(
+                            '视图与列偏好保存在当前站点的此浏览器管理视图中。',
+                            'View and column preferences are saved in this browser for this site’s management view.'
+                        )
+                    }}
+                </p>
+                <p v-if="preferenceError" role="status" class="text-xs">
+                    {{
+                        L(
+                            '浏览器无法保存偏好；当前选择在本次页面中仍有效。',
+                            'The browser could not save preferences. Your selection still applies to this page.'
+                        )
+                    }}
+                </p>
+                <form
+                    class="flex flex-col gap-2 sm:flex-row sm:items-end"
+                    @submit.prevent="applyFilters"
+                >
+                    <div class="min-w-0 flex-1 space-y-1">
+                        <label for="detector-search" class="block font-medium">{{
+                            L('搜索检测器', 'Search detectors')
+                        }}</label>
+                        <input
+                            id="detector-search"
+                            v-model="searchText"
+                            data-testid="detector-search"
+                            class="detector-input w-full"
+                            type="search"
+                            maxlength="80"
+                            autocomplete="off"
+                            :placeholder="L('名称、版本或平台', 'Name, version or platform')"
+                        />
+                    </div>
+                    <button
+                        type="submit"
+                        class="detector-button"
+                        data-testid="detector-search-submit"
+                    >
+                        {{ L('搜索', 'Search') }}
+                    </button>
+                </form>
+                <p v-if="filterError" role="alert" class="detector-error">
+                    {{
+                        L(
+                            '关键词最多 80 个字符，且不能包含控制字符。',
+                            'Search supports up to 80 characters and no control characters.'
+                        )
+                    }}
+                </p>
+                <div class="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <div class="min-w-0 space-y-1">
+                        <label for="detector-status-filter" class="block font-medium">{{
+                            L('通信状态', 'Communication state')
+                        }}</label>
+                        <select
+                            id="detector-status-filter"
+                            data-testid="detector-status-filter"
+                            class="detector-input w-full"
+                            :value="statusFilter"
+                            @change="changeFilter('status', $event.target.value)"
+                        >
+                            <option value="all">{{ L('全部状态', 'All states') }}</option>
+                            <option v-for="state in agentStates" :key="state" :value="state">
+                                {{ statusText(state) }}
+                            </option>
+                        </select>
+                    </div>
+                    <div class="min-w-0 space-y-1">
+                        <label for="detector-visibility-filter" class="block font-medium">{{
+                            L('显示范围', 'Visibility')
+                        }}</label>
+                        <select
+                            id="detector-visibility-filter"
+                            data-testid="detector-visibility-filter"
+                            class="detector-input w-full"
+                            :value="visibilityFilter"
+                            @change="changeFilter('visibility', $event.target.value)"
+                        >
+                            <option value="visible">{{ L('常用列表', 'Visible') }}</option>
+                            <option value="hidden">
+                                {{ L('已删除（可恢复）', 'Deleted (restorable)') }}
+                            </option>
+                            <option value="all">
+                                {{ L('全部（含已删除）', 'All, including deleted') }}
+                            </option>
+                        </select>
+                    </div>
+                    <div class="min-w-0 space-y-1">
+                        <label for="detector-sort" class="block font-medium">{{
+                            L('排序字段', 'Sort by')
+                        }}</label>
+                        <select
+                            id="detector-sort"
+                            data-testid="detector-sort"
+                            class="detector-input w-full"
+                            :value="sortKey"
+                            @change="changeSort($event.target.value, sortDirection)"
+                        >
+                            <option
+                                v-for="option in sortOptions"
+                                :key="option.key"
+                                :value="option.key"
+                            >
+                                {{ option.label }}
+                            </option>
+                        </select>
+                    </div>
+                    <div class="min-w-0 space-y-1">
+                        <label for="detector-direction" class="block font-medium">{{
+                            L('排序方向', 'Sort direction')
+                        }}</label>
+                        <select
+                            id="detector-direction"
+                            data-testid="detector-direction"
+                            class="detector-input w-full"
+                            :value="sortDirection"
+                            @change="changeSort(sortKey, $event.target.value)"
+                        >
+                            <option value="asc">{{ L('升序', 'Ascending') }}</option>
+                            <option value="desc">{{ L('降序', 'Descending') }}</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <p
+                        v-if="overview"
+                        data-testid="detector-overview-total"
+                        role="status"
+                        aria-atomic="true"
+                    >
+                        {{ L('匹配检测器：', 'Matching detectors: ') }}{{ overview.total
+                        }}<span v-if="appliedQuery">
+                            · {{ L('关键词：', 'Search: ')
+                            }}<span class="break-all">{{ appliedQuery }}</span></span
+                        >
+                    </p>
+                    <button
+                        v-if="hasFilters || searchText"
+                        type="button"
+                        data-testid="detector-filters-reset"
+                        class="detector-button"
+                        @click="resetFilters"
+                    >
+                        {{ L('重置筛选', 'Reset filters') }}
+                    </button>
+                </div>
+                <p
+                    v-if="visibilityFilter !== 'visible'"
+                    class="text-xs leading-relaxed text-gray-600 dark:text-gray-400"
+                >
+                    {{
+                        L(
+                            '已删除项目只是从常用列表隐藏，可恢复显示；恢复不会重新授权凭据。检测历史仍按 7 天保留期限保存。',
+                            'Deleted items are hidden from the visible list and can be restored. Restoring does not reauthorize credentials. Detection history keeps its 7-day retention period.'
+                        )
+                    }}
+                </p>
             </div>
             <p class="text-xs leading-relaxed text-gray-500 dark:text-gray-400">
                 {{
@@ -659,13 +1096,35 @@
             </p>
             <p v-else-if="overview && !overview.agents.length" class="detector-card">
                 {{
-                    L(
-                        '暂无检测器。添加并启动后，即可在节点检测中选择。',
-                        'No detectors yet. Add and start one to select it for node checks.'
-                    )
+                    hasFilters
+                        ? L(
+                              '没有符合当前筛选的检测器。可重置筛选或切换显示范围。',
+                              'No detectors match these filters. Reset filters or change visibility.'
+                          )
+                        : L(
+                              '暂无检测器。添加并启动后，即可在节点检测中选择。',
+                              'No detectors yet. Add and start one to select it for node checks.'
+                          )
                 }}
             </p>
-            <div class="grid gap-4 lg:grid-cols-2">
+            <DetectorTable
+                v-if="view === 'list' && overview?.agents.length"
+                :agents="overview.agents"
+                :columns="tableColumns"
+                :sort="sortKey"
+                :direction="sortDirection"
+                :busy="mutationBusy"
+                :agent-status="agentStatus"
+                :agent-stale="agentStale"
+                :date="date"
+                :iso="iso"
+                @sort="changeSort"
+                @history="openHistory"
+                @revoke="requestRevoke"
+                @archive="requestArchive"
+                @restore="requestArchive($event, 'restore')"
+            />
+            <div v-if="view === 'cards'" class="grid gap-4 lg:grid-cols-2">
                 <article
                     v-for="agent in overview?.agents || []"
                     :key="agent.id"
@@ -673,7 +1132,9 @@
                     class="detector-card min-w-0 space-y-4"
                 >
                     <div class="flex flex-wrap items-start justify-between gap-3">
-                        <h5 class="min-w-0 break-words font-semibold text-gray-900 dark:text-white">
+                        <h5
+                            class="min-w-0 max-w-full [overflow-wrap:anywhere] font-semibold text-gray-900 dark:text-white"
+                        >
                             {{ agent.name }}
                         </h5>
                         <span
@@ -685,6 +1146,9 @@
                             >{{ agentStatus(agent) }}</span
                         >
                     </div>
+                    <p v-if="agent.hidden" class="text-xs font-medium">
+                        {{ L('已删除 · 可恢复', 'Deleted · restorable') }}
+                    </p>
                     <dl class="grid gap-2 text-xs leading-relaxed">
                         <div>
                             <dt>
@@ -731,6 +1195,10 @@
                                 }}</time>
                             </dd>
                         </div>
+                        <div>
+                            <dt>{{ L('上报能力', 'Reported capabilities') }}</dt>
+                            <dd>{{ L('未知（尚未上报）', 'Unknown (not reported)') }}</dd>
+                        </div>
                     </dl>
                     <p
                         v-if="agent.taskCounts"
@@ -749,13 +1217,31 @@
                             {{ L('检测记录', 'Detection history') }}
                         </button>
                         <button
-                            v-if="!agent.revokedAt && agent.status !== 'revoked'"
+                            v-if="!agent.hidden && !agent.revokedAt && agent.status !== 'revoked'"
                             :data-testid="`detector-revoke-${agent.id}`"
                             class="detector-button text-red-600 dark:text-red-400"
-                            :disabled="creating || revoking"
+                            :disabled="mutationBusy"
                             @click="requestRevoke(agent)"
                         >
                             {{ L('撤销', 'Revoke') }}
+                        </button>
+                        <button
+                            v-else-if="agent.hidden"
+                            :data-testid="`detector-restore-${agent.id}`"
+                            class="detector-button"
+                            :disabled="mutationBusy"
+                            @click="requestArchive(agent, 'restore')"
+                        >
+                            {{ L('恢复', 'Restore') }}
+                        </button>
+                        <button
+                            v-else
+                            :data-testid="`detector-archive-${agent.id}`"
+                            class="detector-button text-red-700 dark:text-red-300"
+                            :disabled="mutationBusy"
+                            @click="requestArchive(agent)"
+                        >
+                            {{ L('删除', 'Delete') }}
                         </button>
                     </div>
                 </article>
@@ -1108,6 +1594,83 @@
             >
         </Modal>
         <Modal
+            :show="showArchive"
+            :close-on-confirm="false"
+            @update:show="(value) => (showArchive = value)"
+        >
+            <template #title
+                ><h3 class="text-lg font-semibold">
+                    {{
+                        archiveMode === 'archive'
+                            ? L('删除已撤销检测器？', 'Delete revoked detector?')
+                            : L('恢复已删除检测器？', 'Restore deleted detector?')
+                    }}
+                </h3></template
+            >
+            <template #body
+                ><div class="space-y-3 text-sm">
+                    <p class="[overflow-wrap:anywhere] font-medium">{{ archiveTarget?.name }}</p>
+                    <p>
+                        {{
+                            archiveMode === 'archive'
+                                ? L(
+                                      '此操作将从常用列表隐藏检测器。你可在“已删除”中恢复显示，检测历史仍按 7 天保留期限保存。凭据保持已撤销状态。',
+                                      'This hides the detector from the visible list. You can restore it from Deleted, and detection history keeps its 7-day retention period. Credentials remain revoked.'
+                                  )
+                                : L(
+                                      '恢复后会重新显示在常用列表中。凭据仍然已撤销，不会恢复连接权限，检测历史保留期限不变。',
+                                      'The detector will return to the visible list. Its credentials remain revoked; connection access and history retention do not change.'
+                                  )
+                        }}
+                    </p>
+                    <p v-if="archiveError" role="alert" class="detector-error">
+                        {{
+                            archiveError === 'agent_must_be_revoked'
+                                ? L(
+                                      '请先撤销检测器，再执行删除。',
+                                      'Revoke this detector before deleting it.'
+                                  )
+                                : archiveError === 'agent_has_active_lease'
+                                  ? L(
+                                        '检测器仍有活跃任务租约。请稍后刷新列表核对，再手动重试。',
+                                        'This detector still has an active task lease. Refresh later to verify, then retry manually.'
+                                    )
+                                  : L(
+                                        '操作未确认成功，请刷新列表核对后重试。请求不会自动重试。',
+                                        'The action was not confirmed. Refresh the list to verify before retrying. This request is not retried automatically.'
+                                    )
+                        }}
+                    </p>
+                </div></template
+            >
+            <template #footer
+                ><div class="flex flex-wrap gap-3">
+                    <button
+                        data-testid="detector-cancel-archive"
+                        class="detector-button"
+                        @click="showArchive = false"
+                    >
+                        {{ L('取消', 'Cancel') }}
+                    </button>
+                    <button
+                        data-testid="detector-confirm-archive"
+                        class="detector-button"
+                        :class="archiveMode === 'archive' ? 'detector-danger' : 'detector-primary'"
+                        :disabled="archiving"
+                        @click="archiveAgent"
+                    >
+                        {{
+                            archiving
+                                ? L('处理中…', 'Working…')
+                                : archiveMode === 'archive'
+                                  ? L('确认删除', 'Confirm delete')
+                                  : L('确认恢复', 'Confirm restore')
+                        }}
+                    </button>
+                </div></template
+            >
+        </Modal>
+        <Modal
             :show="showRevoke"
             :close-on-confirm="false"
             @update:show="(value) => (showRevoke = value)"
@@ -1177,11 +1740,18 @@
     .detector-error {
         @apply space-y-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200;
     }
+    .detector-input {
+        @apply min-h-11 min-w-0 max-w-full rounded-lg border border-gray-300 bg-white px-3 dark:border-gray-600 dark:bg-gray-800;
+    }
     dt {
         @apply text-gray-500 dark:text-gray-400;
     }
+    dl > div {
+        min-width: 0;
+    }
     dd {
         @apply text-gray-900 dark:text-gray-100;
+        overflow-wrap: anywhere;
     }
     :deep(.observation-report) {
         min-width: 0;
@@ -1192,7 +1762,8 @@
     }
     button:focus-visible,
     input:focus-visible,
-    select:focus-visible {
+    select:focus-visible,
+    summary:focus-visible {
         @apply outline outline-2 outline-offset-2 outline-indigo-500;
     }
     @media (prefers-reduced-motion: reduce) {

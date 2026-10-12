@@ -15,3 +15,20 @@ jobs:
           node-version: '22'
       - name: Test HTTP boundaries and real SQLite lease transitions
         run: node --test tests/probes/*.check.mjs
+  browser-fixtures:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Prepare Chromium for isolated browser fixtures
+        run: npx playwright install --with-deps chromium
+      - name: Check management, pairing and table interactions against mock APIs
+        run: |
+          node tests/browser/detector-management.mjs
+          node tests/browser/detector-pairing.mjs
+          node tests/browser/detector-table-archive.mjs

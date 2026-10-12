@@ -1,5 +1,6 @@
 import { ProbeStore, PROBE_HISTORY_STATES } from './probe-store.js';
 import { ProbePairingStore } from './probe-pairing-store.js';
+import { agentManagementQuery, agentActionConfirmation } from './probe-agent-management.js';
 import { PAIRING_BODY_BYTES, pairingBody } from './probe-pairing.js';
 import { OBSERVATIONS_VERSION, OBSERVATION_SOURCES } from './probe-observations.js';
 import { PROBE_TYPES, PROBE_SERVICES, MAX_NODES, MAX_AGENTS, MAX_ATTEMPTS, MAX_JOB_BYTES, normalizeOptions, probeError, requireValue } from './probe-contract.js';
@@ -128,7 +129,12 @@ export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNod
             if (path[0] === 'agents') {
                 if (path.length === 2 && path[1] === 'overview' && method === 'GET') {
                     const { offset, limit } = managementPage(url.searchParams);
-                    return json({ success: true, data: await store.agentsOverview(offset, limit) });
+                    return json({ success: true, data: await store.agentsOverview(offset, limit, agentManagementQuery(url.searchParams)) });
+                }
+                if (path.length === 3 && ['archive', 'restore'].includes(path[2]) && method === 'POST') {
+                    requireValue(/^[\w-]{1,128}$/.test(path[1]) && !url.search, 'invalid_query');
+                    agentActionConfirmation(await readProbeJson(request, 256));
+                    return json({ success: true, data: await store.archiveAgent(path[1], path[2] === 'archive') });
                 }
                 if (path.length === 3 && path[2] === 'history' && method === 'GET') {
                     requireValue(/^[\w-]{1,128}$/.test(path[1]), 'not_found', 404);
