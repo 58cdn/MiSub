@@ -127,6 +127,14 @@ func startKernel(parent context.Context, binary string, proxy map[string]any) (*
 		cleanFailure()
 		return nil, err
 	}
+	stub, err := newKernelLoopback()
+	if err != nil {
+		l1.Close()
+		l2.Close()
+		cleanFailure()
+		return nil, errors.New("kernel_failed")
+	}
+	defer stub.Close()
 	cfg := map[string]any{
 		"port": port, "socks-port": 0, "mixed-port": 0, "redir-port": 0, "tproxy-port": 0,
 		"allow-lan": false, "bind-address": "127.0.0.1", "skip-auth-prefixes": []string{},
@@ -135,8 +143,10 @@ func startKernel(parent context.Context, binary string, proxy map[string]any) (*
 		"external-controller-cors": map[string]any{"allow-origins": []string{}, "allow-private-network": false},
 		"find-process-mode":        "off", "geo-auto-update": false,
 		"dns": map[string]any{"enable": false}, "tun": map[string]any{"enable": false},
+		"sniffer": map[string]any{"enable": false},
 		"profile": map[string]any{"store-selected": false, "store-fake-ip": false},
-		"proxies": []any{proxy}, "proxy-groups": []any{}, "rules": []string{"MATCH,probe-target"},
+		"proxies": []any{proxy, stub.proxy()}, "proxy-groups": []any{},
+		"rules": []string{"DOMAIN," + stub.host + "," + stub.name, "MATCH,probe-target"},
 	}
 	encoded, err := json.Marshal(cfg)
 	if err != nil {
@@ -168,6 +178,10 @@ func startKernel(parent context.Context, binary string, proxy map[string]any) (*
 	go func() { _ = wait(); close(k.done) }()
 	startup, finishStartup := context.WithTimeout(ctx, 10*time.Second)
 	err = waitKernelListeners(startup, k.done, controller, proxyURL.Host, secret)
+	if err == nil {
+		err = waitKernelRoute(startup, k.done, proxyURL, stub)
+	}
+	stub.Close()
 	finishStartup()
 	if err != nil {
 		k.Close()

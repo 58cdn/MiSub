@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -41,7 +42,9 @@ func fixtureKernel(t *testing.T) string {
 func TestEmbeddedKernelRoutesOnlyThroughNode(t *testing.T) {
 	binary := fixtureKernel(t)
 	var seen atomic.Int32
+	var nodeRequests atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nodeRequests.Add(1)
 		// Mihomo HTTP outbound uses CONNECT even for a plain HTTP target.
 		// Implement the tunnel; a web server response is not a proxy fixture.
 		if r.Method != http.MethodConnect {
@@ -83,6 +86,31 @@ func TestEmbeddedKernelRoutesOnlyThroughNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer kernel.Close()
+	if nodeRequests.Load() != 0 {
+		t.Fatal("kernel startup contacted the selected node")
+	}
+	configBytes, err := os.ReadFile(filepath.Join(kernel.dir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Proxies []struct {
+			Name   string `json:"name"`
+			Server string `json:"server"`
+			Port   int    `json:"port"`
+		} `json:"proxies"`
+	}
+	if json.Unmarshal(configBytes, &config) != nil || len(config.Proxies) != 2 {
+		t.Fatal("expected the selected node and the private readiness endpoint")
+	}
+	readyProxy := config.Proxies[1]
+	if readyProxy.Name == "probe-target" || readyProxy.Server != "127.0.0.1" {
+		t.Fatal("readiness endpoint was not isolated from the selected node")
+	}
+	if conn, err := net.DialTimeout("tcp4", net.JoinHostPort(readyProxy.Server, strconv.Itoa(readyProxy.Port)), time.Second); err == nil {
+		conn.Close()
+		t.Fatal("readiness listener survived startup")
+	}
 	req, _ := http.NewRequestWithContext(ctx, "GET", "http://fixture.invalid/check", nil)
 	resp, err := kernel.Client.Do(req)
 	if err != nil {
@@ -90,7 +118,7 @@ func TestEmbeddedKernelRoutesOnlyThroughNode(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-	if string(body) != "fixture-routed-through-node" || seen.Load() != 1 {
+	if string(body) != "fixture-routed-through-node" || seen.Load() != 1 || nodeRequests.Load() != 1 {
 		t.Fatalf("chosen-proxy fixture failed: status=%d, received=%d", resp.StatusCode, seen.Load())
 	}
 }
