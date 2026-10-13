@@ -309,22 +309,35 @@ class ReleaseGateTests(unittest.TestCase):
                 gate.publish(self.root, VERSION, COMMIT, self.root / "bundle", self.root / "logs")
             mutate.assert_not_called()
 
+    def remote_fixture(self, output, names, draft=True):
+        return {"id": 123, "url": "https://api.github.com/repos/58cdn/MiSub/releases/123",
+                "upload_url": "https://uploads.github.com/repos/58cdn/MiSub/releases/123/assets{?name,label}",
+                "draft": draft, "tag_name": "probe-v0.2.0", "prerelease": False,
+                "assets": [{"id": 1000 + index, "url": "https://api.github.com/repos/58cdn/MiSub/releases/assets/" + str(1000 + index),
+                            "name": name, "size": gate.record(output / name)["size"],
+                            "digest": "sha256:" + gate.record(output / name)["sha256"], "state": "uploaded"}
+                           for index, name in enumerate(names)]}
+
+    def publish_responses(self, output, names, final=None, created=None):
+        return [b"{}", json.dumps(created or self.remote_fixture(output, [])).encode(),
+                *[b"{}" for _ in names], json.dumps(final or self.remote_fixture(output, names)).encode(),
+                json.dumps(self.remote_fixture(output, names, draft=False)).encode()]
+
     def test_remote_asset_mismatch_cannot_publish_draft(self):
         output = self.release_fixture()
         names = gate.verify_release_files(output, VERSION, COMMIT)
-        release = {"draft": True, "tag_name": "probe-v0.2.0", "assets": [
-            {"name": name, "size": gate.record(output / name)["size"], "digest": "sha256:" + gate.record(output / name)["sha256"], "state": "uploaded"}
-            for name in names]}
+        release = self.remote_fixture(output, names)
         release["assets"][0]["digest"] = "sha256:" + "0" * 64
         absent = mock.Mock(stdout=b"[[]]")
-        with mock.patch.object(gate, "verify_provenance", return_value=names), mock.patch.object(gate.subprocess, "run", return_value=absent), mock.patch.object(gate, "run", side_effect=[b"{}", b"", json.dumps(release).encode()]) as mutate:
+        with mock.patch.object(gate, "verify_provenance", return_value=names), mock.patch.object(gate.subprocess, "run", return_value=absent), mock.patch.object(gate, "run", side_effect=self.publish_responses(output, names, final=release)) as mutate:
             with self.assertRaisesRegex(gate.GateError, "remote_asset"):
                 gate.publish(output, VERSION, COMMIT, self.root / "bundle", self.root / "logs")
-        self.assertEqual(mutate.call_count, 3)
+        self.assertEqual(mutate.call_count, len(names) + 3)
         self.assertEqual(mutate.call_args_list[0].args[0][:4], ["gh", "api", "--method", "POST"])
         for call in mutate.call_args_list:
             self.assertNotIn("--force", call.args[0])
             self.assertNotIn("--draft=false", call.args[0])
+            self.assertNotIn("PATCH", call.args[0])
 
     def test_tag_creation_race_failure_stops_before_release_create(self):
         absent = mock.Mock(stdout=b"[[]]")
@@ -336,16 +349,38 @@ class ReleaseGateTests(unittest.TestCase):
     def test_publish_requires_remote_exact_set_then_marks_only_new_draft_public(self):
         output = self.release_fixture()
         names = gate.verify_release_files(output, VERSION, COMMIT)
-        release = {"draft": True, "tag_name": "probe-v0.2.0", "assets": [
-            {"name": name, "size": gate.record(output / name)["size"], "digest": "sha256:" + gate.record(output / name)["sha256"], "state": "uploaded"}
-            for name in names]}
         absent = mock.Mock(stdout=b"[[]]")
-        with mock.patch.object(gate, "verify_provenance", return_value=names), mock.patch.object(gate.subprocess, "run", return_value=absent), mock.patch.object(gate, "run", side_effect=[b"{}", b"", json.dumps(release).encode(), b""]) as mutate:
+        with mock.patch.object(gate, "verify_provenance", return_value=names), mock.patch.object(gate.subprocess, "run", return_value=absent), mock.patch.object(gate, "run", side_effect=self.publish_responses(output, names)) as mutate:
             result = gate.publish(output, VERSION, COMMIT, self.root / "bundle", self.root / "logs")
         self.assertTrue(result["releaseReady"])
-        self.assertEqual(mutate.call_count, 4)
-        self.assertIn("--verify-tag", mutate.call_args_list[1].args[0])
-        self.assertEqual(mutate.call_args_list[-1].args[0], ["gh", "release", "edit", "probe-v0.2.0", "--repo", gate.REPOSITORY, "--draft=false", "--latest=false"])
+        self.assertEqual(result["releaseId"], 123)
+        self.assertEqual(mutate.call_count, len(names) + 4)
+        self.assertEqual(mutate.call_args_list[-1].args[0], ["gh", "api", "--hostname", "github.com", "--method", "PATCH",
+                         "https://api.github.com/repos/58cdn/MiSub/releases/123", "-F", "draft=false", "-f", "make_latest=false"])
+        for call in mutate.call_args_list:
+            command = [str(arg) for arg in call.args[0]]
+            self.assertFalse(any("/releases/tags/" in arg for arg in command))
+        for call in mutate.call_args_list[2:2 + len(names)]:
+            command = [str(arg) for arg in call.args[0]]
+            self.assertTrue(command[6].startswith("https://uploads.github.com/repos/58cdn/MiSub/releases/123/assets?name="))
+            self.assertIn("--input", command)
+
+    def test_new_draft_rejects_untrusted_id_host_path_or_existing_assets(self):
+        output = self.release_fixture()
+        names = gate.verify_release_files(output, VERSION, COMMIT)
+        for change in ({"id": True}, {"id": -1}, {"draft": False}, {"tag_name": "probe-v9.9.9"},
+                       {"url": "https://api.github.com/repos/other/repo/releases/123"},
+                       {"upload_url": "https://example.invalid/upload"},
+                       {"upload_url": "https://uploads.github.com/repos/58cdn/MiSub/releases/456/assets{?name,label}"},
+                       {"assets": self.remote_fixture(output, names)["assets"]}):
+            created = self.remote_fixture(output, [])
+            created.update(change)
+            with self.subTest(change=change), mock.patch.object(gate, "verify_provenance", return_value=names), \
+                 mock.patch.object(gate.subprocess, "run", return_value=mock.Mock(stdout=b"[[]]")), \
+                 mock.patch.object(gate, "run", side_effect=self.publish_responses(output, names, created=created)) as mutate:
+                with self.assertRaises(gate.GateError):
+                    gate.publish(output, VERSION, COMMIT, self.root / "bundle", self.root / "logs")
+                self.assertEqual(mutate.call_count, 2)
 
 
 if __name__ == "__main__":
