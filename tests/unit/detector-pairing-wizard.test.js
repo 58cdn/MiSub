@@ -151,14 +151,14 @@ describe('detector pairing wizard', () => {
         expect(insecure.text()).toContain('Pairing requires this site to be accessed over HTTPS');
         expect(calls).toHaveLength(0);
     });
-    it('creates a synthetic-release window only by explicit action and displays only its public ID', async () => {
+    it('creates a synthetic-release window only by explicit action and displays a verified bootstrap command', async () => {
         const wrapper = create();
         await start(wrapper);
         expect(posts()).toHaveLength(1);
         expect(posts()[0].url).toBe('/api/probes/v1/pairings/windows');
         expect(JSON.parse(posts()[0].options.body)).toEqual({});
         expect(get(wrapper, 'pairing-window-id').text()).toContain(windowId);
-        expect(wrapper.find('[data-testid="pairing-command"]').exists()).toBe(false);
+        expect(get(wrapper, 'pairing-command').text()).toContain('/probe-v9.9.9/install.sh');
         expect(wrapper.text()).not.toContain('misub-probe --pair');
         expect(get(wrapper, 'pairing-status').text()).toContain('Waiting for a client code');
         expect(wrapper.text()).toContain(
@@ -430,6 +430,8 @@ describe('detector pairing wizard', () => {
         await vi.advanceTimersByTimeAsync(301000);
         await flushPromises();
         expect(get(wrapper, 'pairing-status').text()).toBe('Pairing expired');
+        expect(wrapper.find('[data-testid="pairing-command"]').exists()).toBe(false);
+        expect(get(wrapper, 'pairing-resume-command').text()).not.toContain(windowId);
         const count = calls.length;
         await vi.advanceTimersByTimeAsync(60000);
         expect(calls).toHaveLength(count);

@@ -12,6 +12,8 @@ MiSub 主应用与 MiSub Probe 独立维护版本；检测器 Git 标签采用 `
 
 ### 新增
 
+- 检测器安装页提供可完整复制、展开审阅的跨平台下载命令，核对固定发行资产的大小、SHA256 和客户端能力后配对、安装与启动；已有配置可独立恢复，安装入口仍由已核实的发行目录控制。（[#28]）
+- 检测器新增原生 `--setup` 与 `--setup --resume`，使用同用户跨进程锁保护安装流程；恢复校验配置路径、版本及可执行文件摘要，保留已有身份。启动完成要求确认运行状态及有效进程 PID。（[#28]）
 - 检测器新增 Windows amd64 原生目标，支持 Windows 10 / Windows Server 2016 及更新版本的 x64 系统，内置锁定的 Mihomo compatible 内核；提供 PowerShell 配对指引，尚未提供 Windows 发行包。（[#22]）
 - Windows 检测器支持普通用户显式安装、启动、停止、状态、重装与卸载；默认在 `%LOCALAPPDATA%\MiSubProbe` 保存私密配置与安装文件，运行于同一登录会话的无窗口进程。安装不自动运行，重装和卸载须先停止，卸载保留配置与服务器身份。（[#22]）
 - 已撤销且没有活跃任务租约的检测器可经确认从常用列表删除，并在“已删除”中恢复显示；检测历史仍按原七天期限保留，恢复后凭据保持已撤销。（[#23]）
@@ -98,3 +100,4 @@ MiSub 主应用与 MiSub Probe 独立维护版本；检测器 Git 标签采用 `
 [#23]: https://github.com/58cdn/MiSub/pull/23
 [#24]: https://github.com/58cdn/MiSub/pull/24
 [#26]: https://github.com/58cdn/MiSub/pull/26
+[#28]: https://github.com/58cdn/MiSub/pull/28

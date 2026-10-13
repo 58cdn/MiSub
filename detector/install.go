@@ -130,7 +130,7 @@ func installationAction(selected, visited map[string]bool, arguments int) (strin
 		if name == "json" && action == "status" {
 			continue
 		}
-		if name == "config" && (action == "install" || action == "reinstall") {
+		if name == "config" && (action == "install" || action == "reinstall" || action == "resume-install") {
 			continue
 		}
 		return "", errors.New("management_flags_conflict")
@@ -151,6 +151,39 @@ func (m *installManager) execute(ctx context.Context, action string) (installati
 				status.Version = g.Version
 			}
 		}
+	}
+	if action == "resume-install" {
+		if m.paths.Config == "" || !filepath.IsAbs(m.paths.Config) {
+			return status, errors.New("resume_requires_absolute_config")
+		}
+		if err = m.files.ConfigReady(m.paths.Config); err != nil {
+			return status, err
+		}
+		if manifest != nil {
+			if manifest.ConfigPath != m.paths.Config || status.Version != version {
+				return status, errors.New("resume_installation_identity_mismatch")
+			}
+			sourceHash, sourceErr := bootstrapSourceSHA256(m.paths.Source)
+			if sourceErr != nil {
+				return status, sourceErr
+			}
+			matched := false
+			for _, generation := range manifest.Generations {
+				if generation.ID == manifest.Current && generation.BinarySHA256 == sourceHash {
+					matched = true
+				}
+			}
+			if !matched {
+				return status, errors.New("resume_installation_identity_mismatch")
+			}
+			if err = m.files.Verify(manifest); err != nil {
+				return status, err
+			}
+			status.ExecutablePath = m.paths.binary(manifest.Current)
+			status.Service.State = "not_checked"
+			return status, nil
+		}
+		action = "install"
 	}
 	if action == "install" {
 		if manifest != nil {
@@ -198,6 +231,9 @@ func (m *installManager) execute(ctx context.Context, action string) (installati
 			return status, err
 		}
 		status.Service, err = m.service.Inspect(ctx, servicePath)
+		if err == nil && (status.Service.State != "running" || status.Service.PID <= 0) {
+			return status, errors.New("service_start_not_confirmed")
+		}
 		return status, err
 	case "stop":
 		if err = m.service.Stop(ctx, servicePath); err != nil {
@@ -256,7 +292,11 @@ func manageInstallation(ctx context.Context, action, config string, jsonOutput b
 	if err != nil {
 		return err
 	}
-	files, err := openInstallationStore(paths, action)
+	storeAction := action
+	if storeAction == "resume-install" {
+		storeAction = "install"
+	}
+	files, err := openInstallationStore(paths, storeAction)
 	if err != nil {
 		return err
 	}
@@ -275,7 +315,7 @@ func manageInstallation(ctx context.Context, action, config string, jsonOutput b
 		return nil
 	}
 	_, err = fmt.Fprintf(output, "probe: installed=%t service=%s; server connectivity not checked; login startup not configured\n", status.Installed, status.Service.State)
-	if err == nil && status.ExecutablePath != "" && (action == "install" || action == "reinstall" || action == "status") {
+	if err == nil && status.ExecutablePath != "" && (action == "install" || action == "reinstall" || action == "status" || action == "resume-install") {
 		_, err = fmt.Fprintf(output, "probe: installed executable path (quoted display): %s\n", strconv.Quote(status.ExecutablePath))
 	}
 	if err != nil {

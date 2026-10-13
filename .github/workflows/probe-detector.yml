@@ -66,6 +66,8 @@ jobs:
           python3 scripts/bundle.py '${{ matrix.target }}'
       - name: Test archive verification with offline fixtures
         run: python3 -B -m unittest discover -s scripts -p 'test_*.py' -v
+      - name: Verify Bash bootstrap with offline download and installation fixtures
+        run: /bin/bash bootstrap/test_install.sh
       - name: Unit, race and actual core routing tests
         env:
           MISUB_PROBE_REQUIRE_KERNEL: '1'
@@ -144,6 +146,12 @@ jobs:
           go test -race -count=1 -v ./...
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go vet ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify PowerShell bootstrap fixtures in both supported shells
+        run: |
+          powershell.exe -NoProfile -File bootstrap/test-install-windows.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File bootstrap/test-install-windows.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build standalone executable and native smoke
         env:

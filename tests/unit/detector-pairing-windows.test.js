@@ -131,7 +131,48 @@ describe('verified installation availability', () => {
         await choice.setValue('unix');
         expect(get(wrapper, 'pairing-window-id').text()).toContain(windowId);
         expect(calls).toHaveLength(1);
-        expect(wrapper.html()).not.toMatch(/FIXTURE_PRIVATE_TOKEN|--pair|--install|--token/);
+        expect(wrapper.html()).not.toMatch(
+            /FIXTURE_PRIVATE_TOKEN|\.\\misub-probe-windows-amd64\.exe --pair|misub-probe --pair/
+        );
+        expect(get(wrapper, 'pairing-command').text()).toContain('/probe-v9.9.9/install.sh');
+    });
+    it('copies the complete native Windows setup command and keeps resume independent of the window', async () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        vi.spyOn(navigator, 'clipboard', 'get').mockReturnValue({ writeText });
+        const wrapper = create();
+        await get(wrapper, 'pairing-open').trigger('click');
+        await get(wrapper, 'pairing-terminal').setValue('windows');
+        await get(wrapper, 'pairing-copy-resume').trigger('click');
+        await flushPromises();
+        expect(writeText.mock.calls[0][0]).toContain(
+            "@('--setup', '--resume', '--config', $environment.Config)"
+        );
+        expect(writeText.mock.calls[0][0]).not.toContain(windowId);
+        expect(calls).toHaveLength(0);
+        await get(wrapper, 'pairing-start').trigger('click');
+        await flushPromises();
+        await get(wrapper, 'pairing-copy-command').trigger('click');
+        await flushPromises();
+        expect(writeText.mock.calls[1][0]).toBe(
+            get(wrapper, 'pairing-command').element.textContent
+        );
+        expect(writeText.mock.calls[1][0]).toContain("@('--setup', '--server'");
+        expect(writeText.mock.calls[1][0]).not.toMatch(/install\.ps1|ExecutionPolicy|ScriptBlock/);
+        expect(calls).toHaveLength(1);
+    });
+    it('offers manual full-command review if clipboard access is blocked', async () => {
+        vi.spyOn(navigator, 'clipboard', 'get').mockReturnValue({
+            writeText: vi.fn().mockRejectedValue(new Error('PRIVATE_CLIPBOARD')),
+        });
+        const wrapper = create();
+        await get(wrapper, 'pairing-open').trigger('click');
+        await get(wrapper, 'pairing-copy-resume').trigger('click');
+        await flushPromises();
+        expect(wrapper.get('[role="alert"]').text()).toContain(
+            'copy the complete command manually'
+        );
+        expect(wrapper.text()).not.toContain('PRIVATE_CLIPBOARD');
+        expect(calls).toHaveLength(0);
     });
     it.each([
         "https://bad'host.invalid",

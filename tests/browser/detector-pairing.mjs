@@ -78,6 +78,16 @@ try {
             : {}),
     });
     const context = await browser.newContext({ reducedMotion: 'reduce', serviceWorkers: 'block' });
+    await context.addInitScript(() => {
+        Object.defineProperty(navigator, 'clipboard', {
+            configurable: true,
+            get: () => ({
+                writeText: async (text) => {
+                    window.__fixtureClipboard = text;
+                },
+            }),
+        });
+    });
     await context.routeWebSocket('**/*', (route) => route.close());
     await context.route('**/*', async (route) => {
         const request = route.request(),
@@ -191,6 +201,7 @@ try {
             .waitFor();
         assert.ok(await page.getByTestId('pairing-open').isDisabled());
         assert.equal(await page.getByTestId('pairing-command').count(), 0);
+        assert.equal(await page.getByTestId('pairing-resume-command').count(), 0);
         assert.equal(await page.getByTestId('pairing-start').count(), 0);
         assert.equal(created, 0);
         const before = calls.length;
@@ -250,20 +261,41 @@ try {
         await page.getByTestId('pairing-start').click();
         await page.getByTestId('pairing-window-id').waitFor();
         assert.ok((await page.getByTestId('pairing-window-id').textContent()).includes(windowId));
-        assert.equal(await page.getByTestId('pairing-command').count(), 0);
+        const windowsCommand = await page.getByTestId('pairing-command').textContent();
+        assert.ok(windowsCommand.includes("@('--setup', '--server'"));
+        assert.ok(!/install\.ps1|ExecutionPolicy|EncodedCommand/.test(windowsCommand));
+        await page.getByTestId('pairing-copy-command').click();
+        assert.equal(await page.evaluate(() => window.__fixtureClipboard), windowsCommand);
         assert.equal(created, before + 1);
         await terminal.selectOption('unix');
         assert.ok((await page.getByTestId('pairing-window-id').textContent()).includes(windowId));
+        assert.ok(
+            (await page.getByTestId('pairing-command').textContent()).includes(
+                '/probe-v9.9.9/install.sh'
+            )
+        );
         await terminal.selectOption('windows');
         assert.equal(created, before + 1, 'Switching shell instructions preserves the window');
         await page.getByTestId('pairing-window-id').scrollIntoViewIfNeeded();
+        await page.getByText('Review complete installation command', { exact: true }).click();
         await page.screenshot({
             path: resolve(evidence, `detector-pairing-${name}-window.png`),
         });
         const commandOverflow = await page.evaluate(() =>
             [...document.querySelectorAll('main, section, pre')]
-                .filter((e) => e.scrollWidth > e.clientWidth + 1)
-                .map((e) => e.tagName)
+                .filter(
+                    (e) => e.getBoundingClientRect().width > 0 && e.scrollWidth > e.clientWidth + 1
+                )
+                .map((e) => ({
+                    tag: e.tagName,
+                    width: e.clientWidth,
+                    scrollWidth: e.scrollWidth,
+                    id: e.dataset.testid,
+                    whiteSpace: getComputedStyle(e).whiteSpace,
+                    wordBreak: getComputedStyle(e).wordBreak,
+                    codeWhiteSpace: getComputedStyle(e.firstElementChild || e).whiteSpace,
+                    codeWordBreak: getComputedStyle(e.firstElementChild || e).wordBreak,
+                }))
         );
         assert.deepEqual(commandOverflow, []);
         await page.getByTestId('pairing-code').fill('ZZZZZ-ZZZZZ');
@@ -347,6 +379,8 @@ try {
     expireNext = true;
     await page.getByTestId('pairing-start').click();
     await page.getByText('Pairing expired', { exact: true }).waitFor();
+    assert.equal(await page.getByTestId('pairing-command').count(), 0);
+    assert.ok(!(await page.getByTestId('pairing-resume-command').textContent()).includes(windowId));
     await page.screenshot({ path: resolve(evidence, 'detector-pairing-expired.png') });
     assert.deepEqual(external, []);
     assert.deepEqual(errors, []);
@@ -363,6 +397,9 @@ try {
             'production unreleased catalog blocks every installation window and command',
             'release refresh reads only; advanced manual configuration remains available',
             'synthetic compatible-release metadata only for session regressions',
+            'copies the complete native Windows exe setup command without downloading a ps1',
+            'fixed verified Unix script command and independent resume command',
+            'expired windows remove the executable pairing command',
             'no implicit enrollment or approval',
             'short-code mismatch',
             'explicit comparison and approval',
