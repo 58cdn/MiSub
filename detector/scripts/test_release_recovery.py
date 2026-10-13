@@ -7,6 +7,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import urllib.parse
 from unittest import mock
 
 import release_gate as gate
@@ -76,6 +77,8 @@ class FakeGitHub:
             assert tuple(fields) == ("-F", "draft=false", "-f", "make_latest=false")
             self.published = True
             self.release.update(draft=False, published_at=STAMP)
+            for asset in self.release["assets"]:
+                asset["browser_download_url"] = "https://github.com/58cdn/MiSub/releases/download/probe-v0.2.0/" + urllib.parse.quote(asset["name"], safe="")
             return copy.deepcopy(self.release)
         if endpoint.endswith("/actions/runs/72"):
             if self.change_after_proofs and len(self.proofs) == 26:
@@ -156,6 +159,7 @@ class RecoveryTests(unittest.TestCase):
                         "body": (self.assets / "SOURCE.md").read_text(), "updated_at": STAMP, "created_at": STAMP,
                         "upload_url": "https://uploads.github.com/repos/58cdn/MiSub/releases/123/assets{?name,label}",
                         "assets": [{"id": 1000 + index, "url": recovery.API + "releases/assets/" + str(1000 + index),
+                                    "browser_download_url": "https://github.com/58cdn/MiSub/releases/download/untagged-1daa7c2f58fb9aacf146/" + path.name,
                                     "name": path.name, "size": path.stat().st_size, "digest": "sha256:" + gate.record(path)["sha256"],
                                     "state": "uploaded", "updated_at": STAMP, "download_count": 0}
                                    for index, path in enumerate(sorted(self.assets.iterdir()))]}
@@ -193,6 +197,46 @@ class RecoveryTests(unittest.TestCase):
         writes = [(endpoint, fields) for endpoint, fields in self.client.requests if fields]
         self.assertEqual(writes, [(gate.release_endpoint(DRAFT_ID), ("-F", "draft=false", "-f", "make_latest=false"))])
         self.assertEqual(self.client.requests[-2:], [("repos/58cdn/MiSub/git/ref/tags/probe-v0.2.0", ()), (gate.release_endpoint(DRAFT_ID), ())])
+
+    def published_fixture(self):
+        result = copy.deepcopy(self.release)
+        result.update(draft=False, published_at=STAMP)
+        for asset in result["assets"]:
+            asset["browser_download_url"] = "https://github.com/58cdn/MiSub/releases/download/probe-v0.2.0/" + urllib.parse.quote(asset["name"], safe="")
+        return result
+
+    def test_published_untagged_urls_become_exact_canonical_urls_without_changing_before(self):
+        before = copy.deepcopy(self.release)
+        records = recovery.draft_records(before, DRAFT_ID, VERSION)
+        published = self.published_fixture()
+        recovery.verify_published(before, published, DRAFT_ID, VERSION, records)
+        self.assertEqual(before, self.release)
+        self.assertTrue(all("/download/untagged-1daa7c2f58fb9aacf146/" in asset["browser_download_url"] for asset in before["assets"]))
+
+    def test_published_url_rejects_host_tag_path_encoding_query_and_fragment_changes(self):
+        records = recovery.draft_records(self.release, DRAFT_ID, VERSION)
+        expected = self.published_fixture()["assets"][0]["browser_download_url"]
+        invalid = [None, "", self.release["assets"][0]["browser_download_url"], expected.replace("https://", "http://"),
+                   expected.replace("github.com", "github.com.example.invalid"), expected.replace("github.com", "github.com:443"),
+                   expected.replace("github.com", "attacker@github.com"), expected.replace("58cdn/MiSub", "other/MiSub"),
+                   expected.replace("probe-v0.2.0", "probe-v9.9.9"), expected + "/other", expected + "?download=1", expected + "#fragment",
+                   expected.replace("/download/", "/download%2F"), expected.rsplit("/", 1)[0] + "/different-file"]
+        for url in invalid:
+            published = self.published_fixture()
+            published["assets"][0]["browser_download_url"] = url
+            with self.subTest(url=url), self.assertRaisesRegex(gate.GateError, "download_url_mismatch"):
+                recovery.verify_published(self.release, published, DRAFT_ID, VERSION, records)
+
+    def test_canonical_url_does_not_permit_any_other_asset_identity_or_metadata_change(self):
+        records = recovery.draft_records(self.release, DRAFT_ID, VERSION)
+        changes = [{"id": 99999, "url": recovery.API + "releases/assets/99999"}, {"updated_at": "2026-01-02T00:00:00Z"},
+                   {"state": "new"}, {"size": 1}, {"digest": "sha256:" + "f" * 64}, {"name": "unexpected"},
+                   {"label": "changed"}, {"content_type": "unexpected"}, {"uploader": {"id": 99999}}, {"extra": "changed"}]
+        for change in changes:
+            published = self.published_fixture()
+            published["assets"][0].update(change)
+            with self.subTest(change=change), self.assertRaises(gate.GateError):
+                recovery.verify_published(self.release, published, DRAFT_ID, VERSION, records)
 
     def test_post_publication_read_failure_reports_unknown_without_retry_or_rollback(self):
         original = self.client.json
@@ -271,6 +315,7 @@ class RecoveryTests(unittest.TestCase):
         mutations = [lambda client: client.release.update(updated_at="2026-01-02T00:00:00Z"),
                      lambda client: client.release["assets"][0].update(id=99999, url=recovery.API + "releases/assets/99999"),
                      lambda client: client.release["assets"][0].update(updated_at="2026-01-02T00:00:00Z"),
+                     lambda client: client.release["assets"][0].update(browser_download_url="https://example.invalid/changed"),
                      lambda client: client.release.update(body="changed"),
                      lambda client: client.tag["object"].update(sha="d" * 40),
                      lambda client: client.run.update(run_attempt=2),

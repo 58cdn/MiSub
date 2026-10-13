@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import urllib.parse
 
 import audit_distribution as audit
 import release_gate as gate
@@ -250,9 +251,16 @@ def code_identity():
 def verify_published(before, published, draft_id, version, records):
     gate.verify_remote_release(published, draft_id, version, records, draft=False)
     gate.require(isinstance(published.get("published_at"), str) and published["published_at"], "published_timestamp_missing")
+    download_prefix = "https://github.com/" + gate.REPOSITORY + "/releases/download/probe-v" + version + "/"
+    published_assets = stable_release(published)["assets"]
+    for asset in published_assets:
+        gate.require(asset.get("browser_download_url") == download_prefix + urllib.parse.quote(asset["name"], safe=""),
+                     "published_asset_download_url_mismatch")
+    original_assets = [dict(asset, browser_download_url=download_prefix + urllib.parse.quote(asset["name"], safe=""))
+                       for asset in stable_release(before)["assets"]]
     fields = ("id", "url", "tag_name", "target_commitish", "name", "body", "prerelease", "created_at", "upload_url")
     gate.require(all(before.get(key) == published.get(key) for key in fields)
-                 and stable_release(before)["assets"] == stable_release(published)["assets"], "published_release_identity_changed")
+                 and original_assets == published_assets, "published_release_identity_changed")
 
 
 def recover(source_root, work, version, commit, run_id, draft_id, original_attempt, publish=False):

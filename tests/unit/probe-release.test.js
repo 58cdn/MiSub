@@ -11,7 +11,77 @@ import {
     unpublishedProbeReleaseCatalog,
 } from '../fixtures/probe-release.js';
 
+// Reviewed probe-v0.2.0 bytes: original draft assets were individually attested,
+// and the public fixed-tag downloads matched these digests and lengths.
+const reviewedFiles = {
+    'misub-probe-darwin-amd64': [
+        'ccbbf2c438b5ca8468997cd4a99b63c28e8b021125952a78f018eb67ab80d230',
+        49377200,
+    ],
+    'misub-probe-darwin-arm64': [
+        'b576d2f2d8d0bd5596b02b0b61b00fb55468f17e0a8035545e494482212126f9',
+        46736770,
+    ],
+    'misub-probe-linux-amd64': [
+        '30c6806a91c9749a2f22f4bcff956e315d13340c46f0f7db99ca40616fd38049',
+        49893500,
+    ],
+    'misub-probe-linux-arm64': [
+        'f1e99ad4e3979b814a116adc5e01e61ddb5d8887e2353451683fc3a9e625247b',
+        46006396,
+    ],
+    'misub-probe-windows-amd64.exe': [
+        '73e71b4823b7aa1910733e4b0552c40f04281a5d15cda9aa6eb4b0f8e13c4d08',
+        49074176,
+    ],
+    'install.sh': ['b30e2f17570eb7ac8b4af3151a3bf7c34ddded39b130c594aa5a7afe2ead69b2', 13917],
+    'install.ps1': ['9f4a91b8278f41bd216aa1b1857259daa9c7622dc53ed04977fb1ebe72b15ef7', 18968],
+};
+
 describe('reviewed probe release catalog', () => {
+    it('activates only the reviewed 0.2.0 source and all seven published file identities', () => {
+        const verified = validateProbeReleaseCatalog(catalog);
+        expect(verified.distributionReady).toBe(true);
+        expect(verified.release).toMatchObject({
+            version: '0.2.0',
+            tag: 'probe-v0.2.0',
+            sourceCommit: '9ccee76c3cab149f34dca96c304310c9574c0d29',
+            bootstrapProtocol: 1,
+            capabilities: ['pair', 'install', 'start', 'status', 'check-config', 'bootstrap-v1'],
+        });
+        expect(verified.release.assets.map(({ target }) => target).sort()).toEqual([
+            'darwin-amd64',
+            'darwin-arm64',
+            'linux-amd64',
+            'linux-arm64',
+            'windows-amd64',
+        ]);
+        const files = [
+            ...verified.release.assets.map(({ target, ...file }) => file),
+            ...Object.values(verified.release.bootstrap),
+        ];
+        expect(files).toHaveLength(7);
+        expect(Object.fromEntries(files.map((file) => [file.fileName, file]))).toEqual(
+            Object.fromEntries(
+                Object.entries(reviewedFiles).map(([fileName, [sha256, size]]) => [
+                    fileName,
+                    {
+                        fileName,
+                        url: `https://github.com/58cdn/MiSub/releases/download/probe-v0.2.0/${fileName}`,
+                        sha256,
+                        size,
+                    },
+                ])
+            )
+        );
+        expect(verified.legacyReleases).toEqual([
+            { version: '0.1.0', tag: 'probe-v0.1.0', capabilities: [] },
+        ]);
+        const installation = probeInstallationCapabilities(catalog);
+        expect(installation.reason).toBe('available');
+        expect(installation.targets).toHaveLength(5);
+        expect(installation.targets.every(({ available }) => available)).toBe(true);
+    });
     it('validates the production catalog contract and derives only its declared availability', () => {
         const verified = validateProbeReleaseCatalog(catalog);
         const installation = probeInstallationCapabilities(catalog);

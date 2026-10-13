@@ -1,12 +1,76 @@
 {
-  "schemaVersion": 1,
-  "distributionReady": false,
-  "release": null,
+  "distributionReady": true,
   "legacyReleases": [
     {
-      "version": "0.1.0",
+      "capabilities": [],
       "tag": "probe-v0.1.0",
-      "capabilities": []
+      "version": "0.1.0"
     }
-  ]
+  ],
+  "release": {
+    "assets": [
+      {
+        "fileName": "misub-probe-darwin-amd64",
+        "sha256": "ccbbf2c438b5ca8468997cd4a99b63c28e8b021125952a78f018eb67ab80d230",
+        "size": 49377200,
+        "target": "darwin-amd64",
+        "url": "https://github.com/58cdn/MiSub/releases/download/probe-v0.2.0/misub-probe-darwin-amd64"
+      },
+      {
+        "fileName": "misub-probe-darwin-arm64",
+        "sha256": "b576d2f2d8d0bd5596b02b0b61b00fb55468f17e0a8035545e494482212126f9",
+        "size": 46736770,
+        "target": "darwin-arm64",
+        "url": "https://github.com/58cdn/MiSub/releases/download/probe-v0.2.0/misub-probe-darwin-arm64"
+      },
+      {
+        "fileName": "misub-probe-linux-amd64",
+        "sha256": "30c6806a91c9749a2f22f4bcff956e315d13340c46f0f7db99ca40616fd38049",
+        "size": 49893500,
+        "target": "linux-amd64",
+        "url": "https://github.com/58cdn/MiSub/releases/download/probe-v0.2.0/misub-probe-linux-amd64"
+      },
+      {
+        "fileName": "misub-probe-linux-arm64",
+        "sha256": "f1e99ad4e3979b814a116adc5e01e61ddb5d8887e2353451683fc3a9e625247b",
+        "size": 46006396,
+        "target": "linux-arm64",
+        "url": "https://github.com/58cdn/MiSub/releases/download/probe-v0.2.0/misub-probe-linux-arm64"
+      },
+      {
+        "fileName": "misub-probe-windows-amd64.exe",
+        "sha256": "73e71b4823b7aa1910733e4b0552c40f04281a5d15cda9aa6eb4b0f8e13c4d08",
+        "size": 49074176,
+        "target": "windows-amd64",
+        "url": "https://github.com/58cdn/MiSub/releases/download/probe-v0.2.0/misub-probe-windows-amd64.exe"
+      }
+    ],
+    "bootstrap": {
+      "unix": {
+        "fileName": "install.sh",
+        "sha256": "b30e2f17570eb7ac8b4af3151a3bf7c34ddded39b130c594aa5a7afe2ead69b2",
+        "size": 13917,
+        "url": "https://github.com/58cdn/MiSub/releases/download/probe-v0.2.0/install.sh"
+      },
+      "windows": {
+        "fileName": "install.ps1",
+        "sha256": "9f4a91b8278f41bd216aa1b1857259daa9c7622dc53ed04977fb1ebe72b15ef7",
+        "size": 18968,
+        "url": "https://github.com/58cdn/MiSub/releases/download/probe-v0.2.0/install.ps1"
+      }
+    },
+    "bootstrapProtocol": 1,
+    "capabilities": [
+      "pair",
+      "install",
+      "start",
+      "status",
+      "check-config",
+      "bootstrap-v1"
+    ],
+    "sourceCommit": "9ccee76c3cab149f34dca96c304310c9574c0d29",
+    "tag": "probe-v0.2.0",
+    "version": "0.2.0"
+  },
+  "schemaVersion": 1
 }

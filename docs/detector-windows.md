@@ -1,12 +1,12 @@
 # Windows native detector
 
-The native target is `windows-amd64`, using the pinned Mihomo v1.19.32 compatible build (`GOAMD64=v1`). The detector requires Windows 10 / Windows Server 2016 or later. Windows ARM64 and older Windows versions are outside this target.
+The native target is `windows-amd64`, using the source-built `v1.19.32-misub-source` core with `GOAMD64=v1` and system certificate authorities. It requires Windows 10 / Windows Server 2016 or later on x64; the default installation command requires PowerShell 5.1 or later. Windows ARM64 and older Windows versions are outside this target. TLS verification remains enabled.
 
 ## Running and pairing
 
-Use an absolute local configuration path inside a dedicated private directory. Pairing creates the final directory if its parent already exists; an existing directory must already satisfy the private ACL policy. For example, a new `%LOCALAPPDATA%\MiSubProbe` directory can hold the configuration:
+For [MiSub Probe 0.2.0](https://github.com/58cdn/MiSub/releases/tag/probe-v0.2.0), use the [one-command installation guide](detector-one-command-install.md). The default PowerShell command downloads and verifies the raw EXE and calls native `--setup` to pair, save private configuration, install and explicitly start after browser approval. It does not execute a downloaded `.ps1` or change execution policy. A separately downloaded `install.ps1` is an advanced option only where local policy already permits that script.
 
-Windows package distribution is not yet available. These commands require an already available, trusted build with this functionality. The older `probe-v0.1.0` binaries do not support device pairing.
+The commands below are advanced examples for an already downloaded and verified local executable. Direct `--pair` only saves configuration and exits. The older `probe-v0.1.0` does not support this pairing flow. Use an absolute local path in a private directory, such as `%LOCALAPPDATA%\MiSubProbe\probe.json`; existing paths must already satisfy the ACL and ownership checks.
 
 ```powershell
 .\misub-probe-windows-amd64.exe --pair --server https://misub.example --pair-window PUBLIC_WINDOW_ID --config "$env:LOCALAPPDATA\MiSubProbe\probe.json"
@@ -31,7 +31,7 @@ Run the client as an ordinary user, without elevation. Management commands are m
 .\misub-probe-windows-amd64.exe --uninstall
 ```
 
-Installation copies the invoking local executable into `%LOCALAPPDATA%\MiSubProbe\install`, records private hashes and a process description, and exits. It does not download a replacement, pair, create credentials or start a process. The default config is `%LOCALAPPDATA%\MiSubProbe\probe.json`; `--install --config <absolute path>` can record a different private config outside the managed tree. Pair separately, then explicitly run `--start`. Config validation must pass before any managed process starts. The installation commands do not create a Windows service, scheduled task, startup entry or PATH modification.
+Direct `--install` copies the invoking local executable into `%LOCALAPPDATA%\MiSubProbe\install`, records private hashes and a process description, and exits. It does not download a replacement, pair, create credentials or start a process. The default config is `%LOCALAPPDATA%\MiSubProbe\probe.json`; `--install --config <absolute path>` can record a different private config outside the managed tree. When using these direct commands, pair separately and explicitly run `--start`; the default `--setup` path performs the sequence for a new installation, while `--setup --resume` uses the saved identity without pairing again. Config validation must pass before any managed process starts. The installation commands do not create a Windows service, scheduled task, startup entry or PATH modification.
 
 Successful install/reinstall/status show an inspected executable path; JSON status exposes `executablePath`. Quoted text is a path display, not a PowerShell command. To find the installed executable after removing the original file, inspect the fixed `%LOCALAPPDATA%\MiSubProbe\install\manifest.json`: `current` selects the corresponding `<current>\misub-probe.exe`. Invoke that path with PowerShell's normal quoting and call operator. The manifest contains no token. Hashes verify local consistency; they are not a publisher signature.
 
@@ -61,17 +61,19 @@ Cancellation terminates the job and waits for its processes to exit before clean
 
 The core configuration retains loopback-only listeners, authentication, disabled TUN and DNS interception, and the selected-node route. Starting a detector is not evidence that it is connected to MiSub or that a real node has passed a check.
 
-## Locked archive
+## Source-built core and historical archive
 
-The official release tag resolves to source commit `88dcbf7f1614a67c3b36b848ee3592dfa92ada36`. These asset properties were verified; `kernel-lock.json` pins the names, hashes and executable size:
+The current Probe release builds its embedded core from the commit, vendor and standard Go toolchain in [source-build-lock.json](../detector/source-build-lock.json). See the [source build recipe](detector-source-build.md) and the release's `SOURCE.md` for matching materials. The source preserves the upstream empty embedded-CA file and uses the system trust store without disabling certificate checks. The following ZIP values identify the historical upstream prebuilt archive in `kernel-lock.json`; they are not the hashes or build provenance of the new source-built executable.
 
-| Item | Value |
-| --- | --- |
-| Archive | `mihomo-windows-amd64-compatible-v1.19.32.zip` |
-| Archive bytes | `22525067` |
-| Archive SHA256 | `974a4d7ad69aed27aa2e8f91d61113573c14dadb14562c63e58effabf59816f0` |
-| Sole executable | `mihomo-windows-amd64-compatible.exe` |
-| Executable bytes | `61276672` |
+For the historical upstream prebuilt ZIP, the official release tag resolves to source commit `88dcbf7f1614a67c3b36b848ee3592dfa92ada36`. These asset properties were verified; `kernel-lock.json` pins the names, hashes and executable size:
+
+| Item              | Value                                                              |
+| ----------------- | ------------------------------------------------------------------ |
+| Archive           | `mihomo-windows-amd64-compatible-v1.19.32.zip`                     |
+| Archive bytes     | `22525067`                                                         |
+| Archive SHA256    | `974a4d7ad69aed27aa2e8f91d61113573c14dadb14562c63e58effabf59816f0` |
+| Sole executable   | `mihomo-windows-amd64-compatible.exe`                              |
+| Executable bytes  | `61276672`                                                         |
 | Executable SHA256 | `04f8d7fc2b314771e1ecbf15951d59f0e1cb7914503c88cfb6972ff6a824e314` |
 
 The build and runtime verify the archive and executable independently. ZIP extraction accepts exactly the locked regular entry, enforces its size, and checks an amd64 PE executable rather than a DLL. It does not extract arbitrary archive paths.
@@ -84,6 +86,6 @@ Installation fixtures additionally cover private runtime publication, foreign fi
 
 Windows CI must run the native fixture suite, `go test -race`, `go vet`, the CGO-disabled executable build and `--self-test`. The race detector requires a compatible MinGW-w64 compiler; a cross-compile alone does not establish Windows acceptance.
 
-Local tests do not register a service, scheduled task or startup entry, request elevation, change the system proxy/firewall/TUN, or test actual node credentials. A ZIP build is separate from release approval. Binary artifact upload and public release remain behind the existing manual distribution gate while matching-source and dependency-notice work is incomplete; see [hardening and distribution evidence](detector-hardening.md).
+Local fixture tests do not request elevation, register login startup, change the system proxy/firewall/TUN or use actual node credentials. [MiSub Probe 0.2.0](https://github.com/58cdn/MiSub/releases/tag/probe-v0.2.0) follows the independently gated [source release workflow](detector-source-release.md); the historical prebuilt-binary workflow remains frozen. Published assets and native fixtures do not establish actual-device pairing, first server communication or node/provider acceptance.
 
 Sources: [Mihomo release](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.32), [pinned build matrix](https://github.com/MetaCubeX/mihomo/blob/88dcbf7f1614a67c3b36b848ee3592dfa92ada36/.github/workflows/build.yml), [Windows Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects), [CreateFileW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew), [CreateEventExW](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-createeventexw), [GetProcessTimes](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocesstimes), [QueryFullProcessImageNameW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-queryfullprocessimagenamew), [Go race detector requirements](https://go.dev/doc/articles/race_detector).

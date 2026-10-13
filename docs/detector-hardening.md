@@ -18,8 +18,19 @@ Service reachability alone does not establish unlock, account or playback access
 - Exercise trust, hostname identity, cancellation, provider-side hostname routing
   and no direct fallback using loopback fixtures. Native core tests run in CI;
   source-only tests explicitly skip them. No real subscription is exercised.
-- Supported detector targets are Linux and macOS on amd64 and arm64, with POSIX
-  file permissions. Acceptance includes native race and core tests on all four targets.
+- Supported release targets are Linux/macOS amd64 and arm64, plus Windows amd64.
+  Unix private files use POSIX permissions; Windows uses protected per-user ACLs.
+  Native acceptance covers all five targets. The source build requires Linux
+  kernel 3.2 with system CA certificates, macOS 13, or Windows 10 / Server 2016 x64.
+- Core readiness requires a complete authenticated HTTP round trip through the
+  core to an owned temporary loopback endpoint within the shared 10-second
+  startup budget. A responsive control API, listening port or CONNECT 200 alone
+  is insufficient. The response must match this startup's random identifier and
+  the endpoint must confirm handling that request. The endpoint cannot forward
+  targets; it and its connections close after success, failure, cancellation or
+  core exit. This handshake makes no real-node request and contributes no node
+  latency. Ordinary diagnostics still use only the selected node, without direct
+  fallback. See the [local readiness design](detector-core-readiness.md).
 
 ## Distribution boundary
 
@@ -38,28 +49,43 @@ asset digests. The Linux amd64 binary archive contains only `LICENSE.MiSub` and
 `LICENSE.mihomo` as license files; the source archive's
 `component/ca/ca-certificates.crt` is zero bytes.
 
-The Pages workflow keeps ordinary main publication but requires separate,
-default-off manual inputs for new probe D1 provisioning and production acceptance
-that creates temporary detector identities. Script-level event checks also reject
-automatic invocations before network operations. Binary publication and artifact
-upload additionally remain paused pending the distribution-material review.
+The [MiSub Probe 0.2.0 release](https://github.com/58cdn/MiSub/releases/tag/probe-v0.2.0), published on 2026-10-13
+from MiSub commit `9ccee76c3cab149f34dca96c304310c9574c0d29`, uses the separately reviewed [source-build
+and release workflow](detector-source-release.md). Its matching wrapper, core,
+vendor, toolchain, notices and build instructions are supplied with the release.
+The gate verifies actual linked-file notice mappings, matching source bytes,
+repeat-build output, native fixtures and authenticated GitHub artifact provenance.
+These checks do not replace review of license applicability when inputs change.
 
-The existing root GPL file and `checkout + go mod vendor` source archive do not
-establish complete distribution materials. Binary/source artifact uploads and
-Release publication require an explicit main-branch manual invocation and remain
-disabled by an additional workflow gate. Builds, native tests and source preparation
-continue. Wrapper and core licenses remain separate. Restoring distribution requires
-an independently reviewed change that verifies and includes:
+The source build deliberately preserves the locked upstream empty embedded-CA
+file and uses the upstream system certificate pool. It neither injects roots nor
+disables TLS verification. Linux requires installed system CA certificates; a
+missing or untrusted issuer remains a TLS error. This explicit build recipe does
+not retroactively establish the inputs or provenance of the old prebuilt release.
 
-1. The actual modules/versions/replacements and all applicable LICENSE, NOTICE and
-   copyright files, including Snappy (BSD-3-Clause), gVisor (Apache-2.0), sing
-   (GPL-3.0-or-later) and zerotier-go (MPL-2.0 with NOTICE).
-2. The locked core's upstream build inputs: `with_gvisor`, toolchain/build scripts,
-   and generated `component/ca/ca-certificates.crt` data (the committed file is empty).
-3. Complete matching wrapper/core/dependency source and build instructions, with a
-   specific corresponding-source location shipped with every binary archive.
-4. One gate covering both CI binary artifacts and Release assets; passing source
-   preparation alone is not proof that the source archive is complete.
+The historical inventory tool retains `ready: false`, and the old
+`probe-detector.yml` artifact/publication gates remain frozen. New release assets
+are produced by `Probe source release` after an explicit `workflow_dispatch` on
+`58cdn/MiSub` main with `publish=true` and all release gates passing. PR, push and
+`publish=false` do not upload binary artifacts. Draft upload, inspection and
+publication use the same fixed Release ID; existing tags and assets are not
+overwritten.
+
+An existing draft may also be published through the explicitly authorized
+[recovery path](detector-draft-recovery.md), after downloading and validating all
+original assets, matching source materials and signed provenance from the
+original run and attempt. Recovery defaults to verification only. Explicit
+publication rechecks the remote run, tag, draft and assets before publishing that
+same ID, then verifies the resulting public state. It does not rebuild, upload or
+replace assets. The release source commit `9ccee76c3cab149f34dca96c304310c9574c0d29` remains distinct
+from the recovery tool's own commit; a local verification report or an uncertain
+publication result is not evidence that the release is public.
+
+Ordinary Pages deployment remains separate from default-off manual production
+resource provisioning and acceptance. Neither source publication nor catalog
+activation creates a production detector identity or runs a real-node check.
+Live device installation and node/provider acceptance require separate explicit
+user action or authorization.
 
 Evidence (reviewed at fixed revisions):
 
@@ -70,3 +96,5 @@ Evidence (reviewed at fixed revisions):
 - [gVisor license](https://github.com/MetaCubeX/gvisor/blob/e2cbcd6e7400/LICENSE)
 - [sing license](https://github.com/MetaCubeX/sing/blob/v0.5.8/LICENSE)
 - [ZeroTier notice](https://github.com/MetaCubeX/zerotier-go/blob/13fa6f45da5f/NOTICE)
+- [Source build recipe](detector-source-build.md)
+- [Source release gate](detector-source-release.md)
