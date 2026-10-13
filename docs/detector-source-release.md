@@ -79,9 +79,10 @@ Actions 运行传输候选资产。PR、push 和 `publish=false` 不上传二进
    任一验证失败都不会调用 Release 写接口。
 4. 查询现有 Release 与标签；查询失败不能视为“版本不存在”。使用原子的
    Git ref 创建请求固定新标签到本次 commit，已有标签导致失败，不强制更新。
-5. 创建新草稿 Release 并上传完整资产。再次读取远端资产清单，逐个要求名称、
+5. 创建新草稿 Release，记录返回的 Release ID，并通过该 ID 上传完整资产和
+   读取远端资产清单。逐个要求名称、
    数量、大小、`uploaded` 状态及 GitHub 返回的 SHA256 与已证明的文件一致，
-   然后才公开 Release。检测器发行不设为 MiSub 主应用的 latest。
+   然后才按同一 ID 公开 Release。检测器发行不设为 MiSub 主应用的 latest。
 
 签证说明与核验参数依据 GitHub 的
 [artifact attestation CLI](https://cli.github.com/manual/gh_attestation_verify)
@@ -90,7 +91,9 @@ Actions 运行传输候选资产。PR、push 和 `publish=false` 不上传二进
 这类证明认证 GitHub 工作流身份与产物，不声称达到隔离式可重现构建器的更强等级。
 
 上传或远端校验失败会留下新标签/草稿供检查。自动重试不会覆盖其内容；维护者应先
-检查失败记录，再明确决定处理该草稿或使用新的发行版本。旧发行资产始终保留。
+检查失败记录，再按[草稿恢复流程](detector-draft-recovery.md)核验实际下载字节、
+完整材料与原运行的签名来源证明。恢复默认只读；显式公开前重新确认标签、草稿及
+资产身份均未变化。恢复仅公开原草稿，不重新构建、上传或替换旧发行资产。
 
 ## 发行内容与网页启用
 
