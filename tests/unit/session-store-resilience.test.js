@@ -20,6 +20,38 @@ vi.mock('../../src/utils/errorHandler.js', () => ({
 }));
 
 describe('session store resilience', () => {
+    it('preserves lockout metadata for the login form', async () => {
+        const { useSessionStore } = await import('../../src/stores/session.js');
+        const store = useSessionStore();
+        apiMocks.login.mockResolvedValue({
+            success: false,
+            status: 429,
+            data: { code: 'login_locked', retryAfter: 600 },
+            error: 'locked',
+        });
+        await expect(store.login('fixture')).rejects.toMatchObject({
+            status: 429,
+            data: { code: 'login_locked', retryAfter: 600 },
+        });
+    });
+    it('keeps login security warning alongside the default-password warning and clears it on logout', async () => {
+        const { useSessionStore } = await import('../../src/stores/session.js');
+        const store = useSessionStore();
+        apiMocks.login.mockResolvedValue({
+            success: true,
+            data: {
+                securityWarning: { type: 'default_admin_password' },
+                loginSecurity: { enabled: true, warning: { id: 42, failedAttempts: 10 } },
+            },
+        });
+        apiMocks.fetchInitialData.mockResolvedValue({ success: true, data: {} });
+        apiMocks.fetchPublicConfig.mockResolvedValue({ success: true, data: {} });
+        await store.login('fixture');
+        expect(store.loginSecurity.warning.id).toBe(42);
+        expect(store.securityWarning.type).toBe('default_admin_password');
+        await store.handleUnauthorized();
+        expect(store.loginSecurity).toBeNull();
+    });
     beforeEach(() => {
         setActivePinia(createPinia());
         vi.clearAllMocks();

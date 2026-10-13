@@ -107,6 +107,18 @@ export async function login(password) {
         const data = await api.post('/api/login', { password });
         return { success: true, data };
     } catch (error) {
+        if (error instanceof APIError && (error.status === 429 || error.status === 503)) {
+            return {
+                success: false,
+                error:
+                    error.status === 503
+                        ? t('notifications.serviceError')
+                        : t('settings.loginFailed'),
+                errorType: 'server',
+                status: error.status,
+                data: error.data,
+            };
+        }
         if (error instanceof APIError && error.status === 401) {
             return {
                 success: false,

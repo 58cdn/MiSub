@@ -1,0 +1,161 @@
+{
+  "externalRequests": [
+    "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap",
+    "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap",
+    "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap",
+    "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap",
+    "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+  ],
+  "unexpectedApi": [],
+  "pageErrors": [],
+  "layouts": [
+    {
+      "name": "desktop-light",
+      "width": 1440,
+      "scroll": 1440,
+      "overflowingNavButtons": [],
+      "dialog": [
+        {
+          "width": 480,
+          "scroll": 480
+        }
+      ]
+    },
+    {
+      "name": "state-disabled",
+      "width": 1440,
+      "scroll": 1440,
+      "overflowingNavButtons": [],
+      "dialog": [
+        {
+          "width": 480,
+          "scroll": 480
+        }
+      ]
+    },
+    {
+      "name": "state-error",
+      "width": 1440,
+      "scroll": 1440,
+      "overflowingNavButtons": [],
+      "dialog": [
+        {
+          "width": 480,
+          "scroll": 480
+        }
+      ]
+    },
+    {
+      "name": "state-empty",
+      "width": 1440,
+      "scroll": 1440,
+      "overflowingNavButtons": [],
+      "dialog": [
+        {
+          "width": 480,
+          "scroll": 480
+        }
+      ]
+    },
+    {
+      "name": "state-forbidden",
+      "width": 1440,
+      "scroll": 1440,
+      "overflowingNavButtons": [],
+      "dialog": [
+        {
+          "width": 480,
+          "scroll": 480
+        }
+      ]
+    },
+    {
+      "name": "dark-zh-320",
+      "width": 320,
+      "scroll": 320,
+      "overflowingNavButtons": [],
+      "dialog": [
+        {
+          "width": 320,
+          "scroll": 320
+        }
+      ]
+    },
+    {
+      "name": "dark-zh-375",
+      "width": 375,
+      "scroll": 375,
+      "overflowingNavButtons": [],
+      "dialog": [
+        {
+          "width": 375,
+          "scroll": 375
+        }
+      ]
+    },
+    {
+      "name": "dark-zh-768",
+      "width": 768,
+      "scroll": 768,
+      "overflowingNavButtons": [],
+      "dialog": [
+        {
+          "width": 480,
+          "scroll": 480
+        }
+      ]
+    },
+    {
+      "name": "dark-zh-1440",
+      "width": 1440,
+      "scroll": 1440,
+      "overflowingNavButtons": [],
+      "dialog": [
+        {
+          "width": 480,
+          "scroll": 480
+        }
+      ]
+    },
+    {
+      "name": "modern-mobile-navigation",
+      "width": 375,
+      "scroll": 375,
+      "overflowingNavButtons": [],
+      "dialog": []
+    },
+    {
+      "name": "legacy-mobile",
+      "width": 375,
+      "scroll": 375,
+      "overflowingNavButtons": [],
+      "dialog": [
+        {
+          "width": 375,
+          "scroll": 375
+        }
+      ]
+    },
+    {
+      "name": "legacy-mobile-navigation",
+      "width": 375,
+      "scroll": 375,
+      "overflowingNavButtons": [],
+      "dialog": []
+    },
+    {
+      "name": "login-locked-mobile",
+      "width": 375,
+      "scroll": 375,
+      "overflowingNavButtons": [],
+      "dialog": []
+    }
+  ],
+  "checks": [
+    "Tab containment and Escape focus return",
+    "Cursor pagination and only current-page read IDs",
+    "Legacy layout security/settings routes and browser Back",
+    "Login metadata flows through API/store/form; successful login warning opens notifications"
+  ],
+  "passed": true
+}

@@ -1,5 +1,5 @@
 <script setup>
-    import { computed } from 'vue';
+    import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
     import { useUIStore } from '../../stores/ui.js';
     import { useSessionStore } from '../../stores/session.js';
     import BrandLogo from './BrandLogo.vue';
@@ -9,6 +9,22 @@
     const uiStore = useUIStore();
     const sessionStore = useSessionStore();
     const { t } = useI18n();
+    const header = ref(null);
+    let resizeObserver;
+    onMounted(() => {
+        const measure = () =>
+            document.documentElement.style.setProperty(
+                '--misub-header-height',
+                `${header.value.getBoundingClientRect().height}px`
+            );
+        measure();
+        resizeObserver = new ResizeObserver(measure);
+        resizeObserver.observe(header.value);
+    });
+    onBeforeUnmount(() => {
+        resizeObserver?.disconnect();
+        document.documentElement.style.removeProperty('--misub-header-height');
+    });
 
     const shouldHideLoginButton = computed(() => {
         if (sessionStore.sessionState === 'loading') {
@@ -41,13 +57,14 @@
 
 <template>
     <header
+        ref="header"
         class="app-nav-bar ios-fixed-header bg-gradient-to-b from-white/95 via-white/90 to-white/95 dark:from-slate-950/95 dark:via-slate-950/90 dark:to-slate-950/95 backdrop-blur-xl sticky top-0 z-50 border-b border-gray-200/30 dark:border-white/5 supports-[backdrop-filter]:bg-white/80 supports-[backdrop-filter]:dark:bg-slate-950/80 transition-all duration-300"
     >
         <div class="ios-status-overlay"></div>
 
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="safe-top-inset">
-                <div class="flex justify-between items-center h-16 md:h-[76px]">
+                <div class="flex justify-between items-center gap-2 min-h-16 py-2 md:min-h-[76px]">
                     <BrandLogo
                         v-if="!hideBranding"
                         :to="isLoggedIn ? '/dashboard' : '/'"
