@@ -92,7 +92,8 @@ def wrapper_snapshot(repo, commit):
     require(git(repo, "rev-parse", "HEAD").decode().strip() == commit, "checkout_commit_mismatch")
     require(not git(repo, "diff", "HEAD", "--name-only"), "tracked_worktree_not_clean")
     # git archive reads committed blobs, never untracked files or ignored secrets.
-    payload = git(repo, "archive", "--format=tar.gz", "--prefix=wrapper/", commit)
+    payload = git(repo, "-c", "core.autocrlf=false", "-c", "core.eol=lf",
+                  "archive", "--format=tar.gz", "--prefix=wrapper/", commit)
     require(len(payload) <= MAX_FILE, "wrapper_archive_too_large")
     files = list(source.archive_files(payload, "wrapper", "tar.gz", commit))
     tree = git(repo, "rev-parse", commit + "^{tree}").decode().strip()

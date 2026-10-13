@@ -2,6 +2,7 @@ import copy
 import gzip
 import io
 import json
+import os
 import pathlib
 import tempfile
 import tarfile
@@ -192,6 +193,43 @@ class ReleaseGateTests(unittest.TestCase):
         gate.verify_wrapper_pack(path, COMMIT, source.git_tree(files))
         with self.assertRaisesRegex(gate.GateError, "identity_mismatch"):
             gate.verify_wrapper_pack(path, COMMIT, "0" * 40)
+
+    def test_git_snapshot_preserves_blob_bytes_with_crlf_runner_configuration(self):
+        repo = self.root / "fixture-repo"
+        repo.mkdir()
+        env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                   GIT_CONFIG_COUNT="2", GIT_CONFIG_KEY_0="core.autocrlf", GIT_CONFIG_VALUE_0="true",
+                   GIT_CONFIG_KEY_1="core.eol", GIT_CONFIG_VALUE_1="crlf",
+                   GIT_AUTHOR_NAME="Fixture", GIT_AUTHOR_EMAIL="fixture@example.invalid",
+                   GIT_COMMITTER_NAME="Fixture", GIT_COMMITTER_EMAIL="fixture@example.invalid",
+                   GIT_AUTHOR_DATE="2000-01-01T00:00:00+0000", GIT_COMMITTER_DATE="2000-01-01T00:00:00+0000")
+
+        def git(*args, data=None):
+            return gate.subprocess.run(["git", "-C", str(repo), *args], input=data, stdout=gate.subprocess.PIPE,
+                                       stderr=gate.subprocess.PIPE, env=env, check=True, timeout=30).stdout
+
+        git("init", "--quiet")
+        entries = []
+        contents = {".gitattributes": b"* text=auto\n", "LICENSE": b"Full fixture license\nsecond line\n"}
+        for name, data in contents.items():
+            (repo / name).write_bytes(data)
+            sha = git("hash-object", "-w", "--stdin", data=data).decode().strip()
+            entries.append(f"100644 blob {sha}\t{name}\n")
+        tree = git("mktree", data="".join(entries).encode()).decode().strip()
+        commit = git("-c", "commit.gpgsign=false", "commit-tree", tree, data=b"Synthetic archive fixture\n").decode().strip()
+        git("update-ref", "HEAD", commit)
+        git("read-tree", "HEAD")
+        converted = git("archive", "--format=tar.gz", "--prefix=wrapper/", commit)
+        converted_files = list(source.archive_files(converted, "wrapper", "tar.gz", commit))
+        self.assertNotEqual(source.git_tree(converted_files), tree)
+        self.assertTrue(any(b"\r\n" in data for _, data, _ in converted_files))
+        with mock.patch.dict(os.environ, env, clear=True):
+            _, preserved, actual_tree = gate.wrapper_snapshot(repo, commit)
+            self.assertEqual(actual_tree, tree)
+            self.assertEqual({name: data for name, data, _ in preserved}, contents)
+            (repo / "LICENSE").write_bytes(b"changed tracked content\n")
+            with self.assertRaisesRegex(gate.GateError, "tracked_worktree_not_clean"):
+                gate.wrapper_snapshot(repo, commit)
 
     def release_fixture(self):
         output = self.root / "release"

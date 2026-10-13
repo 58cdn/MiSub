@@ -19,6 +19,7 @@ vendor 和五个平台的 Go 工具链摘要。构建器逐文件验证展开后
 wrapper 输入通过 `git archive` 从工作流的精确 commit 读取，并重建 Git tree
 验证；本地未跟踪文件不会进入源码包。构建只在临时副本中生成该目标的
 `kernel-lock.json` 和嵌入内核，生成内容、编译参数及输出摘要记录在目标证据中。
+归档命令使用局部 LF 设置，保持已提交 blob 的字节，不修改 runner 的 Git 配置。
 
 每个原生 runner 必须完成：
 
