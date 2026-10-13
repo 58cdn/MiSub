@@ -56,12 +56,12 @@ const resetEvents = () => {
         createdAt: 1791900020000 - i * 60000,
         readAt: null,
         ip: i === 0 ? null : '2001:db8::1',
-        browser: 'Firefox',
-        os: 'Windows',
-        device: 'desktop',
+        browser: i === 0 ? null : 'Firefox',
+        os: i === 0 ? null : 'Windows',
+        device: i === 0 ? null : 'desktop',
         failedAttempts: i === 0 ? 10 : null,
-        since: 1791900000000,
-        lastFailureAt: 1791900010000,
+        since: i === 0 ? 1791900000000 : null,
+        lastFailureAt: i === 0 ? 1791900010000 : null,
         target: 'security',
     }));
 };
