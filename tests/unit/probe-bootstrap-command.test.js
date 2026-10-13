@@ -2,14 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import catalog from '../../detector/release-catalog.json';
-import { probeInstallationCapabilities } from '../../src/shared/probe-release.js';
 import {
     buildProbeBootstrapCommand,
     isProbeCommandOrigin,
     probeTerminalAvailable,
 } from '../../src/shared/probe-bootstrap-command.js';
-import { syntheticProbeInstallation } from '../fixtures/probe-release.js';
+import {
+    syntheticProbeInstallation,
+    unpublishedProbeInstallation,
+} from '../fixtures/probe-release.js';
 
 const origin = 'https://misub.fixture.invalid';
 const id = '11111111-1111-4111-8111-111111111111';
@@ -31,9 +32,9 @@ const bash =
         : 'bash';
 
 describe('auditable one-command probe bootstrap', () => {
-    it('never supplies an installation or resume command from the unpublished production catalog', () => {
+    it('never supplies an installation or resume command from the explicit unpublished fixture', () => {
         for (const terminal of ['unix', 'windows']) {
-            const installation = probeInstallationCapabilities(catalog);
+            const installation = unpublishedProbeInstallation();
             expect(buildProbeBootstrapCommand({ ...options(terminal), installation })).toBe('');
             expect(buildProbeBootstrapCommand({ installation, terminal, resume: true })).toBe('');
         }

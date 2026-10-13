@@ -4,6 +4,20 @@ import {
     probeInstallationCapabilities,
 } from '../../src/shared/probe-release.js';
 
+// Unpublished scenarios remain independent of the production release's lifecycle.
+export function unpublishedProbeReleaseCatalog() {
+    return {
+        schemaVersion: 1,
+        distributionReady: false,
+        release: null,
+        legacyReleases: [{ version: '0.1.0', tag: 'probe-v0.1.0', capabilities: [] }],
+    };
+}
+
+export function unpublishedProbeInstallation() {
+    return probeInstallationCapabilities(unpublishedProbeReleaseCatalog());
+}
+
 // Synthetic metadata for offline state-machine tests; these are not published release assets.
 export function syntheticProbeReleaseCatalog(targets = [...PROBE_RELEASE_TARGETS]) {
     const tag = 'probe-v9.9.9';

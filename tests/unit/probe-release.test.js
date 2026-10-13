@@ -6,13 +6,30 @@ import {
     readProbeInstallation,
     validateProbeReleaseCatalog,
 } from '../../src/shared/probe-release.js';
-import { syntheticProbeReleaseCatalog } from '../fixtures/probe-release.js';
+import {
+    syntheticProbeReleaseCatalog,
+    unpublishedProbeReleaseCatalog,
+} from '../fixtures/probe-release.js';
 
 describe('reviewed probe release catalog', () => {
-    it('keeps production unavailable and records the old package without pairing/install support', () => {
-        expect(catalog.distributionReady).toBe(false);
-        expect(catalog.release).toBeNull();
+    it('validates the production catalog contract and derives only its declared availability', () => {
+        const verified = validateProbeReleaseCatalog(catalog);
         const installation = probeInstallationCapabilities(catalog);
+        expect(readProbeInstallation(installation)).toEqual(installation);
+        expect(installation.targets.map(({ target }) => target)).toEqual(PROBE_RELEASE_TARGETS);
+        for (const { target, available } of installation.targets) {
+            expect(available).toBe(
+                verified.distributionReady &&
+                    verified.release.assets.some((asset) => asset.target === target)
+            );
+        }
+    });
+    it('keeps the unpublished fixture unavailable and records the old package without pairing/install support', () => {
+        const unpublished = unpublishedProbeReleaseCatalog();
+        expect(validateProbeReleaseCatalog(unpublished)).toEqual(unpublished);
+        expect(unpublished.distributionReady).toBe(false);
+        expect(unpublished.release).toBeNull();
+        const installation = probeInstallationCapabilities(unpublished);
         expect(installation.targets.map(({ target }) => target)).toEqual(PROBE_RELEASE_TARGETS);
         expect(installation.targets.every(({ available }) => available === false)).toBe(true);
         expect(installation.legacyReleases).toEqual([
@@ -271,7 +288,7 @@ describe('reviewed probe release catalog', () => {
                 delete value.legacyReleases;
             },
         ]) {
-            const value = probeInstallationCapabilities(catalog);
+            const value = probeInstallationCapabilities(unpublishedProbeReleaseCatalog());
             change(value);
             expect(readProbeInstallation(value)).toBeNull();
         }

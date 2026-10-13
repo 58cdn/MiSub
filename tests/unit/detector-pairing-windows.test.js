@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import DetectorPairingWizard from '../../src/components/settings/sections/DetectorPairingWizard.vue';
 import { setLocale } from '../../src/i18n/index.js';
-import catalog from '../../detector/release-catalog.json';
-import { probeInstallationCapabilities } from '../../src/shared/probe-release.js';
-import { syntheticProbeInstallation } from '../fixtures/probe-release.js';
+import {
+    syntheticProbeInstallation,
+    unpublishedProbeInstallation,
+} from '../fixtures/probe-release.js';
 
 const site = 'https://misub.fixture.invalid';
 const windowId = '11111111-1111-4111-8111-111111111111';
@@ -61,7 +62,7 @@ describe('verified installation availability', () => {
         ['unread', { installation: null }],
         ['loading', { installationLoading: true }],
         ['failed', { installationError: true }],
-        ['unreleased', { installation: probeInstallationCapabilities(catalog) }],
+        ['unreleased', { installation: unpublishedProbeInstallation() }],
         ['invalid', { installation: { distributionReady: true, available: true } }],
     ])('does not open a window, emit commands, or send requests while %s', async (_, props) => {
         const wrapper = create(props);
@@ -75,7 +76,7 @@ describe('verified installation availability', () => {
         expect(wrapper.text()).not.toMatch(/misub-probe.*--pair|executable’s directory/);
     });
     it('explains the actual 0.1.0 flag mismatch and offers a read-only release refresh', async () => {
-        const wrapper = create({ installation: probeInstallationCapabilities(catalog) });
+        const wrapper = create({ installation: unpublishedProbeInstallation() });
         expect(wrapper.text()).toContain('Compatible installation packages have not been released');
         expect(wrapper.text()).toContain(
             'probe-v0.1.0 does not support pairing or installation commands'
@@ -114,7 +115,7 @@ describe('verified installation availability', () => {
     it('rechecks availability after the guide was opened, before any window POST', async () => {
         const wrapper = create();
         await get(wrapper, 'pairing-open').trigger('click');
-        await wrapper.setProps({ installation: probeInstallationCapabilities(catalog) });
+        await wrapper.setProps({ installation: unpublishedProbeInstallation() });
         expect(get(wrapper, 'pairing-start').attributes('disabled')).toBeDefined();
         await get(wrapper, 'pairing-start').trigger('click');
         expect(calls).toHaveLength(0);
