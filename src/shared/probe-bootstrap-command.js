@@ -1,5 +1,5 @@
-import unixLoader from './probe-bootstrap-unix.sh?raw';
-import windowsLoader from './probe-bootstrap-windows.ps1?raw';
+import unixLoader from './probe-network-unix.sh?raw';
+import windowsLoader from './probe-network-windows.ps1?raw';
 import { readProbeInstallation } from './probe-release.js';
 
 export function isProbeCommandOrigin(value) {
@@ -16,6 +16,8 @@ export function isProbeCommandOrigin(value) {
 export function probeTerminalAvailable(installation, terminal) {
     const verified = readProbeInstallation(installation);
     if (!verified?.distributionReady || !['unix', 'windows'].includes(terminal)) return false;
+    // Keep verified scripts comfortably below Bash's per-argument OS limit.
+    if (verified.release.bootstrap[terminal]?.size > 64 * 1024) return false;
     const targets = verified.targets.filter(({ target }) =>
         terminal === 'windows' ? target === 'windows-amd64' : target !== 'windows-amd64'
     );
@@ -27,7 +29,7 @@ const uuid = (value) =>
     typeof value === 'string' && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(value);
 const finiteTime = (value) => Number.isFinite(value) && value > 0;
 
-/** One pasted command; only reviewed local templates and verified release metadata become code. */
+/** Download a fixed release script, verify all bytes, then pass pairing data as arguments. */
 export function buildProbeBootstrapCommand({
     installation,
     terminal,
@@ -53,23 +55,19 @@ export function buildProbeBootstrapCommand({
     )
         return '';
     const release = readProbeInstallation(installation).release;
-    const file =
-        terminal === 'windows'
-            ? release.assets.find(({ target }) => target === 'windows-amd64')
-            : release.bootstrap.unix;
+    const file = release.bootstrap[terminal];
     const tokens = {
-        VERSION: release.version,
-        COMMIT: release.sourceCommit,
         HASH: file.sha256,
         SIZE: String(file.size),
         URL: file.url,
-        RESUME: String(resume),
         INVOCATION:
             terminal === 'windows'
-                ? `Invoke-ProbeCommand $executable @('--setup', ${resume ? "'--resume', " : `'--server', '${origin}', '--pair-window', '${pairingWindow.id}', `}'--config', $environment.Config)`
+                ? resume
+                    ? '-Resume'
+                    : `-Server '${origin}' -PairWindow '${pairingWindow.id}'`
                 : resume
-                  ? 'command bash "$work_dir/client" --resume'
-                  : 'command bash "$work_dir/client" --server "$1" --pair-window "$2"',
+                  ? '--resume'
+                  : '--server "$1" --pair-window "$2"',
     };
     const template = (terminal === 'windows' ? windowsLoader : unixLoader).replaceAll('\r\n', '\n');
     const source = template.replace(/@@([A-Z]+)@@/g, (_, key) => tokens[key] ?? '');

@@ -137,7 +137,7 @@ describe('verified installation availability', () => {
         );
         expect(get(wrapper, 'pairing-command').text()).toContain('/probe-v9.9.9/install.sh');
     });
-    it('copies the complete native Windows setup command and keeps resume independent of the window', async () => {
+    it('copies the verified Windows network command and keeps resume independent of the window', async () => {
         const writeText = vi.fn().mockResolvedValue(undefined);
         vi.spyOn(navigator, 'clipboard', 'get').mockReturnValue({ writeText });
         const wrapper = create();
@@ -145,9 +145,7 @@ describe('verified installation availability', () => {
         await get(wrapper, 'pairing-terminal').setValue('windows');
         await get(wrapper, 'pairing-copy-resume').trigger('click');
         await flushPromises();
-        expect(writeText.mock.calls[0][0]).toContain(
-            "@('--setup', '--resume', '--config', $environment.Config)"
-        );
+        expect(writeText.mock.calls[0][0]).toContain('& $installer -Resume');
         expect(writeText.mock.calls[0][0]).not.toContain(windowId);
         expect(calls).toHaveLength(0);
         await get(wrapper, 'pairing-start').trigger('click');
@@ -157,8 +155,14 @@ describe('verified installation availability', () => {
         expect(writeText.mock.calls[1][0]).toBe(
             get(wrapper, 'pairing-command').element.textContent
         );
-        expect(writeText.mock.calls[1][0]).toContain("@('--setup', '--server'");
-        expect(writeText.mock.calls[1][0]).not.toMatch(/install\.ps1|ExecutionPolicy|ScriptBlock/);
+        expect(writeText.mock.calls[1][0]).toContain(
+            "& $installer -Server 'https://misub.fixture.invalid'"
+        );
+        expect(writeText.mock.calls[1][0]).toContain('/probe-v9.9.9/install.ps1');
+        expect(writeText.mock.calls[1][0]).not.toMatch(
+            /Set-ExecutionPolicy|\s-ExecutionPolicy\s|EncodedCommand/
+        );
+        expect(get(wrapper, 'pairing-network-help').text()).toContain('direct HTTPS');
         expect(calls).toHaveLength(1);
     });
     it('offers manual full-command review if clipboard access is blocked', async () => {

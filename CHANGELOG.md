@@ -34,6 +34,7 @@ MiSub 主应用与 MiSub Probe 独立维护版本；检测器 Git 标签采用 `
 
 ### 变更
 
+- 检测器安装页提供固定版本的短网络命令，完整下载并核对脚本大小与 SHA-256 后执行；保留独立恢复，并说明网络、代理与组织脚本策略限制。（[#35]）
 - 手动节点默认使用基础 TCP 连通性检测，由 Cloudflare 连接已保存节点端口，显示 Worker 建连耗时及平台限制；端口可达不代表代理可用，完整节点检测继续独立提供。（[#26]）
 - 服务解锁检测默认仅勾选 OpenAI 与 Claude，其他服务保留手动选择。（[#26]）
 - Cloudflare Pages 保留普通代码测试、构建与主分支部署；新增检测 D1 配置和创建临时检测器身份的生产验收分别由默认关闭的手动选项控制，自动推送和 PR 不执行这两项操作。（[#11]）
@@ -130,3 +131,4 @@ MiSub 主应用与 MiSub Probe 独立维护版本；检测器 Git 标签采用 `
 [#29]: https://github.com/58cdn/MiSub/pull/29
 [#30]: https://github.com/58cdn/MiSub/pull/30
 [#31]: https://github.com/58cdn/MiSub/pull/31
+[#35]: https://github.com/58cdn/MiSub/issues/35
