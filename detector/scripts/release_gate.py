@@ -383,6 +383,12 @@ def provenance_policy(commit):
 
 def assemble(repo, inputs, output, version, commit):
     release_context(version, commit)
+    return assemble_materials(repo, inputs, output, version, commit)
+
+
+def assemble_materials(repo, inputs, output, version, commit):
+    """Verify source-bound candidates and render local release bytes, without publication authority."""
+    identity(version, commit)
     _, wrapper_files, tree = wrapper_snapshot(repo, commit)
     source_files = {name: data for name, data, _ in wrapper_files}
     lock = source.load_lock(repo / "detector/source-build-lock.json")
@@ -480,12 +486,42 @@ def verify_provenance(output, version, commit, bundle, logs):
     return names
 
 
+def release_endpoint(release_id):
+    require(type(release_id) is int and release_id > 0, "invalid_release_id")
+    return "repos/" + REPOSITORY + "/releases/" + str(release_id)
+
+
+def verify_remote_release(release, release_id, version, records, draft=True):
+    endpoint = release_endpoint(release_id)
+    require(release.get("id") == release_id and type(release.get("id")) is int
+            and release.get("url") == "https://api.github.com/" + endpoint
+            and release.get("draft") is draft and release.get("tag_name") == "probe-v" + version
+            and release.get("prerelease") is False, "draft_release_identity_mismatch")
+    assets = release.get("assets")
+    require(isinstance(assets, list), "release_asset_set_mismatch")
+    uploaded, ids = {}, set()
+    for asset in assets:
+        name, asset_id = asset.get("name"), asset.get("id")
+        require(name not in uploaded and type(asset_id) is int and asset_id > 0 and asset_id not in ids,
+                "release_asset_set_mismatch")
+        require(asset.get("url") == "https://api.github.com/repos/" + REPOSITORY + "/releases/assets/" + str(asset_id),
+                "release_asset_identity_mismatch")
+        uploaded[name] = asset
+        ids.add(asset_id)
+    require(set(uploaded) == set(records), "release_asset_set_mismatch")
+    for name, expected in records.items():
+        require(uploaded[name].get("state") == "uploaded" and type(uploaded[name].get("size")) is int
+                and uploaded[name]["size"] == expected["size"]
+                and uploaded[name].get("digest") == "sha256:" + expected["sha256"], "remote_asset_digest_or_size_mismatch")
+    return uploaded
+
+
 def publish(output, version, commit, bundle, logs):
     names = verify_provenance(output, version, commit, bundle, logs)
     # Probe both the release and ref collections. Any API failure is an error;
     # authentication/rate-limit/network failures cannot mean "tag absent".
     for endpoint in ("releases?per_page=100", "git/matching-refs/tags/probe-v" + version):
-        response = subprocess.run(["gh", "api", "--paginate", "--slurp", "repos/" + REPOSITORY + "/" + endpoint],
+        response = subprocess.run(["gh", "api", "--hostname", "github.com", "--paginate", "--slurp", "https://api.github.com/repos/" + REPOSITORY + "/" + endpoint],
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, check=True, timeout=120)
         pages = json.loads(response.stdout, object_pairs_hook=audit.unique_object)
         existing = [item for page in pages for item in page]
@@ -494,23 +530,31 @@ def publish(output, version, commit, bundle, logs):
     # Creating the ref is atomic and refuses an existing tag, including a tag
     # created concurrently after the read-only checks. No force update is used.
     tag = "probe-v" + version
-    run(["gh", "api", "--method", "POST", "repos/" + REPOSITORY + "/git/refs", "-f", "ref=refs/tags/" + tag, "-f", "sha=" + commit],
+    run(["gh", "api", "--method", "POST", "https://api.github.com/repos/" + REPOSITORY + "/git/refs", "--hostname", "github.com", "-f", "ref=refs/tags/" + tag, "-f", "sha=" + commit],
         output, dict(os.environ), logs / "create-tag.txt", timeout=120)
     # Upload failure leaves the new draft for inspection; automatic retries do
     # not replace tags/releases/assets or make an incomplete catalog public.
-    run(["gh", "release", "create", tag, "--repo", REPOSITORY, "--verify-tag", "--draft", "--title", "MiSub Probe v" + version,
-         "--notes-file", output / "SOURCE.md", *[output / name for name in names]], output, dict(os.environ), logs / "create-draft.txt", timeout=900)
-    response = run(["gh", "api", "repos/" + REPOSITORY + "/releases/tags/" + tag], output, dict(os.environ), logs / "draft-assets.json", timeout=120)
+    response = run(["gh", "api", "--hostname", "github.com", "--method", "POST", "https://api.github.com/repos/" + REPOSITORY + "/releases",
+                    "-f", "tag_name=" + tag, "-f", "target_commitish=" + commit, "-F", "draft=true", "-F", "prerelease=false",
+                    "-f", "make_latest=false", "-f", "name=MiSub Probe v" + version, "-F", "body=@" + str(output / "SOURCE.md")],
+                   output, dict(os.environ), logs / "create-draft.json", timeout=120)
     release = json.loads(response, object_pairs_hook=audit.unique_object)
-    require(release["draft"] is True and release["tag_name"] == tag, "draft_release_identity_mismatch")
-    uploaded = {asset["name"]: asset for asset in release["assets"]}
-    require(len(uploaded) == len(release["assets"]) and set(uploaded) == set(names), "release_asset_set_mismatch")
+    release_id = release.get("id")
+    endpoint = release_endpoint(release_id)
+    verify_remote_release(release, release_id, version, {})
+    upload_url = "https://uploads.github.com/" + endpoint + "/assets"
+    require(release.get("upload_url") == upload_url + "{?name,label}", "release_upload_url_mismatch")
+    records = {name: record(output / name) for name in names}
     for name in names:
-        expected = record(output / name)
-        require(uploaded[name].get("state") == "uploaded" and uploaded[name].get("size") == expected["size"]
-                and uploaded[name].get("digest") == "sha256:" + expected["sha256"], "remote_asset_digest_or_size_mismatch")
-    run(["gh", "release", "edit", tag, "--repo", REPOSITORY, "--draft=false", "--latest=false"], output, dict(os.environ), logs / "publish.txt", timeout=120)
-    return {"tag": tag, "commit": commit, "assets": len(names), "releaseReady": True, "authenticatedProvenance": "verified-by-gh"}
+        run(["gh", "api", "--hostname", "github.com", "--method", "POST", upload_url + "?name=" + urllib.parse.quote(name, safe=""),
+             "-H", "Content-Type: application/octet-stream", "-H", "Content-Length: " + str(records[name]["size"]), "--input", output / name],
+            output, dict(os.environ), logs / (name + ".upload.json"), timeout=300)
+    response = run(["gh", "api", "--hostname", "github.com", "https://api.github.com/" + endpoint], output, dict(os.environ), logs / "draft-assets.json", timeout=120)
+    verify_remote_release(json.loads(response, object_pairs_hook=audit.unique_object), release_id, version, records)
+    response = run(["gh", "api", "--hostname", "github.com", "--method", "PATCH", "https://api.github.com/" + endpoint, "-F", "draft=false", "-f", "make_latest=false"],
+                   output, dict(os.environ), logs / "publish.json", timeout=120)
+    verify_remote_release(json.loads(response, object_pairs_hook=audit.unique_object), release_id, version, records, draft=False)
+    return {"tag": tag, "releaseId": release_id, "commit": commit, "assets": len(names), "releaseReady": True, "authenticatedProvenance": "verified-by-gh"}
 
 
 def main(argv=None):
