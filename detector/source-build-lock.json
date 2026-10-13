@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "repository": "MetaCubeX/mihomo",
+    "version": "v1.19.32-misub-source",
+    "commit": "88dcbf7f1614a67c3b36b848ee3592dfa92ada36",
+    "tree": "0c95115aaabba2d3f657e4a2dd09957b70e343e8",
+    "url": "https://codeload.github.com/MetaCubeX/mihomo/tar.gz/88dcbf7f1614a67c3b36b848ee3592dfa92ada36",
+    "sha256": "77643ec763a92b330a0b4a44870f78ee05c08792897e7f5e40a3654415c5f077",
+    "prefix": "mihomo-88dcbf7f1614a67c3b36b848ee3592dfa92ada36",
+    "buildTime": "2026-09-30T14:35:49Z",
+    "epoch": 1790778949,
+    "caMode": "system",
+    "caPath": "component/ca/ca-certificates.crt",
+    "caSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "vendor": {
+    "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/vendor.tar.gz",
+    "sha256": "0e605b54a4e2508c57f7bf64ae30d98833b3d2e0c1b399dfffa75248f6e84441",
+    "prefix": "vendor"
+  },
+  "toolchain": {
+    "version": "go1.27.2",
+    "hosts": {
+      "linux-amd64": {"file": "go1.27.2.linux-amd64.tar.gz", "sha256": "ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5"},
+      "linux-arm64": {"file": "go1.27.2.linux-arm64.tar.gz", "sha256": "94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8"},
+      "darwin-amd64": {"file": "go1.27.2.darwin-amd64.tar.gz", "sha256": "587b59182488b23aa6e5fc25110405a3e0e5b38ed2f5b2f46ed13c32aee356fe"},
+      "darwin-arm64": {"file": "go1.27.2.darwin-arm64.tar.gz", "sha256": "76812b213b1b2302c978d28fa52fa92d541704b9e7d9d5db8002c50e4018c4c5"},
+      "windows-amd64": {"file": "go1.27.2.windows-amd64.zip", "sha256": "1314008898bd40df77af4b014f777f08873dbdfbcd3d92308728ee03304fe04f"}
+    }
+  },
+  "targets": ["linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64", "windows-amd64"],
+  "minimumOS": {"linux": "kernel 3.2 with system CA certificates", "darwin": "macOS 13", "windows": "Windows 10 or Windows Server 2016"},
+  "tags": ["with_gvisor"],
+  "replacements": [{"module": "google.golang.org/protobuf", "version": "v1.34.2", "replacement": {"module": "github.com/metacubex/protobuf-go", "version": "v0.0.0-20260306035419-7ceee0674686"}}]
+}

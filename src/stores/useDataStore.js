@@ -280,6 +280,15 @@ export const useDataStore = defineStore('data', () => {
         dataCache.clear();
     }
 
+    function isSavedNode(node) {
+        return Boolean(
+            node &&
+            lastSavedData.subscriptions.some(
+                (saved) => saved.id === node.id && saved.url === node.url
+            )
+        );
+    }
+
     function syncCachedConfig(nextConfig) {
         const cachedData = dataCache.get();
         if (!cachedData) return;
@@ -468,6 +477,7 @@ export const useDataStore = defineStore('data', () => {
         fetchRuleTemplates,
         saveRuleTemplates,
         hydrateFromData,
+        isSavedNode,
         clearCachedData,
 
         // Helpers

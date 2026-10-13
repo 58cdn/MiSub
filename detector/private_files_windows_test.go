@@ -275,3 +275,87 @@ func TestWindowsPrivatePathsRejectJunctionsAndAliases(t *testing.T) {
 		t.Fatal("closed store failed open or leaked path")
 	}
 }
+
+func TestWindowsDirectoryLeasePinsEveryAncestor(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "ancestor")
+	if err := os.Mkdir(parent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	leaf := filepath.Join(parent, "private")
+	dir, err := openWindowsDirectory(leaf, true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dir.Close()
+	for _, pinned := range []string{parent, leaf} {
+		if err := os.Rename(pinned, pinned+"-moved"); err == nil {
+			_ = os.Rename(pinned+"-moved", pinned)
+			t.Fatalf("directory lease allowed rename of %s", filepath.Base(pinned))
+		}
+	}
+	if err = dir.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Rename(parent, parent+"-moved"); err != nil {
+		t.Fatalf("directory lease not released: %v", err)
+	}
+}
+
+func TestWindowsDirectoryHandleEnforcesShareDelete(t *testing.T) {
+	for _, access := range []uint32{winReadControl | winFileReadAttributes, winReadControl | winFileReadAttributes | winFileListDirectory} {
+		path := filepath.Join(t.TempDir(), "pinned")
+		if err := os.Mkdir(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+		name, _ := syscall.UTF16PtrFromString(path)
+		handle, err := syscall.CreateFile(name, access, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, nil, syscall.OPEN_EXISTING, syscall.FILE_FLAG_BACKUP_SEMANTICS|syscall.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		renameErr := os.Rename(path, path+"-moved")
+		if access&winFileListDirectory != 0 && renameErr == nil {
+			syscall.CloseHandle(handle)
+			t.Fatal("directory data-access handle allowed rename")
+		}
+		if access&winFileListDirectory == 0 {
+			t.Logf("metadata-only handle blocked rename: %t", renameErr != nil)
+		}
+		if err = syscall.CloseHandle(handle); err != nil {
+			t.Fatal(err)
+		}
+		if renameErr != nil {
+			if err = os.Rename(path, path+"-moved"); err != nil {
+				t.Fatalf("closed directory handle still blocked rename: %v", err)
+			}
+		}
+	}
+}
+
+func TestWindowsBootstrapSetupLockRejectsReparseAndBroadACL(t *testing.T) {
+	for _, kind := range []string{"junction", "broad"} {
+		t.Run(kind, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "private")
+			release, err := lockBootstrapSetupDirectory(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			release()
+			lock := filepath.Join(path, "setup.lock")
+			if kind == "broad" {
+				setFixtureDACL(t, lock, "D:P(A;;FA;;;WD)")
+			} else {
+				if err = os.Remove(lock); err != nil {
+					t.Fatal(err)
+				}
+				createFixtureJunction(t, lock, t.TempDir())
+			}
+			if release, err = lockBootstrapSetupDirectory(path); err == nil {
+				release()
+				t.Fatal("unsafe setup lock accepted")
+			}
+			if _, err = os.Lstat(lock); err != nil {
+				t.Fatal("unsafe existing setup lock was removed")
+			}
+		})
+	}
+}

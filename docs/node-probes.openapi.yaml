@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: MiSub multi-detector API
-  version: 1.4.0
+  version: 1.5.0
   description: |
     HTTPS only. Separate from /api/ext/v1 and /api/nodes/diagnostics.
     Admin writes require the same-origin Origin header and a valid auth_session.
@@ -192,10 +192,18 @@ paths:
       operationId: probeCapabilities
       responses:
         '200':
-          description: Types, service IDs, sources, observationsVersion, storageReady, version, maxNodes, maxAgents, maxAttempts and maxJobDownloadBytes.
+          description: Types, service IDs, sources, observationsVersion, storageReady, version, limits and installation. Installation is reviewed published-asset availability, separate from pairing protocol support. Missing or invalid metadata cannot enable installation.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Envelope' }
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Envelope' }
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          installation: { $ref: '#/components/schemas/InstallationCapabilities' }
         default: { $ref: '#/components/responses/Error' }
   /format:
     post:
@@ -623,6 +631,91 @@ components:
                   code: { type: string }
                   retryAfterSeconds: { type: integer, minimum: 1, maximum: 3600, description: Pairing 429 only; also returned in Retry-After. }
   schemas:
+    ReleaseTarget:
+      type: string
+      enum: [linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64]
+    ReleaseAsset:
+      type: object
+      required: [fileName, url, sha256, size]
+      properties:
+        fileName: { type: string, description: Exact target binary or install.sh/install.ps1 file name. }
+        url: { type: string, format: uri, description: 'Exact HTTPS github.com/58cdn/MiSub/releases/download/{tag}/{fileName} URL.' }
+        sha256: { type: string, pattern: '^[a-f0-9]{64}$', description: Nonzero expected SHA256. }
+        size: { type: integer, minimum: 1, maximum: 134217728 }
+    PublishedProbeRelease:
+      type: object
+      additionalProperties: false
+      required: [version, tag, sourceCommit, bootstrapProtocol, capabilities, assets, bootstrap]
+      properties:
+        version: { type: string, pattern: '^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$', description: Stable release; legacy 0.1.0 is not bootstrap compatible. }
+        tag: { type: string, description: Exactly probe-v followed by version. }
+        sourceCommit: { type: string, pattern: '^[a-f0-9]{40}$', description: Nonzero immutable wrapper revision. }
+        bootstrapProtocol: { const: 1 }
+        capabilities:
+          type: array
+          minItems: 6
+          maxItems: 6
+          uniqueItems: true
+          items: { enum: [pair, install, start, status, check-config, bootstrap-v1] }
+        assets:
+          type: array
+          minItems: 1
+          maxItems: 5
+          description: Unique targets; raw executable names are misub-probe-{target}, with .exe on Windows.
+          items:
+            allOf:
+              - { $ref: '#/components/schemas/ReleaseAsset' }
+              - type: object
+                required: [target]
+                properties:
+                  target: { $ref: '#/components/schemas/ReleaseTarget' }
+        bootstrap:
+          type: object
+          additionalProperties: false
+          description: Only shells with corresponding binary assets; script size is at most 1 MiB.
+          properties:
+            unix: { $ref: '#/components/schemas/ReleaseAsset' }
+            windows: { $ref: '#/components/schemas/ReleaseAsset' }
+    InstallationCapabilities:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, distributionReady, release, legacyReleases, reason, targets]
+      properties:
+        schemaVersion: { const: 1 }
+        distributionReady: { type: boolean, description: False until an audited release and its actual assets are verified. }
+        release:
+          oneOf:
+            - { type: 'null' }
+            - { $ref: '#/components/schemas/PublishedProbeRelease' }
+        legacyReleases:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            additionalProperties: false
+            required: [version, tag, capabilities]
+            properties:
+              version: { type: string }
+              tag: { type: string }
+              capabilities:
+                type: array
+                uniqueItems: true
+                items: { enum: [pair, install, start, status, check-config, bootstrap-v1] }
+                description: Legacy probe-v0.1.0 has an empty capability set.
+        reason: { enum: [available, distribution_not_ready, invalid_release_catalog] }
+        targets:
+          type: array
+          minItems: 5
+          maxItems: 5
+          description: Each supported target exactly once in the documented target order; missing assets remain unavailable.
+          items:
+            type: object
+            additionalProperties: false
+            required: [target, available, reason]
+            properties:
+              target: { $ref: '#/components/schemas/ReleaseTarget' }
+              available: { type: boolean }
+              reason: { enum: [available, distribution_not_ready, invalid_release_catalog, artifact_unavailable] }
     PairingId: { type: string, pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' }
     PairingUserCode:
       type: string

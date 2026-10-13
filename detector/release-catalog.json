@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "distributionReady": false,
+  "release": null,
+  "legacyReleases": [
+    {
+      "version": "0.1.0",
+      "tag": "probe-v0.1.0",
+      "capabilities": []
+    }
+  ]
+}

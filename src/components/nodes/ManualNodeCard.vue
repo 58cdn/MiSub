@@ -2,6 +2,7 @@
     import { computed } from 'vue';
     import { useI18n } from '@/i18n/index.js';
     import NodeDiagnosticsButton from './NodeDiagnosticsButton.vue';
+    import NodeConnectivityBadge from './NodeConnectivityBadge.vue';
 
     const props = defineProps({
         node: {
@@ -108,7 +109,7 @@
 
 <template>
     <div
-        class="group relative flex min-h-[88px] items-center justify-between gap-3 rounded-xl border border-gray-100 bg-white p-4 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary-500/5 dark:border-white/10 dark:bg-gray-900/70"
+        class="group relative flex flex-wrap min-h-[88px] items-center justify-between gap-3 rounded-xl border border-gray-100 bg-white p-4 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-primary-500/5 dark:border-white/10 dark:bg-gray-900/70"
         :class="{
             'opacity-50 grayscale': !node.enabled && !isSelectionMode,
             'ring-2 ring-primary-500 bg-primary-50 dark:bg-primary-900/10':
@@ -143,7 +144,7 @@
             </div>
         </div>
 
-        <div class="flex items-center gap-2 overflow-hidden flex-1 min-w-0">
+        <div class="flex w-full flex-wrap items-center gap-2 min-w-0">
             <!-- Group Badge -->
             <div
                 v-if="node.group"
@@ -161,7 +162,7 @@
                 {{ protocolStyle.text }}
             </div>
             <p
-                class="min-w-0 flex-1 truncate text-sm font-semibold text-gray-900 dark:text-white"
+                class="order-first basis-full min-w-0 truncate text-sm font-semibold text-gray-900 dark:text-white"
                 :title="node.name"
             >
                 {{ node.name || t('manualNodes.unnamed') }}
@@ -169,56 +170,12 @@
 
             <!-- Ping Result Badge -->
             <NodeDiagnosticsButton v-if="!isSelectionMode" :node="node" />
-            <div
-                v-if="pingResult"
-                class="flex shrink-0 flex-row items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium"
-                :class="{
-                    'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400':
-                        pingResult.status === 'ok' && pingResult.latency < 300,
-                    'bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400':
-                        pingResult.status === 'ok' && pingResult.latency >= 300,
-                    'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400':
-                        pingResult.status === 'error' || pingResult.status === 'timeout',
-                    'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400':
-                        pingResult.status === 'loading',
-                }"
-                :title="
-                    pingResult.message ||
-                    (pingResult.status === 'ok'
-                        ? t('manualNodes.connectivityOk')
-                        : t('manualNodes.connectivityFailed'))
-                "
-            >
-                <svg
-                    v-if="pingResult.status === 'loading'"
-                    class="animate-spin h-3 w-3"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                >
-                    <circle
-                        class="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        stroke-width="4"
-                    ></circle>
-                    <path
-                        class="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                    ></path>
-                </svg>
-                <span v-if="pingResult.status === 'loading'">{{ t('manualNodes.pinging') }}</span>
-                <span v-else-if="pingResult.status === 'ok'">{{ pingResult.latency }}ms</span>
-                <span v-else>{{ t('manualNodes.unreachable') }}</span>
-            </div>
+            <NodeConnectivityBadge v-if="pingResult" :result="pingResult" />
         </div>
 
         <div
             v-if="!isSelectionMode"
-            class="shrink-0 flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity duration-200"
+            class="ml-auto shrink-0 flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity duration-200"
         >
             <button
                 @click.stop="emit('ping')"

@@ -6,6 +6,9 @@ import { createServer } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import tailwind from '@tailwindcss/vite';
 import { chromium } from 'playwright';
+import releaseCatalog from '../../detector/release-catalog.json' with { type: 'json' };
+import { probeInstallationCapabilities } from '../../src/shared/probe-release.js';
+import { syntheticProbeInstallation } from '../fixtures/probe-release.js';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const evidence = resolve(process.argv[2] || resolve(root, 'tmp/pairing-evidence'));
@@ -35,6 +38,7 @@ let browser,
     requestState = 'pending',
     lastSeen = 0;
 let revoked = false;
+let installation = probeInstallationCapabilities(releaseCatalog);
 let created = 0,
     approved = 0,
     cancelled = 0,
@@ -74,6 +78,16 @@ try {
             : {}),
     });
     const context = await browser.newContext({ reducedMotion: 'reduce', serviceWorkers: 'block' });
+    await context.addInitScript(() => {
+        Object.defineProperty(navigator, 'clipboard', {
+            configurable: true,
+            get: () => ({
+                writeText: async (text) => {
+                    window.__fixtureClipboard = text;
+                },
+            }),
+        });
+    });
     await context.routeWebSocket('**/*', (route) => route.close());
     await context.route('**/*', async (route) => {
         const request = route.request(),
@@ -89,7 +103,8 @@ try {
         calls.push({ method: request.method(), path: url.pathname });
         const send = (data, status = 200) =>
             route.fulfill({ status, json: { success: true, data } });
-        if (url.pathname.endsWith('/capabilities')) return send({ storageReady: true });
+        if (url.pathname.endsWith('/capabilities'))
+            return send({ storageReady: true, installation });
         if (url.pathname.endsWith('/agents/overview'))
             return send({
                 agents:
@@ -171,6 +186,45 @@ try {
     });
     const page = await context.newPage();
     page.on('pageerror', (error) => errors.push(error.message));
+    for (const [name, width, height, dark] of [
+        ['desktop', 1440, 900, false],
+        ['mobile', 375, 812, true],
+        ['narrow-light', 320, 900, false],
+        ['narrow-dark', 320, 900, true],
+    ]) {
+        await page.setViewportSize({ width, height });
+        await page.goto(`${fixtureOrigin}/tests/browser/detector-management.html`);
+        if (dark) await page.evaluate(() => document.documentElement.classList.add('dark'));
+        await page.getByTestId('settings-tab-detectors').click();
+        await page
+            .getByText('Compatible installation packages have not been released.', { exact: false })
+            .waitFor();
+        assert.ok(await page.getByTestId('pairing-open').isDisabled());
+        assert.equal(await page.getByTestId('pairing-command').count(), 0);
+        assert.equal(await page.getByTestId('pairing-resume-command').count(), 0);
+        assert.equal(await page.getByTestId('pairing-start').count(), 0);
+        assert.equal(created, 0);
+        const before = calls.length;
+        await page.getByTestId('pairing-release-refresh').click();
+        await page.getByTestId('pairing-release-refresh').waitFor();
+        await page
+            .getByText('Compatible installation packages have not been released.', { exact: false })
+            .waitFor();
+        assert.ok(calls.slice(before).every(({ method }) => method === 'GET'));
+        assert.equal(created, 0);
+        assert.ok(await page.getByTestId('detector-advanced-toggle').isVisible());
+        const bad = await page.evaluate(() =>
+            [...document.querySelectorAll('main, section, article')]
+                .filter((element) => element.scrollWidth > element.clientWidth + 1)
+                .map((element) => element.tagName)
+        );
+        assert.deepEqual(bad, []);
+        await page.screenshot({
+            path: resolve(evidence, `detector-pairing-${name}-unavailable.png`),
+        });
+    }
+    // Only the following offline mock supplies synthetic published metadata for session regressions.
+    installation = syntheticProbeInstallation();
     async function open(width, height, dark = false) {
         await page.setViewportSize({ width, height });
         await page.goto(`${fixtureOrigin}/tests/browser/detector-management.html`);
@@ -205,31 +259,43 @@ try {
             )
         );
         await page.getByTestId('pairing-start').click();
-        await page.getByTestId('pairing-command').waitFor();
-        const command = await page.getByTestId('pairing-command').textContent();
-        assert.ok(command.includes(fixtureOrigin) && command.includes(windowId));
-        assert.ok(!/mp1_|pdc1_/.test(command));
-        assert.equal(
-            command,
-            `.\\misub-probe-windows-amd64.exe --pair --server '${fixtureOrigin}' --pair-window '${windowId}' --config "$env:LOCALAPPDATA\\MiSubProbe\\probe.json"`
-        );
+        await page.getByTestId('pairing-window-id').waitFor();
+        assert.ok((await page.getByTestId('pairing-window-id').textContent()).includes(windowId));
+        const windowsCommand = await page.getByTestId('pairing-command').textContent();
+        assert.ok(windowsCommand.includes("@('--setup', '--server'"));
+        assert.ok(!/install\.ps1|ExecutionPolicy|EncodedCommand/.test(windowsCommand));
+        await page.getByTestId('pairing-copy-command').click();
+        assert.equal(await page.evaluate(() => window.__fixtureClipboard), windowsCommand);
         assert.equal(created, before + 1);
         await terminal.selectOption('unix');
+        assert.ok((await page.getByTestId('pairing-window-id').textContent()).includes(windowId));
         assert.ok(
             (await page.getByTestId('pairing-command').textContent()).includes(
-                '"$HOME/.misub-probe/probe.json"'
+                '/probe-v9.9.9/install.sh'
             )
         );
         await terminal.selectOption('windows');
         assert.equal(created, before + 1, 'Switching shell instructions preserves the window');
-        await page.getByTestId('pairing-command').scrollIntoViewIfNeeded();
+        await page.getByTestId('pairing-window-id').scrollIntoViewIfNeeded();
+        await page.getByText('Review complete installation command', { exact: true }).click();
         await page.screenshot({
-            path: resolve(evidence, `detector-pairing-${name}-powershell.png`),
+            path: resolve(evidence, `detector-pairing-${name}-window.png`),
         });
         const commandOverflow = await page.evaluate(() =>
             [...document.querySelectorAll('main, section, pre')]
-                .filter((e) => e.scrollWidth > e.clientWidth + 1)
-                .map((e) => e.tagName)
+                .filter(
+                    (e) => e.getBoundingClientRect().width > 0 && e.scrollWidth > e.clientWidth + 1
+                )
+                .map((e) => ({
+                    tag: e.tagName,
+                    width: e.clientWidth,
+                    scrollWidth: e.scrollWidth,
+                    id: e.dataset.testid,
+                    whiteSpace: getComputedStyle(e).whiteSpace,
+                    wordBreak: getComputedStyle(e).wordBreak,
+                    codeWhiteSpace: getComputedStyle(e.firstElementChild || e).whiteSpace,
+                    codeWordBreak: getComputedStyle(e.firstElementChild || e).wordBreak,
+                }))
         );
         assert.deepEqual(commandOverflow, []);
         await page.getByTestId('pairing-code').fill('ZZZZZ-ZZZZZ');
@@ -313,6 +379,8 @@ try {
     expireNext = true;
     await page.getByTestId('pairing-start').click();
     await page.getByText('Pairing expired', { exact: true }).waitFor();
+    assert.equal(await page.getByTestId('pairing-command').count(), 0);
+    assert.ok(!(await page.getByTestId('pairing-resume-command').textContent()).includes(windowId));
     await page.screenshot({ path: resolve(evidence, 'detector-pairing-expired.png') });
     assert.deepEqual(external, []);
     assert.deepEqual(errors, []);
@@ -326,6 +394,12 @@ try {
         overflow,
         tests: [
             'HTTPS fixture origin',
+            'production unreleased catalog blocks every installation window and command',
+            'release refresh reads only; advanced manual configuration remains available',
+            'synthetic compatible-release metadata only for session regressions',
+            'copies the complete native Windows exe setup command without downloading a ps1',
+            'fixed verified Unix script command and independent resume command',
+            'expired windows remove the executable pairing command',
             'no implicit enrollment or approval',
             'short-code mismatch',
             'explicit comparison and approval',
