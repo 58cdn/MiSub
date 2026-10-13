@@ -4,6 +4,7 @@
  */
 
 import { StorageFactory, DataMigrator } from '../storage-adapter.js';
+import { handleLoginSecurityAdmin, securityJson } from '../services/login-security.js';
 import { KV_KEY_SUBS } from './config.js';
 import {
     createJsonResponse,
@@ -301,6 +302,8 @@ export async function handleApiRequest(request, env, context = null) {
         if (!isAuthDiagnosticsEnabled(env)) {
             return createErrorResponse('Not Found', 404);
         }
+        if (!(await authMiddleware(request, env)))
+            return securityJson({ error: 'Unauthorized' }, 401);
         const debugInfo = await getAuthDebugInfo(env);
         const authDiagnostic = await getAuthSessionDiagnostic(request, env);
 
@@ -316,6 +319,8 @@ export async function handleApiRequest(request, env, context = null) {
         if (!isAuthDiagnosticsEnabled(env)) {
             return createErrorResponse('Not Found', 404);
         }
+        if (!(await authMiddleware(request, env)))
+            return securityJson({ error: 'Unauthorized' }, 401);
         if (request.method !== 'POST') {
             return createJsonResponse({ error: 'Method Not Allowed' }, 405);
         }
@@ -324,7 +329,13 @@ export async function handleApiRequest(request, env, context = null) {
     }
 
     if (!(await authMiddleware(request, env))) {
-        return createJsonResponse({ error: 'Unauthorized' }, 401);
+        return securityJson({ error: 'Unauthorized' }, 401);
+    }
+
+    if (
+        ['/admin/notifications', '/admin/notifications/read', '/admin/login-audit'].includes(path)
+    ) {
+        return await handleLoginSecurityAdmin(request, env, path);
     }
 
     // Auth-only route for client management (POST, DELETE, etc.)

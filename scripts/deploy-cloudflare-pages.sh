@@ -48,7 +48,7 @@ esac
 # A Wrangler config is authoritative. Refuse to silently remove other KV/D1 bindings.
 if jq -e '[
   (.result.deployment_configs.production.kv_namespaces // {} | keys[] | select(. != "MISUB_KV")),
-  (.result.deployment_configs.production.d1_databases // {} | keys[] | select(. != "MISUB_DB" and . != "MISUB_PROBE_DB"))
+  (.result.deployment_configs.production.d1_databases // {} | keys[] | select(. != "MISUB_DB" and . != "MISUB_PROBE_DB" and . != "MISUB_SECURITY_DB"))
 ] | length > 0' "$project_json" >/dev/null; then
   echo "::error::Existing Pages project has other KV/D1 bindings. Review them before replacing its Wrangler configuration."
   exit 1
@@ -128,6 +128,16 @@ if [[ -n "$probe_d1_id" && "$probe_d1_id" == "$d1_id" ]]; then
   exit 1
 fi
 
+# Preserve only an already approved security binding. This deploy never creates,
+# initializes or enables login security storage.
+security_d1_id="$(jq -r '.result.deployment_configs.production.d1_databases.MISUB_SECURITY_DB.id // empty' "$project_json")"
+if [[ -n "$security_d1_id" ]]; then
+  if [[ ! "$security_d1_id" =~ ^[a-fA-F0-9-]{36}$ || "$security_d1_id" == "$d1_id" || "$security_d1_id" == "$probe_d1_id" ]]; then
+    echo '::error::MISUB_SECURITY_DB must use a valid independent database. Refusing to share business or detector storage.'
+    exit 1
+  fi
+fi
+
 # Generate at runtime only; never check account-specific resource IDs into Git.
 # Retain the committed compatibility flags and build output directory.
 if [[ -e wrangler.toml ]]; then
@@ -163,6 +173,15 @@ if [[ -n "$probe_d1_id" ]]; then
 binding = "MISUB_PROBE_DB"
 database_name = "${project_name}-probes"
 database_id = "${probe_d1_id}"
+CFG
+fi
+if [[ -n "$security_d1_id" ]]; then
+  cat >> wrangler.toml <<CFG
+
+[[d1_databases]]
+binding = "MISUB_SECURITY_DB"
+database_name = "${project_name}-login-security"
+database_id = "${security_d1_id}"
 CFG
 fi
 

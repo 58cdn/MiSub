@@ -107,6 +107,27 @@ function expectDeployed(result) {
     assert.ok(!result.output.includes('https://misub.pages.dev'));
 }
 
+test('preserves an approved independent security binding without creating or migrating it', (t) => {
+    const securityId = '22222222-2222-4333-8444-555555555555';
+    const result = runScript(t, [project({
+        kv_namespaces: { MISUB_KV: { namespace_id: kvId } },
+        d1_databases: { MISUB_DB: { id: d1Id }, MISUB_SECURITY_DB: { id: securityId } },
+    })]);
+    expectDeployed(result);
+    assert.ok(result.config.includes('binding = "MISUB_SECURITY_DB"'));
+    assert.ok(result.config.includes(`database_id = "${securityId}"`));
+    assert.equal(result.calls.length, 2);
+});
+
+test('refuses a security binding pointing at business storage', (t) => {
+    const result = runScript(t, [project({
+        kv_namespaces: { MISUB_KV: { namespace_id: kvId } },
+        d1_databases: { MISUB_DB: { id: d1Id }, MISUB_SECURITY_DB: { id: d1Id } },
+    })]);
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(result.calls, []);
+});
+
 test('retry reuses the project and KV created before the failed deploy', (t) => {
     const result = runScript(t, [
         project({ env_vars: { ADMIN_PASSWORD: { type: 'secret_text' } } }),
