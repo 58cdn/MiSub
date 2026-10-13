@@ -81,11 +81,20 @@ func TestEmbeddedKernelProviderTLSIdentity(t *testing.T) {
 }
 
 func TestEmbeddedKernelRejectsUntrustedNodeTLS(t *testing.T) {
+	extractStarted := time.Now()
 	binary := fixtureKernel(t)
+	t.Logf("kernel extraction completed in %s", time.Since(extractStarted))
 	var requests atomic.Int32
-	var sni atomic.Value
+	type clientHello struct {
+		serverName string
+		at         time.Time
+	}
+	var observedHello atomic.Value
 	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1); w.WriteHeader(204) }))
-	upstream.TLS = &tls.Config{GetConfigForClient: func(h *tls.ClientHelloInfo) (*tls.Config, error) { sni.Store(h.ServerName); return nil, nil }}
+	upstream.TLS = &tls.Config{GetConfigForClient: func(h *tls.ClientHelloInfo) (*tls.Config, error) {
+		observedHello.Store(clientHello{serverName: h.ServerName, at: time.Now()})
+		return nil, nil
+	}}
 	upstream.StartTLS()
 	defer upstream.Close()
 	u, _ := url.Parse(upstream.URL)
@@ -94,16 +103,25 @@ func TestEmbeddedKernelRejectsUntrustedNodeTLS(t *testing.T) {
 	identity := upstream.Certificate().DNSNames[0]
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	startupStarted := time.Now()
 	kernel, err := startKernel(ctx, binary, map[string]any{"name": "probe-target", "type": "http", "server": host, "port": port, "tls": true, "sni": identity})
+	t.Logf("kernel local startup completed in %s; error=%v", time.Since(startupStarted), err)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer kernel.Close()
+	requestStarted := time.Now()
 	r := checkProxy(ctx, kernel.Client, "http://fixture.invalid/", 2*time.Second)
+	t.Logf("node TLS request completed in %s; status=%s code=%s httpStatus=%d applicationRequests=%d parentError=%v", time.Since(requestStarted), r.Status, r.Code, r.HTTPStatus, requests.Load(), ctx.Err())
 	if r.Status == "passed" || requests.Load() != 0 {
 		t.Fatal("untrusted node TLS reached proxy request")
 	}
-	if sni.Load() != identity {
-		t.Fatal("pinned HTTP TLS node lost configured identity")
+	hello, observed := observedHello.Load().(clientHello)
+	if !observed {
+		t.Fatalf("node ClientHello not observed; TLS identity and certificate rejection were not exercised: status=%s code=%s httpStatus=%d", r.Status, r.Code, r.HTTPStatus)
+	}
+	t.Logf("last node ClientHello arrived after %s; serverName=%q", hello.at.Sub(requestStarted), hello.serverName)
+	if hello.serverName != identity {
+		t.Fatalf("pinned HTTP TLS node sent the wrong identity: got %q, want %q", hello.serverName, identity)
 	}
 }

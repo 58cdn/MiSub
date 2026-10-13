@@ -254,6 +254,14 @@ def wrapper_standard_dependencies(payload, prepared):
     return list(files.values())
 
 
+def bootstrap_environment(target, environment=None):
+    values = os.environ if environment is None else environment
+    # Python inherits PowerShell 7's module path. Windows PowerShell 5.1 must
+    # construct its own defaults when launched through this intermediate process.
+    return {key: value for key, value in values.items()
+            if not (target.startswith("windows-") and key.upper() == "PSMODULEPATH")}
+
+
 def native(repo, work, target, version, commit, require_materials=False):
     identity(version, commit)
     require(target in TARGETS and source.host_target() == target, "native_target_mismatch")
@@ -294,7 +302,7 @@ def native(repo, work, target, version, commit, require_materials=False):
     run([go, "vet", "./..."], wrapper / "detector", env, logs / "vet.txt")
     bootstrap_command = (["powershell.exe", "-NoProfile", "-NonInteractive", "-File", "bootstrap/test-install-windows.ps1"]
                          if target.startswith("windows-") else ["bash", "bootstrap/test_install.sh"])
-    run(bootstrap_command, wrapper / "detector", dict(os.environ), logs / "bootstrap-fixtures.txt")
+    run(bootstrap_command, wrapper / "detector", bootstrap_environment(target), logs / "bootstrap-fixtures.txt")
     output = work / "candidate"
     output.mkdir()
     binary_name = "misub-probe-" + target + (".exe" if target.startswith("windows-") else "")

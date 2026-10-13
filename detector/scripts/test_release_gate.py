@@ -4,6 +4,7 @@ import io
 import json
 import os
 import pathlib
+import sys
 import tempfile
 import tarfile
 import unittest
@@ -48,6 +49,22 @@ class ReleaseGateTests(unittest.TestCase):
             changed[key] = "forged"
             with self.subTest(key=key), self.assertRaisesRegex(gate.GateError, "manual_main"):
                 gate.release_context(VERSION, COMMIT, changed)
+
+    def test_windows_bootstrap_uses_own_module_defaults_without_mutating_parent(self):
+        parent = {"PSModulePath": "fixture-core-modules", "psmodulepath": "fixture-other-case", "PATH": "fixture-tools", "SystemRoot": "fixture-system"}
+        child = gate.bootstrap_environment("windows-amd64", parent)
+        self.assertEqual(child, {"PATH": "fixture-tools", "SystemRoot": "fixture-system"})
+        self.assertEqual(parent["PSModulePath"], "fixture-core-modules")
+        self.assertEqual(gate.bootstrap_environment("linux-amd64", parent), parent)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows PowerShell module loading requires Windows")
+    def test_windows_powershell_builtin_module_import_from_python(self):
+        executable = pathlib.Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+        result = gate.subprocess.run([str(executable), "-NoProfile", "-NonInteractive", "-Command",
+                                      "Import-Module Microsoft.PowerShell.Security -ErrorAction Stop; (Get-Command Get-Acl -ErrorAction Stop).Name"],
+                                     env=gate.bootstrap_environment("windows-amd64"), stdin=gate.subprocess.DEVNULL,
+                                     stdout=gate.subprocess.PIPE, stderr=gate.subprocess.PIPE, check=True, timeout=30)
+        self.assertEqual(result.stdout.strip(), b"Get-Acl")
 
     def review_fixture(self):
         main = fixture_file("mihomo/main.go")

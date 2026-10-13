@@ -31,6 +31,10 @@ wrapper 输入通过 `git archive` 从工作流的精确 commit 读取，并重�
 - Bash 或 Windows PowerShell 的本地 mock 引导安装 fixture。测试不会配对、
   注册用户服务、启用登录启动或连接真实节点。
 
+Windows PowerShell fixture 子进程使用本版本的默认模块搜索路径，避免从
+PowerShell 7 经 Python 继承不兼容的模块。该处理仅作用于子进程环境，依据
+[微软的模块路径说明](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_psmodulepath?view=powershell-7.5#starting-windows-powershell-from-powershell-7)。
+
 内核使用上游原生的系统 CA 模式，TLS 证书验证保持启用。Linux 需要系统 CA
 证书；macOS 最低版本为 13，Windows 为 Windows 10 / Server 2016 x64。
 
