@@ -1,20 +1,20 @@
 # User-level detector installation
 
-Linux and macOS clients provide explicit management commands for an already available local executable. Package distribution remains paused. Installation copies the executable currently being invoked; it does not download updates, pair, create credentials, contact MiSub or start a process. Build with Go 1.25 or later and inspect the executable's provenance before installation. Local manifest hashes detect changed installation files; they do not authenticate the source executable.
+For a first installation, use the [one-command guide](detector-one-command-install.md) with [MiSub Probe 0.2.0](https://github.com/58cdn/MiSub/releases/tag/probe-v0.2.0). This document covers advanced management after obtaining and verifying a local executable. Direct `--install` copies that executable and writes a private manifest; it does not download updates, pair, create credentials, contact MiSub or start a process. Direct `--pair` saves configuration, and `--start` starts an installed client. The default bootstrap explicitly performs these steps in sequence after browser approval. Local manifest hashes detect changed files; they do not authenticate the original executable's source.
 
 ## Commands
 
 Run as an ordinary user. The examples use a local executable named `misub-probe`; replace it with the actual local path. Management commands are mutually exclusive and cannot be combined with pairing, diagnostic or execution flags.
 
-| Command | Effect |
-| --- | --- |
-| `./misub-probe --install` | Copy the current executable and write a private manifest and service description. Default config: `$HOME/.misub-probe/probe.json`. |
-| `./misub-probe --install --config /absolute/private/probe.json` | Record an explicit absolute config path, outside the managed installation tree. The config may be created later by a separate pairing command. |
-| `./misub-probe --start` | Validate installation and private config, then explicitly start the current user's service. Already running is idempotent. |
-| `./misub-probe --stop` | Stop the owned service and confirm it no longer has a running PID. |
-| `./misub-probe --status --json` | Read installed version, verified executable path, platform, process state, PID when available and registration state. |
-| `./misub-probe --reinstall` | Require a stopped service and valid existing config, copy the invoking executable into a new generation and preserve the same config path and contents. |
-| `./misub-probe --uninstall` | Require a stopped service, unregister its temporary service entry and remove verified installation files. Preserve config and server identity. |
+| Command                                                         | Effect                                                                                                                                                  |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `./misub-probe --install`                                       | Copy the current executable and write a private manifest and service description. Default config: `$HOME/.misub-probe/probe.json`.                      |
+| `./misub-probe --install --config /absolute/private/probe.json` | Record an explicit absolute config path, outside the managed installation tree. The config may be created later by a separate pairing command.          |
+| `./misub-probe --start`                                         | Validate installation and private config, then explicitly start the current user's service. Already running is idempotent.                              |
+| `./misub-probe --stop`                                          | Stop the owned service and confirm it no longer has a running PID.                                                                                      |
+| `./misub-probe --status --json`                                 | Read installed version, verified executable path, platform, process state, PID when available and registration state.                                   |
+| `./misub-probe --reinstall`                                     | Require a stopped service and valid existing config, copy the invoking executable into a new generation and preserve the same config path and contents. |
+| `./misub-probe --uninstall`                                     | Require a stopped service, unregister its temporary service entry and remove verified installation files. Preserve config and server identity.          |
 
 Install first, complete [device pairing](detector-pairing-api.md) separately if no config exists, then run `--start` explicitly. Pairing saves config and exits. Each later start is another explicit action. Reinstall copies whichever executable is being invoked, so invoke the intended replacement version.
 
@@ -44,4 +44,4 @@ While a started detector remains alive, transient network failures retry at the 
 
 ## Validation boundary
 
-Acceptance uses temporary directories, fake command runners and in-memory HTTP transports. It covers ownership, permissions, no-clobber publication, unknown files, config preservation, interrupted uninstall, command ordering, conflict handling, offline recovery and revocation. Native CI checks generated units with `systemd-analyze verify`, generated plists with `plutil -lint`, and command help without registering services. These checks do not establish that a real user service starts successfully on a specific device. Real installation, pairing and service execution remain separate explicit user operations. Windows installation is not supported by this implementation.
+Acceptance uses temporary directories, fake command runners and in-memory HTTP transports. It covers ownership, permissions, no-clobber publication, unknown files, config preservation, interrupted uninstall, command ordering, conflict handling, offline recovery and revocation. Native CI checks generated units with `systemd-analyze verify`, generated plists with `plutil -lint`, and command help without registering services. These checks do not establish that a real user service starts successfully on a specific device. Real installation, pairing and service execution remain separate explicit user operations. For Windows process management and private-file requirements, see the [native Windows guide](detector-windows.md).

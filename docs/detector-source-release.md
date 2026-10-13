@@ -42,14 +42,14 @@ PowerShell 7 经 Python 继承不兼容的模块。该处理仅作用于子进�
 
 `detector/source-license-review.json` 是随源码审查的逐文件许可映射，其字段为：
 
-| 字段 | 含义 |
-| --- | --- |
-| `schemaVersion` | 当前为 `1` |
-| `sourceLockSha256` | 规范化源码构建锁的 SHA256 |
-| `reviews[].scope` | `mihomo`、`go` 或 vendor 的原始 module path |
-| `inputFiles` | 五目标实际链接文件的并集，记录包内路径、字节数和 SHA256 |
-| `notices` | 包内完整、非空许可/通知文件及相同摘要字段 |
-| `rationale` | 该映射适用的来源与理由，供独立审查 |
+| 字段               | 含义                                                    |
+| ------------------ | ------------------------------------------------------- |
+| `schemaVersion`    | 当前为 `1`                                              |
+| `sourceLockSha256` | 规范化源码构建锁的 SHA256                               |
+| `reviews[].scope`  | `mihomo`、`go` 或 vendor 的原始 module path             |
+| `inputFiles`       | 五目标实际链接文件的并集，记录包内路径、字节数和 SHA256 |
+| `notices`          | 包内完整、非空许可/通知文件及相同摘要字段               |
+| `rationale`        | 该映射适用的来源与理由，供独立审查                      |
 
 门槛重新散列源码包的每个文件，与内部 manifest 一一对应，并校验许可映射的
 每个输入、全文通知及所有实际链接文件。wrapper 的标准库依赖也纳入检查。
@@ -97,6 +97,8 @@ Actions 运行传输候选资产。PR、push 和 `publish=false` 不上传二进
 
 ## 发行内容与网页启用
 
+[MiSub Probe 0.2.0](https://github.com/58cdn/MiSub/releases/tag/probe-v0.2.0) 于 2026-10-13 从 MiSub 提交 `9ccee76c3cab149f34dca96c304310c9574c0d29` 发行。该提交对应实际程序、源码材料、tag 与原始构建签名；如经草稿恢复公开，恢复工具自身提交另行记录，不改变原资产源码身份。站点目录激活是后续独立提交。原 run/attempt、恢复操作记录和公开下载核验结果保存在本次发行/目录 PR 的证据中。
+
 发行包含五个原生可执行文件、每目标完整 wrapper 源码快照和内核/工具链源码包、
 五目标构建证据、两种引导脚本、`release-catalog.json`、`release-manifest.json`、
 `SOURCE.md` 与 `SHA256SUMS`。源码快照都验证同一 Git tree，压缩字节可以随
@@ -117,6 +119,10 @@ Actions 运行传输候选资产。PR、push 和 `publish=false` 不上传二进
 逐项确认。上述 CI 使用临时和回环 fixture，不构成这些实网验收。
 
 ## 本地 fixture 与构建命令
+
+开发、源码构建、发行工具及其 Python fixture 需要 Python 3.10 或更新版本。`release_gate.py` 使用 `Path.write_text(..., newline=...)`；该参数从 [Python 3.10](https://docs.python.org/3.10/library/pathlib.html#pathlib.Path.write_text) 起支持。下载、安装和运行已发行的单文件检测器不依赖 Python。
+
+先运行 `python3 --version` 确认版本。macOS 的 `python3` 可能仍指向较旧版本；若低于 3.10，请使用本机已经安装的兼容解释器，并在后续 fixture、构建与发行命令中始终使用同一解释器。例如已安装 Python 3.14 时，先运行 `python3.14 --version`，再将下面命令的 `python3` 替换为 `python3.14`。没有兼容解释器时先停止工具操作；这些命令不会安装 Python 或修改系统默认解释器。
 
 ```sh
 python3 -B -m unittest discover -s detector/scripts -p 'test_release_gate.py' -v

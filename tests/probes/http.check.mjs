@@ -4,6 +4,8 @@ import { createProbeHandler } from '../../functions/services/probe-http.js';
 import { createProbeNodePreparer } from '../../functions/services/probe-node.js';
 import { ProbeStore } from '../../functions/services/probe-store.js';
 import { database } from './sqlite-helper.mjs';
+import releaseCatalog from '../../detector/release-catalog.json' with { type: 'json' };
+import { validateProbeReleaseCatalog, readProbeInstallation, PROBE_RELEASE_TARGETS } from '../../src/shared/probe-release.js';
 const base='https://misub.example/api/probes/v1/';
 function fixture() {
     const env={MISUB_PROBE_DB:database()};
@@ -12,16 +14,22 @@ function fixture() {
     return {env,handle,request};
 }
 const admin={'x-test-admin':'yes',Origin:'https://misub.example'};
-test('installation capabilities are authenticated and fail closed for the current unpublished packages',async()=>{
+test('installation capabilities authenticate reads and expose the validated production catalog without D1',async()=>{
     const {handle,request}=fixture();
     assert.equal((await handle(request('capabilities'),{})).status,401);
     const response=await handle(request('capabilities',undefined,admin),{});
     assert.equal(response.status,200);assert.equal(response.headers.get('Cache-Control'),'no-store');
     const {data}=await response.json();
-    assert.equal(data.storageReady,false);assert.equal(data.installation.distributionReady,false);
-    assert.equal(data.installation.release,null);assert.equal(data.installation.targets.length,5);
-    assert.ok(data.installation.targets.every(target=>target.available===false));
-    assert.deepEqual(data.installation.legacyReleases,[{version:'0.1.0',tag:'probe-v0.1.0',capabilities:[]}]);
+    const verified=validateProbeReleaseCatalog(releaseCatalog);
+    assert.equal(data.storageReady,false);
+    assert.deepEqual(readProbeInstallation(data.installation),data.installation);
+    assert.equal(data.installation.distributionReady,verified.distributionReady);
+    assert.deepEqual(data.installation.release,verified.release);
+    assert.deepEqual(data.installation.legacyReleases,verified.legacyReleases);
+    assert.deepEqual(data.installation.targets.map(({target})=>target),PROBE_RELEASE_TARGETS);
+    for(const {target,available} of data.installation.targets) {
+        assert.equal(available,verified.distributionReady&&verified.release.assets.some(asset=>asset.target===target));
+    }
 });
 test('admin auth and CSRF are enforced before mutations',async()=>{
     const {env,handle,request}=fixture();

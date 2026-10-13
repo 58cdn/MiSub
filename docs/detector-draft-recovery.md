@@ -8,7 +8,7 @@
 
 ## 恢复前提
 
-恢复使用已审查并提交的代码，以及与原发行提交完全匹配的干净源码 checkout。两个提交分别写入报告。需要 Python 3、Git 和已登录且有该仓库发行权限的 GitHub CLI；`gh attestation verify` 必须支持脚本使用的来源与签名约束。
+恢复使用已审查并提交的代码，以及与原发行提交完全匹配的干净源码 checkout。两个提交分别写入报告。恢复工具及其 Python fixture 需要 Python 3.10 或更新版本、Git 和已登录且有该仓库发行权限的 GitHub CLI；`gh attestation verify` 必须支持脚本使用的来源与签名约束。恢复复用的发行工具使用 `Path.write_text(..., newline=...)`，该参数从 [Python 3.10](https://docs.python.org/3.10/library/pathlib.html#pathlib.Path.write_text) 起支持。此要求仅适用于开发与发行工具；下载、安装和运行已发行的单文件检测器不依赖 Python。
 
 明确记录版本、原源码提交、原手动运行 ID、原运行次数和草稿 Release ID。恢复只接受 `58cdn/MiSub` 的 `main` 手动源码发行运行，要求 fixture、五个平台原生构建、材料汇总和签名步骤已成功。原运行发生重跑时，须重新调查，脚本会拒绝运行次数变化。
 
@@ -22,6 +22,8 @@
 恢复不构建新二进制、不上传资产、不移动标签，也不替换已有文件。
 
 ## 执行
+
+先运行 `python3 --version` 确认版本不低于 3.10。若 macOS 上的 `python3` 版本不足，使用已经安装的兼容解释器；例如已有 Python 3.14 时，先运行 `python3.14 --version`，再将本文恢复命令和 fixture 命令的 `python3` 一并替换为 `python3.14`，其余参数保持不变。没有兼容解释器时先停止，不忽略版本不符产生的错误，也不修改系统默认解释器。
 
 先在修复代码所在的干净 checkout 中进行只读验收。参数中的值由失败运行和原草稿确认；工作目录必须是尚不存在的新目录。
 

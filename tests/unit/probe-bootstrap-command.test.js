@@ -9,7 +9,11 @@ import {
     isProbeCommandOrigin,
     probeTerminalAvailable,
 } from '../../src/shared/probe-bootstrap-command.js';
-import { syntheticProbeInstallation } from '../fixtures/probe-release.js';
+import {
+    syntheticProbeInstallation,
+    syntheticProbeReleaseCatalog,
+    unpublishedProbeInstallation,
+} from '../fixtures/probe-release.js';
 
 const origin = 'https://misub.fixture.invalid';
 const id = '11111111-1111-4111-8111-111111111111';
@@ -21,6 +25,10 @@ const options = (terminal = 'unix') => ({
     now,
     window: { id, origin, status: 'open', checkedAt: now - 1000, expiresAt: now + 200000 },
 });
+const productionOptions = (terminal, resume = false) => ({
+    ...(resume ? { terminal, resume: true } : options(terminal)),
+    installation: probeInstallationCapabilities(catalog),
+});
 const read = (path) =>
     readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8').replaceAll('\r\n', '\n');
 const bash =
@@ -31,9 +39,85 @@ const bash =
         : 'bash';
 
 describe('auditable one-command probe bootstrap', () => {
-    it('never supplies an installation or resume command from the unpublished production catalog', () => {
+    it.each([
+        ['unix', false],
+        ['unix', true],
+        ['windows', false],
+        ['windows', true],
+    ])(
+        'binds the production %s command (resume=%s) to reviewed 0.2.0 bytes',
+        (terminal, resume) => {
+            const command = buildProbeBootstrapCommand(productionOptions(terminal, resume));
+            expect(command).not.toBe('');
+            expect(command).not.toMatch(/@@|probe-v9\.9\.9/);
+            if (terminal === 'windows') {
+                expect(command).toContain(
+                    "$probeRelease = @{ Version = '0.2.0'; SourceCommit = '9ccee76c3cab149f34dca96c304310c9574c0d29'; Sha256 = '73e71b4823b7aa1910733e4b0552c40f04281a5d15cda9aa6eb4b0f8e13c4d08'; Size = 49074176 }"
+                );
+                expect(command).toContain(
+                    "[Uri] ('https://github.com/58cdn/MiSub/releases/download/probe-v' + $Release.Version + '/misub-probe-windows-amd64.exe')"
+                );
+                expect(command).toContain(
+                    resume
+                        ? "@('--setup', '--resume', '--config', $environment.Config)"
+                        : `@('--setup', '--server', '${origin}', '--pair-window', '${id}', '--config', $environment.Config)`
+                );
+                expect(command).not.toMatch(/install\.ps1|ExecutionPolicy|EncodedCommand/);
+            } else {
+                expect(command).toContain(
+                    `expected_hash='"'"'b30e2f17570eb7ac8b4af3151a3bf7c34ddded39b130c594aa5a7afe2ead69b2'"'"'`
+                );
+                expect(command).toContain(`expected_size='"'"'13917'"'"'`);
+                expect(command).toContain(
+                    `release_url='"'"'https://github.com/58cdn/MiSub/releases/download/probe-v0.2.0/install.sh'"'"'`
+                );
+                expect(command).toContain(
+                    resume
+                        ? 'command bash "$work_dir/client" --resume'
+                        : 'command bash "$work_dir/client" --server "$1" --pair-window "$2"'
+                );
+            }
+            if (resume) {
+                expect(command).not.toContain(origin);
+                expect(command).not.toContain(id);
+            } else {
+                expect(command).toContain(origin);
+                expect(command).toContain(id);
+            }
+        }
+    );
+    it('selects executable and script metadata independently when every artifact differs', () => {
+        const distinct = syntheticProbeReleaseCatalog();
+        distinct.release.assets.forEach((asset, index) => {
+            asset.sha256 = String(index + 1).repeat(64);
+            asset.size = 20000 + index;
+        });
+        Object.assign(distinct.release.bootstrap.unix, { sha256: 'e'.repeat(64), size: 67890 });
+        Object.assign(distinct.release.bootstrap.windows, { sha256: 'd'.repeat(64), size: 56789 });
+        const files = [...distinct.release.assets, ...Object.values(distinct.release.bootstrap)];
+        expect(new Set(files.map(({ sha256 }) => sha256)).size).toBe(7);
+        expect(new Set(files.map(({ size }) => size)).size).toBe(7);
+        const installation = probeInstallationCapabilities(distinct);
+        for (const resume of [false, true]) {
+            const settings = (terminal) => ({
+                ...(resume ? { terminal, resume: true } : options(terminal)),
+                installation,
+            });
+            const windows = buildProbeBootstrapCommand(settings('windows'));
+            expect(windows).toContain(`Sha256 = '${'5'.repeat(64)}'; Size = 20004`);
+            const unix = buildProbeBootstrapCommand(settings('unix'));
+            expect(unix).toContain(`expected_hash='"'"'${'e'.repeat(64)}'"'"'`);
+            expect(unix).toContain(`expected_size='"'"'67890'"'"'`);
+            for (const file of files) {
+                if (file.fileName !== 'misub-probe-windows-amd64.exe')
+                    expect(windows).not.toContain(file.sha256);
+                if (file.fileName !== 'install.sh') expect(unix).not.toContain(file.sha256);
+            }
+        }
+    });
+    it('never supplies an installation or resume command from the explicit unpublished fixture', () => {
         for (const terminal of ['unix', 'windows']) {
-            const installation = probeInstallationCapabilities(catalog);
+            const installation = unpublishedProbeInstallation();
             expect(buildProbeBootstrapCommand({ ...options(terminal), installation })).toBe('');
             expect(buildProbeBootstrapCommand({ installation, terminal, resume: true })).toBe('');
         }
@@ -221,9 +305,13 @@ describe('auditable one-command probe bootstrap', () => {
             for (const settings of [
                 options(),
                 { installation: syntheticProbeInstallation(), terminal: 'unix', resume: true },
+                productionOptions('unix'),
+                productionOptions('unix', true),
             ]) {
+                const command = buildProbeBootstrapCommand(settings);
+                expect(command).not.toBe('');
                 const result = spawnSync(bash, ['-n'], {
-                    input: buildProbeBootstrapCommand(settings),
+                    input: command,
                     encoding: 'utf8',
                     timeout: 10000,
                 });
@@ -241,12 +329,16 @@ describe('auditable one-command probe bootstrap', () => {
             for (const settings of [
                 options('windows'),
                 { installation: syntheticProbeInstallation(), terminal: 'windows', resume: true },
+                productionOptions('windows'),
+                productionOptions('windows', true),
             ]) {
+                const command = buildProbeBootstrapCommand(settings);
+                expect(command).not.toBe('');
                 const result = spawnSync(
                     'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
                     ['-NoProfile', '-NonInteractive', '-Command', parser],
                     {
-                        input: buildProbeBootstrapCommand(settings),
+                        input: command,
                         encoding: 'utf8',
                         timeout: 10000,
                     }

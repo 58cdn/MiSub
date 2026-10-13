@@ -6,9 +6,10 @@ import { createServer } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import tailwind from '@tailwindcss/vite';
 import { chromium } from 'playwright';
-import releaseCatalog from '../../detector/release-catalog.json' with { type: 'json' };
-import { probeInstallationCapabilities } from '../../src/shared/probe-release.js';
-import { syntheticProbeInstallation } from '../fixtures/probe-release.js';
+import {
+    syntheticProbeInstallation,
+    unpublishedProbeInstallation,
+} from '../fixtures/probe-release.js';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const evidence = resolve(process.argv[2] || resolve(root, 'tmp/pairing-evidence'));
@@ -38,7 +39,7 @@ let browser,
     requestState = 'pending',
     lastSeen = 0;
 let revoked = false;
-let installation = probeInstallationCapabilities(releaseCatalog);
+let installation = unpublishedProbeInstallation();
 let created = 0,
     approved = 0,
     cancelled = 0,
@@ -394,7 +395,7 @@ try {
         overflow,
         tests: [
             'HTTPS fixture origin',
-            'production unreleased catalog blocks every installation window and command',
+            'explicit unpublished fixture blocks every installation window and command',
             'release refresh reads only; advanced manual configuration remains available',
             'synthetic compatible-release metadata only for session regressions',
             'copies the complete native Windows exe setup command without downloading a ps1',

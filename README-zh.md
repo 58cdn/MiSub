@@ -31,6 +31,8 @@
 
 ### 🎯 核心功能
 
+- **可选节点检测**：由独立 MiSub Probe 经所选节点测量代理请求延迟，记录出口 IP、国家与各 Provider 证据；提交任务前需明确授权共享节点凭据。
+
 - **🗂️ 订阅分组 (Profiles)**
   - 自由组合机场订阅和手动节点
   - 为不同场景生成专属订阅链接
@@ -257,6 +259,12 @@ wrangler d1 execute misub --file=schema.sql --remote
 ---
 ## 💡 使用说明
 
+### 安装独立检测器
+
+进入“设置 → 数据与集成 → 添加 / 管理检测器 → 安装并连接检测器”，选择设备终端并开启安装窗口，将完整命令复制到目标设备。命令下载并核验客户端；在网页核对短码、站点与会话指纹后批准安装启动。管理页确认首次真实通信后，再选择节点并授权检测。详见[一次复制安装](docs/detector-one-command-install.md)和[节点检测操作说明](docs/node-probes.md)。
+
+[MiSub Probe 0.2.0](https://github.com/58cdn/MiSub/releases/tag/probe-v0.2.0) 与主应用独立维护版本。旧 `probe-v0.1.0` 不支持此流程所需的配对和用户级安装命令。
+
 ### 登录管理界面
 
 1. 部署完成后，公开页面默认 **不开启**（访问域名会显示伪装页）。
@@ -398,6 +406,10 @@ MiSub 提供 `/cron` 接口用于外部定时服务触发订阅刷新，适合 C
 
 ## 📚 文档索引
 
+- [节点检测操作说明](docs/node-probes.md)
+- [一次复制安装检测器](docs/detector-one-command-install.md)
+- [检测器平台与高级 CLI](detector/README.md)
+- [源码构建与发行核验](docs/detector-source-release.md)
 - [External API 使用说明](docs/external-management-api-usage.md)
 - [External API 接口总览](docs/external-management-api.md)
 - [External API OpenAPI 规范](docs/external-management-api.openapi.yaml)

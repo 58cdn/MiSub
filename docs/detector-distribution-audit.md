@@ -1,9 +1,12 @@
 # Detector distribution materials audit
 
-The offline auditor verifies supplied material bytes, inventories their contents,
-and collects complete license files for further review. Distribution stays paused:
-artifact uploads and Release publication retain their `&& false` conditions.
-Existing release assets remain unchanged.
+The offline inventory auditor verifies supplied historical prebuilt material
+bytes and collects complete license files for review. Its `ready: false` result
+and the old `probe-detector.yml` artifact/publication freeze remain in place.
+[MiSub Probe 0.2.0](https://github.com/58cdn/MiSub/releases/tag/probe-v0.2.0) uses a separate [source-build release
+gate](detector-source-release.md) that validates the corresponding inputs,
+linked-file notice mapping and authenticated artifact provenance. This inventory
+tool does not authorize that release or authenticate the old prebuilt binaries.
 
 ## Run an inventory
 
@@ -44,12 +47,12 @@ the number of packages linked into a binary. Vendoring preserves the original
 import path even when a module is replaced, so notice paths are associated with
 that original path while the effective replacement remains visible.
 
-| Status | Meaning |
-| --- | --- |
-| `verified` | Supplied bytes match the locked SHA256 and pass structural checks. `verifiedScope` is only `sha256-and-structure`. |
-| `missing` | No file was supplied for the material. |
-| `unverified` | Expected data is empty/missing, or a stronger claim has no implemented verifier. |
-| `invalid` | Digest, archive safety, resource limit, or parsing checks failed. |
+| Status       | Meaning                                                                                                            |
+| ------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `verified`   | Supplied bytes match the locked SHA256 and pass structural checks. `verifiedScope` is only `sha256-and-structure`. |
+| `missing`    | No file was supplied for the material.                                                                             |
+| `unverified` | Expected data is empty/missing, or a stronger claim has no implemented verifier.                                   |
+| `invalid`    | Digest, archive safety, resource limit, or parsing checks failed.                                                  |
 
 Exit `0` means an inventory completed without invalid supplied material; missing
 materials are still reported. Exit `1` means invalid input, material, or collection
@@ -123,11 +126,11 @@ with 24 MiB and 80 MiB compressed limits respectively, and their complete hashes
 were recomputed locally. Their contents were inventoried without execution.
 The SHA256 values agree with the [official asset listing](https://github.com/MetaCubeX/mihomo/releases/expanded_assets/v1.19.32).
 
-| Material | Compressed bytes | Archive entries / regular files | Recognized notice files |
-| --- | ---: | ---: | ---: |
-| Official `vendor.tar.gz` | 17,606,440 | 7,754 / 6,667 | 173 |
-| Official `toolchain.tar.gz` | 67,743,907 | 16,705 / 15,037 | 38 |
-| Historical MiSub `mihomo-source-v1.19.32.tar.gz` | 18,901,195 | 9,004 / 7,715 | 176 |
+| Material                                         | Compressed bytes | Archive entries / regular files | Recognized notice files |
+| ------------------------------------------------ | ---------------: | ------------------------------: | ----------------------: |
+| Official `vendor.tar.gz`                         |       17,606,440 |                   7,754 / 6,667 |                     173 |
+| Official `toolchain.tar.gz`                      |       67,743,907 |                 16,705 / 15,037 |                      38 |
+| Historical MiSub `mihomo-source-v1.19.32.tar.gz` |       18,901,195 |                   9,004 / 7,715 |                     176 |
 
 The counts include AUTHORS and PATENTS. They are inventory counts under this
 auditor's filename rule, not a legal-coverage conclusion. The official vendor
