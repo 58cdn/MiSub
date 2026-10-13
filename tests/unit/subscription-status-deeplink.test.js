@@ -19,6 +19,8 @@ vi.mock('vue-router', async () => {
 import SubscriptionGroupsView from '../../src/views/SubscriptionGroupsView.vue';
 import { createI18n } from '../../src/i18n/index.js';
 import { useDataStore } from '../../src/stores/useDataStore.js';
+import SubscriptionPanel from '../../src/components/subscriptions/SubscriptionPanel.vue';
+import { api } from '../../src/lib/http.js';
 
 const expired = Math.floor(Date.now() / 1000) - 60;
 
@@ -113,6 +115,37 @@ describe('SubscriptionGroupsView 深链状态筛选 (?status=)', () => {
         const wrapper = mountView();
         expect(wrapper.vm.activeStatusFilter).toBe('');
         expect(wrapper.vm.visibleSubscriptions.length).toBe(6);
+    });
+
+    it('preserves four sources and profile references when sorting three filtered sources and saving', async () => {
+        const store = useDataStore();
+        store.subscriptions = [
+            ...['a', 'b', 'c'].map((id) =>
+                withUrl({ id, name: id, enabled: true, lastError: 'synthetic failure' })
+            ),
+            withUrl({ id: 'd', name: 'd', enabled: true, nodeCount: 3 }),
+        ];
+        store.profiles = [{ id: 'profile', subscriptions: ['a', 'b', 'c', 'd'] }];
+        route.query = { status: 'error' };
+        const wrapper = mountView();
+        const post = vi.spyOn(api, 'post').mockResolvedValue({ success: true });
+        try {
+            await wrapper.vm.$nextTick();
+            const panel = wrapper.findComponent(SubscriptionPanel);
+            expect(panel.props('subscriptions')).toHaveLength(3);
+            panel.vm.draggableSubscriptions = [...panel.props('subscriptions')].reverse();
+            await wrapper.vm.$nextTick();
+            await store.saveData();
+
+            expect(post).toHaveBeenCalledOnce();
+            const [path, payload] = post.mock.calls[0];
+            expect(path).toBe('/api/misubs');
+            expect(payload.misubs.map((item) => item.id)).toEqual(['c', 'b', 'a', 'd']);
+            expect(payload.profiles[0].subscriptions).toEqual(['a', 'b', 'c', 'd']);
+        } finally {
+            post.mockRestore();
+            wrapper.unmount();
+        }
     });
 
     it('ignores an unrecognised status instead of showing an empty list', () => {
