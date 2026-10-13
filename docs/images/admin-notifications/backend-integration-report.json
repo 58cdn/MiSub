@@ -1,0 +1,175 @@
+{
+    "schemaVersion": 1,
+    "passed": true,
+    "startedAt": "2026-10-13T14:08:54.744Z",
+    "finishedAt": "2026-10-13T14:08:57.367Z",
+    "frontendCommit": "344b613b2163aebe6122a5944ea75c1501075c1c",
+    "frontendPaths": [
+        "src",
+        "public",
+        "index.html",
+        "vite.config.js",
+        "package.json",
+        "package-lock.json"
+    ],
+    "backendCommit": "8b9d52cafc3d7a6c8358d7476476716d1a11ffbc",
+    "backendFiles": [
+        "functions/modules/api-router.js",
+        "functions/modules/auth-middleware.js",
+        "functions/services/login-security.js",
+        "functions/services/login-security-store.js",
+        "functions/services/login-security-metadata.js",
+        "tests/fixtures/login-security-db.js",
+        "migrations/login-security/0001_login_security.sql"
+    ],
+    "distEntrySha256": "009853dcd01efd1d0a123d72a727138bc2a4f2987aed3cf74808809043a494fa",
+    "buildProvenance": "Build must be performed separately in the integration worktree; the entry hash identifies this run but does not independently attest source-to-build correspondence",
+    "nodeVersion": "v24.20.0",
+    "storage": "SQLite :memory: using the backend D1 interface fixture; no persistent database or migration command",
+    "transport": "Loopback static server; browser API interception dispatches the actual backend router with synthetic Cloudflare request metadata",
+    "unitTests": {
+        "filesPassed": 176,
+        "testsPassed": 1354,
+        "includesLocalMiniflareD1": true
+    },
+    "checks": [
+        "Without an administrator session the actual notification, audit and mark-read endpoints all return 401 and leave storage unchanged",
+        "Actual backend returns 401 for attempts 1-9 and 429 on attempt 10; UI renders error/countdown, disables submit, and locked correct-password retry cannot authenticate or extend the lock",
+        "After a simulated 10-minute backend clock advance, real login creates a warning and session; 24 persisted events paginate 20/4 with exclusive before=5, GET leaves unread unchanged, explicit read updates only IDs 1-4 and is idempotent",
+        "Read-only login audit displays only 23 successful logins across 20/3 pages and does not change shared unread state",
+        "switch-off: actual password validation/session login remains usable, notification/audit/read APIs return disabled, UI clears event rows, and no security event is added or marked read",
+        "binding-absent: actual password validation/session login remains usable, notification/audit/read APIs return disabled, UI clears event rows, and no security event is added or marked read",
+        "Cleared session cookie causes actual administrator API 401, global session reset, notification removal and a return to the login form",
+        "Configured but failing security storage returns actual 503 and the frontend service-unavailable message"
+    ],
+    "requestCounts": {
+        "GET /api/admin/notifications 401": 1,
+        "GET /api/admin/login-audit 401": 1,
+        "POST /api/admin/notifications/read 401": 1,
+        "POST /api/login 401": 11,
+        "POST /api/login 429": 2,
+        "POST /api/login 200": 25,
+        "GET /api/admin/notifications?limit=20 200": 9,
+        "GET /api/admin/notifications?limit=20&before=5 200": 3,
+        "POST /api/admin/notifications/read 200": 6,
+        "GET /api/admin/login-audit?limit=20 200": 1,
+        "GET /api/admin/login-audit?limit=20&before=5 200": 1,
+        "GET /api/admin/notifications 200": 3,
+        "GET /api/admin/login-audit 200": 3,
+        "GET /api/admin/notifications?limit=20 401": 1,
+        "POST /api/login 503": 1
+    },
+    "readRequests": [
+        {
+            "status": 401,
+            "ids": [1]
+        },
+        {
+            "status": 200,
+            "ids": [1]
+        },
+        {
+            "status": 200,
+            "ids": [4, 3, 2]
+        },
+        {
+            "status": 200,
+            "ids": [1, 2, 3, 4]
+        },
+        {
+            "status": 200,
+            "ids": [24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5]
+        },
+        {
+            "status": 200,
+            "ids": [24]
+        },
+        {
+            "status": 200,
+            "ids": [24]
+        }
+    ],
+    "unexpectedApi": [],
+    "outboundBackendRequests": [],
+    "mainStoreWrites": [],
+    "pageErrors": [],
+    "externalRequestsBlocked": [
+        "https://fonts.googleapis.com/css2",
+        "https://fonts.googleapis.com/css2",
+        "https://fonts.googleapis.com/css2",
+        "https://fonts.googleapis.com/css2",
+        "https://fonts.googleapis.com/css2",
+        "https://fonts.googleapis.com/css2"
+    ],
+    "screenshots": [
+        {
+            "name": "login-password-error.png",
+            "sha256": "f19d2ea894e1eaf7b6ecf7c3768a96f5353fab2cbdc2bc807dcb0fbd5d48d9ed",
+            "storedInRepository": false
+        },
+        {
+            "name": "login-locked.png",
+            "sha256": "8e309e8774815e0e8386fb74b43d461fa2bd164a7fee26a11412abda55978bd1",
+            "storedInRepository": false
+        },
+        {
+            "name": "notifications-page-1.png",
+            "sha256": "cb289a4464ec6ee9b213d8eee9b5b44870ac18cae14a4075242831102ddd35c5",
+            "storedInRepository": false
+        },
+        {
+            "name": "notifications-page-2.png",
+            "sha256": "24531c4ebf73ed1105312e11659a4151f50780e4754d57384df7fcc2a084dac4",
+            "storedInRepository": false
+        },
+        {
+            "name": "notifications-read.png",
+            "sha256": "c5678f92451ca53b04115cf868d03ea295793de88d594b3194051b2f156d2c8c",
+            "storedInRepository": false
+        },
+        {
+            "name": "disabled-during-read.png",
+            "sha256": "7cce1097faa86f609a9cafb782d8fb1e8f0d90c9bcf4c78b390d6c5d37427f3f",
+            "storedInRepository": false
+        },
+        {
+            "name": "switch-off.png",
+            "sha256": "7808da251507b9ed82854187319d016818e8f001bbf9577052a17477d05d82de",
+            "storedInRepository": false
+        },
+        {
+            "name": "binding-absent.png",
+            "sha256": "7808da251507b9ed82854187319d016818e8f001bbf9577052a17477d05d82de",
+            "storedInRepository": false
+        },
+        {
+            "name": "expired-session.png",
+            "sha256": "2382e85e1712ceb30d44223287c3f4ff1ae5f229c26840f552e87977448e0d5b",
+            "storedInRepository": false
+        },
+        {
+            "name": "security-service-unavailable.png",
+            "sha256": "d419c5b2351703e6badfea8c5d6fcc5cb3eb5139f32008ffbec80f9302baa2f8",
+            "storedInRepository": false
+        }
+    ],
+    "localLogDigests": [
+        {
+            "name": "integration-full-tests.log",
+            "sha256": "13e3d58ba87bc45f31852de2b5b34567e725b58e530e416ddb4f476ae7429583"
+        },
+        {
+            "name": "integration-build.log",
+            "sha256": "2206034f0f66194d03c36d18c4baa7d67a2eec7c2a18b460a13fe3ede1a6a4c5"
+        },
+        {
+            "name": "integration-browser-final.log",
+            "sha256": "3db964f359865e44a423bad0ce6e69c11e337ade045839d2708df69d605df61c"
+        }
+    ],
+    "limitations": [
+        "No Cloudflare/D1 deployment or production end-to-end test",
+        "No real source-IP trust verification",
+        "No Safari execution"
+    ]
+}
