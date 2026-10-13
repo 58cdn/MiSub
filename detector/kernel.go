@@ -166,24 +166,35 @@ func startKernel(parent context.Context, binary string, proxy map[string]any) (*
 	k := &Kernel{transport: transport, cancel: cancel, done: make(chan struct{}), dir: dir, cleanup: cleanFailure}
 	k.Client = &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	go func() { _ = wait(); close(k.done) }()
+	startup, finishStartup := context.WithTimeout(ctx, 10*time.Second)
+	err = waitKernelListeners(startup, k.done, controller, proxyURL.Host, secret)
+	finishStartup()
+	if err != nil {
+		k.Close()
+		if parent.Err() != nil {
+			return nil, errors.New("cancelled")
+		}
+		return nil, errors.New("kernel_failed")
+	}
+	return k, nil
+}
+
+// The controller starts before the HTTP listener. Both must be reachable before
+// returning a client; a local TCP connection does not establish node connectivity
+// or prove the core has completed every later initialization step.
+func waitKernelListeners(ctx context.Context, done <-chan struct{}, controller, proxyAddress, secret string) error {
 	controlTransport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: time.Second}).DialContext}
 	control := &http.Client{Transport: controlTransport, Timeout: time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	defer controlTransport.CloseIdleConnections()
-	deadline := time.NewTimer(10 * time.Second)
-	defer deadline.Stop()
+	dialer := net.Dialer{Timeout: time.Second}
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	for {
 		select {
-		case <-parent.Done():
-			k.Close()
-			return nil, errors.New("cancelled")
-		case <-k.done:
-			k.Close()
-			return nil, errors.New("kernel_failed")
-		case <-deadline.C:
-			k.Close()
-			return nil, errors.New("kernel_failed")
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-done:
+			return errors.New("kernel_failed")
 		case <-tick.C:
 			req, _ := http.NewRequestWithContext(ctx, "GET", "http://"+controller+"/version", nil)
 			req.Header.Set("Authorization", "Bearer "+secret)
@@ -196,8 +207,21 @@ func startKernel(parent context.Context, binary string, proxy map[string]any) (*
 			var result struct {
 				Version string `json:"version"`
 			}
-			if e == nil && resp.StatusCode == 200 && len(body) <= 4096 && json.Unmarshal(body, &result) == nil && result.Version != "" {
-				return k, nil
+			if e != nil || resp.StatusCode != 200 || len(body) > 4096 || json.Unmarshal(body, &result) != nil || result.Version == "" {
+				continue
+			}
+			connection, e := dialer.DialContext(ctx, "tcp4", proxyAddress)
+			if e != nil {
+				continue
+			}
+			connection.Close()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-done:
+				return errors.New("kernel_failed")
+			default:
+				return nil
 			}
 		}
 	}
