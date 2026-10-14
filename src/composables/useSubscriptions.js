@@ -1,5 +1,7 @@
 // FILE: src/composables/useSubscriptions.js
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, toValue } from 'vue';
+import { normalizeGroupsPageSize } from '../../shared/pagination.js';
+import { matchesSubscriptionStatus } from '../utils/dashboard-deeplink.js';
 import { storeToRefs } from 'pinia';
 import { useDataStore } from '../stores/useDataStore';
 import { useToastStore } from '../stores/toast.js';
@@ -11,7 +13,7 @@ import { getAirportIdentityKey } from '../utils/airport-identity.js';
 
 const isDev = import.meta.env.DEV;
 
-export function useSubscriptions(markDirty) {
+export function useSubscriptions(markDirty, { statusFilter, configurablePagination = false } = {}) {
     const { showToast } = useToastStore();
     const dataStore = useDataStore();
     // Rename the store ref to avoid confusion, as it contains ALL items
@@ -30,9 +32,13 @@ export function useSubscriptions(markDirty) {
     const isRefreshing = ref(false);
     const filteredSubscriptions = computed(() => {
         const query = searchQuery.value.trim().toLowerCase();
-        if (!query) return subscriptions.value;
+        const status = toValue(statusFilter);
+        const candidates = status
+            ? subscriptions.value.filter((sub) => matchesSubscriptionStatus(sub, status))
+            : subscriptions.value;
+        if (!query) return candidates;
 
-        return subscriptions.value.filter((sub) =>
+        return candidates.filter((sub) =>
             [
                 sub.name,
                 sub.description,
@@ -50,7 +56,17 @@ export function useSubscriptions(markDirty) {
     });
 
     const subsCurrentPage = ref(1);
-    const subsItemsPerPage = 6;
+    // The page override lasts only for this mounted view. The default is a global setting.
+    const pageSizeOverride = ref(null);
+    const subsItemsPerPage = computed(() =>
+        configurablePagination
+            ? (pageSizeOverride.value ?? normalizeGroupsPageSize(dataStore.settings.groupsPageSize))
+            : 6
+    );
+    function changeSubsPageSize(size) {
+        pageSizeOverride.value = normalizeGroupsPageSize(size);
+        subsCurrentPage.value = 1;
+    }
     const enabledSubscriptions = computed(() => subscriptions.value.filter((s) => s.enabled));
 
     /** 保持同一站点订阅相邻，避免分页后多个机场组交错出现。 */
@@ -92,15 +108,15 @@ export function useSubscriptions(markDirty) {
     });
 
     const subsTotalPages = computed(() =>
-        Math.ceil(orderedFilteredSubscriptions.value.length / subsItemsPerPage)
+        Math.max(1, Math.ceil(orderedFilteredSubscriptions.value.length / subsItemsPerPage.value))
     );
     const paginatedSubscriptions = computed(() => {
-        const start = (subsCurrentPage.value - 1) * subsItemsPerPage;
-        const end = start + subsItemsPerPage;
+        const start = (subsCurrentPage.value - 1) * subsItemsPerPage.value;
+        const end = start + subsItemsPerPage.value;
         return orderedFilteredSubscriptions.value.slice(start, end);
     });
 
-    watch([searchQuery, () => filteredSubscriptions.value.length], () => {
+    watch([searchQuery, () => toValue(statusFilter), subsItemsPerPage], () => {
         subsCurrentPage.value = 1;
     });
 
@@ -111,7 +127,7 @@ export function useSubscriptions(markDirty) {
     });
 
     function changeSubsPage(page) {
-        if (page < 1 || page > subsTotalPages.value) return;
+        if (!Number.isInteger(page) || page < 1 || page > subsTotalPages.value) return;
         subsCurrentPage.value = page;
     }
 
@@ -537,6 +553,8 @@ export function useSubscriptions(markDirty) {
         refreshError,
         lastRefreshAt,
         subsCurrentPage,
+        subsItemsPerPage,
+        changeSubsPageSize,
         subsTotalPages,
         paginatedSubscriptions,
         totalRemainingTraffic,

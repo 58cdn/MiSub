@@ -1,4 +1,6 @@
 import { ref, computed, onUnmounted, getCurrentInstance } from 'vue';
+import { normalizeGroupsPageSize } from '../../shared/pagination.js';
+import { useDataStore } from '../stores/useDataStore.js';
 import { useToastStore } from '../stores/toast.js';
 import { DEFAULT_SETTINGS } from '../constants/default-settings.js';
 import { fetchSettings, saveSettings, resetSettings } from '../lib/api.js';
@@ -27,6 +29,7 @@ function normalizeExternalApiConfig(value) {
 
 function normalizeSettingsObject(source = {}) {
     const merged = { ...DEFAULT_SETTINGS, ...source };
+    merged.groupsPageSize = normalizeGroupsPageSize(merged.groupsPageSize);
     merged.externalApi = normalizeExternalApiConfig(source.externalApi ?? merged.externalApi);
     return merged;
 }
@@ -146,6 +149,7 @@ export function useSettingsLogic() {
 
             const settingsToSave = {
                 ...settings.value,
+                groupsPageSize: normalizeGroupsPageSize(settings.value.groupsPageSize),
                 externalApi: normalizeExternalApiConfig(settings.value.externalApi),
                 disguise: disguiseConfig.value,
             };
@@ -160,6 +164,7 @@ export function useSettingsLogic() {
 
             const result = await saveSettings(settingsToSave);
             if (result.success) {
+                useDataStore().applySavedSettings(settingsToSave);
                 showToast(t('settings.savedReloading'), 'success');
                 clearReloadTimer();
                 restartCountdown.value = 3;

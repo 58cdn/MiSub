@@ -1,3 +1,4 @@
+import { normalizeGroupsPageSize } from '../../shared/pagination.js';
 /**
  * API处理模块
  * 处理各种API请求
@@ -622,6 +623,7 @@ export async function handleSettingsSave(request, env) {
             }
         }
         const finalSettings = { ...oldSettings, ...newSettings };
+        finalSettings.groupsPageSize = normalizeGroupsPageSize(finalSettings.groupsPageSize);
 
         // 使用存储适配器保存设置
         try {

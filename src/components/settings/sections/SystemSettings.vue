@@ -1,5 +1,6 @@
 <script setup>
     import { ref } from 'vue';
+    import { GROUPS_PAGE_SIZE_OPTIONS } from '../../../../shared/pagination.js';
     import { useToastStore } from '../../../stores/toast.js';
     import Input from '../../ui/Input.vue';
     import Switch from '../../ui/Switch.vue';
@@ -148,6 +149,41 @@ CREATE INDEX IF NOT EXISTS idx_settings_updated_at ON settings(updated_at);`;
 
 <template>
     <div class="space-y-8">
+        <section
+            class="rounded-xl border border-gray-100/80 bg-white/90 p-6 shadow-sm dark:border-white/10 dark:bg-gray-900/70"
+            aria-labelledby="groups-page-size-title"
+        >
+            <h3
+                id="groups-page-size-title"
+                class="text-base font-semibold text-gray-900 dark:text-white"
+            >
+                {{ t('groupsPagination.settingsTitle') }}
+            </h3>
+            <p
+                id="groups-page-size-description"
+                class="mt-1 text-sm leading-6 text-gray-600 dark:text-gray-300"
+            >
+                {{ t('groupsPagination.settingsDescription') }}
+            </p>
+            <div class="mt-4 flex flex-wrap items-center gap-3">
+                <label
+                    for="default-groups-page-size"
+                    class="text-sm font-medium text-gray-700 dark:text-gray-200"
+                    >{{ t('groupsPagination.defaultPageSize') }}</label
+                >
+                <select
+                    id="default-groups-page-size"
+                    v-model.number="settings.groupsPageSize"
+                    aria-describedby="groups-page-size-description"
+                    class="min-h-11 min-w-24 rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-900 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+                >
+                    <option v-for="size in GROUPS_PAGE_SIZE_OPTIONS" :key="size" :value="size">
+                        {{ size }}
+                    </option>
+                </select>
+            </div>
+        </section>
+
         <div
             class="rounded-xl border border-gray-100/80 bg-white/90 p-6 shadow-sm dark:border-white/10 dark:bg-gray-900/70"
         >

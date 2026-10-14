@@ -1,5 +1,16 @@
 export const messages = {
     'zh-CN': {
+        groupsPagination: {
+            navigation: '机场订阅分页',
+            range: '显示 {start} 至 {end} 共 {total} 条结果',
+            perPage: '每页：',
+            pageSizeLabel: '机场订阅每页条数',
+            loading: '正在加载结果…',
+            settingsTitle: '列表显示',
+            settingsDescription:
+                '全站设置，适用于所有管理员的机场订阅页。保存后生效；页面底栏可临时调整条数，重新打开页面时恢复此默认值。按订阅源计数，展开机场组仅显示当前页内的结果。',
+            defaultPageSize: '机场订阅默认每页条数',
+        },
         diagnostics: {
             title: '节点诊断',
             action: '诊断',
@@ -1856,6 +1867,17 @@ export const messages = {
         },
     },
     'en-US': {
+        groupsPagination: {
+            navigation: 'Airport subscription pagination',
+            range: 'Showing {start} to {end} of {total} results',
+            perPage: 'Per page:',
+            pageSizeLabel: 'Airport subscriptions per page',
+            loading: 'Loading results…',
+            settingsTitle: 'List display',
+            settingsDescription:
+                'Global setting for every administrator’s airport subscriptions page. Save to apply. The page footer can temporarily override this value; reopening the page restores the default. Results count subscription sources; expanded airport groups show only the current page’s results.',
+            defaultPageSize: 'Default airport subscriptions per page',
+        },
         diagnostics: {
             title: 'Node diagnostics',
             action: 'Diagnose',

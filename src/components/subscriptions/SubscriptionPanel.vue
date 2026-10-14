@@ -4,6 +4,7 @@
     import Card from '../ui/Card.vue';
     import MoreActionsMenu from '@/components/shared/MoreActionsMenu.vue';
     import PanelPagination from '@/components/shared/PanelPagination.vue';
+    import ResultsPagination from '@/components/shared/ResultsPagination.vue';
     import EmptyState from '@/components/ui/EmptyState.vue';
     import Modal from '@/components/forms/Modal.vue';
     import { useUIStore } from '@/stores/ui';
@@ -24,6 +25,8 @@
         paginatedSubscriptions: Array,
         currentPage: Number,
         totalPages: Number,
+        pageSize: Number,
+        paginationBusy: Boolean,
         isSorting: Boolean,
         searchable: { type: Boolean, default: false },
         searchQuery: { type: String, default: '' },
@@ -43,6 +46,7 @@
         'add',
         'delete',
         'changePage',
+        'update:pageSize',
         'updateNodeCount',
         'edit',
         'toggleSort',
@@ -278,9 +282,14 @@
 
     /** 当前分页命中组内任一条时显示组；组本身完整呈现但按首条排序锚定。 */
     const visibleCollapsibleGroups = computed(() =>
-        collapsibleGroups.value.filter((group) =>
-            group.items.some((item) => pageSubscriptionIds.value.has(item.id))
-        )
+        collapsibleGroups.value
+            .map((group) => ({
+                ...group,
+                pageItems: props.pageSize
+                    ? group.items.filter((item) => pageSubscriptionIds.value.has(item.id))
+                    : group.items,
+            }))
+            .filter((group) => group.items.some((item) => pageSubscriptionIds.value.has(item.id)))
     );
 
     /** 单条目站点仅在当前页平铺展示。 */
@@ -598,7 +607,7 @@
                             class="grid grid-cols-1 gap-4 border-t border-gray-100/80 p-4 md:grid-cols-2 dark:border-white/10"
                         >
                             <div
-                                v-for="(subscription, index) in group.items"
+                                v-for="(subscription, index) in group.pageItems"
                                 :key="subscription.id"
                                 class="list-item-animation"
                                 :style="{ '--delay-index': index }"
@@ -708,7 +717,16 @@
                 </button>
             </div>
         </div>
-        <div v-if="!isSorting && totalPages > 1" class="mt-4">
+        <ResultsPagination
+            v-if="!isSorting && pageSize"
+            :current-page="currentPage"
+            :total-items="visibleCount"
+            :page-size="pageSize"
+            :busy="paginationBusy"
+            @change-page="handleChangePage"
+            @update:page-size="emit('update:pageSize', $event)"
+        />
+        <div v-else-if="!isSorting && totalPages > 1" class="mt-4">
             <PanelPagination
                 variant="panel"
                 :current-page="currentPage"
