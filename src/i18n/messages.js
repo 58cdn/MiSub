@@ -581,6 +581,10 @@ export const messages = {
         },
         store: {
             fetchDataFailed: '获取数据失败: {message}',
+            subscriptionConflict:
+                '服务器数据已有变化，当前编辑已保留。请先保留并核对编辑内容，再重新加载；不会自动覆盖重试。',
+            runtimeNeedsSavedData: '请先完成当前保存并核对冲突，再刷新已保存的订阅。',
+            runtimeNotApplied: '本次刷新结果未写入，已保留此前的数据。',
             loadBeforeSave: '尚未完整加载服务器数据，请刷新成功后再保存；当前编辑仍保留。',
             invalidDataResponse: '服务器返回的数据不完整，已保留当前数据。',
             editedDuringLoad: '加载期间已有新编辑，已保留当前编辑；如需放弃，请再次刷新。',
@@ -2530,6 +2534,11 @@ export const messages = {
         },
         store: {
             fetchDataFailed: 'Failed to load data: {message}',
+            subscriptionConflict:
+                'Server data has changed. Your edits are preserved. Keep and compare your edits before reloading; no automatic overwrite will be attempted.',
+            runtimeNeedsSavedData:
+                'Finish the current save and resolve any conflicts before refreshing a saved subscription.',
+            runtimeNotApplied: 'This refresh was not applied. Previous data is preserved.',
             loadBeforeSave:
                 'Load complete server data before saving. Your current edits are preserved.',
             invalidDataResponse:

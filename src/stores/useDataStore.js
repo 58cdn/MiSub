@@ -8,6 +8,23 @@ import { DEFAULT_SETTINGS } from '../constants/default-settings.js';
 import { TIMING } from '../constants/timing.js';
 import { api } from '../lib/http.js';
 import { t } from '../i18n/index.js';
+import {
+    acknowledgedDomainVersion,
+    domainMutationMetadata,
+    isStrictSettingsData,
+    replayDomainEdits,
+    sameDomainData,
+    validDomainAcknowledgement,
+    validDomainResponse,
+} from '../shared/domain-mutation.js';
+import {
+    buildSubscriptionEditOperations,
+    createSubscriptionOperationId,
+    editableSubscriptionFields,
+    hasObservationConfigurationChange,
+    isSubscriptionVersion,
+    rebaseSubscriptionEdits,
+} from '../shared/subscription-edit-operations.js';
 
 const isDev = import.meta.env.DEV;
 
@@ -39,8 +56,31 @@ function validCollections(data) {
 }
 
 function validLoadedData(data) {
-    return validCollections(data) && isCollection(data.ruleTemplates) && isRecord(data.config);
+    return (
+        validCollections(data) &&
+        isCollection(data.ruleTemplates) &&
+        isRecord(data.config) &&
+        (data.subscriptionProtocol === undefined ||
+            data.subscriptionProtocol === 'legacy' ||
+            (data.subscriptionProtocol === 'd1-v1' && isSubscriptionVersion(data.version)))
+    );
 }
+
+function validAcknowledgement(result, request) {
+    const receiptVersion = result.receipt?.version;
+    const version = result.data?.version;
+    return (
+        result.receipt?.operationId === request.operationId &&
+        isSubscriptionVersion(receiptVersion) &&
+        isSubscriptionVersion(version) &&
+        receiptVersion.epoch === request.baseVersion.epoch &&
+        version.epoch === receiptVersion.epoch &&
+        receiptVersion.revision > request.baseVersion.revision &&
+        version.revision >= receiptVersion.revision
+    );
+}
+
+const asSnapshot = (data) => ({ subscriptions: data.misubs, profiles: data.profiles });
 
 export const useDataStore = defineStore('data', () => {
     const { showToast } = useToastStore();
@@ -56,6 +96,8 @@ export const useDataStore = defineStore('data', () => {
     // Store Status
     const isLoading = ref(false);
     const saveState = ref('idle');
+    const subscriptionProtocol = ref('legacy');
+    const subscriptionConflict = ref(false);
     const lastUpdated = ref(null);
     const hasDataLoaded = computed(() => !!lastUpdated.value);
 
@@ -78,6 +120,14 @@ export const useDataStore = defineStore('data', () => {
     let editVersion = 0;
     let saveSequence = 0;
     let saving = false;
+    let snapshotVersion = null;
+    let configVersion = null;
+    let rulesVersion = null;
+    let rulesProtocol = 'legacy';
+    let rulesRequest = 0;
+    let rulesReadSequence = 0;
+    const domainSaves = new Map();
+    let pendingSubmission = null;
 
     // --- Actions ---
 
@@ -99,10 +149,20 @@ export const useDataStore = defineStore('data', () => {
             ruleTemplates.value = next.ruleTemplates;
             settingsStore.setConfig({ ...DEFAULT_SETTINGS, ...next.config });
             if (!fromCache) {
-                lifecycle += 1;
+                invalidateRequests();
                 lastSavedData = snapshot;
                 hasAuthoritativeBaseline = true;
+                subscriptionProtocol.value =
+                    next.subscriptionProtocol === 'd1-v1' ? 'd1-v1' : 'legacy';
+                snapshotVersion =
+                    subscriptionProtocol.value === 'd1-v1' ? cloneData(next.version) : null;
+                configVersion = snapshotVersion ? { ...snapshotVersion } : null;
+                rulesVersion = snapshotVersion ? { ...snapshotVersion } : null;
+                rulesProtocol = subscriptionProtocol.value;
+                pendingSubmission = null;
+                subscriptionConflict.value = false;
                 lastUpdated.value = new Date();
+                clearDirty();
                 dataCache.set(next);
             }
             return true;
@@ -156,7 +216,7 @@ export const useDataStore = defineStore('data', () => {
                 showToast(t('store.fetchDataFailed', { message: error.message }), 'error');
                 return false;
             } finally {
-                isLoading.value = false;
+                if (requestLifecycle === lifecycle) isLoading.value = false;
             }
         })();
         fetchDataPromise = request;
@@ -176,6 +236,10 @@ export const useDataStore = defineStore('data', () => {
             showToast(t('store.saveDataFailed', { message: t('store.loadBeforeSave') }), 'error');
             return false;
         }
+        if (subscriptionConflict.value) {
+            showToast(t('store.subscriptionConflict'), 'error');
+            return false;
+        }
 
         saving = true;
         isLoading.value = true;
@@ -184,9 +248,11 @@ export const useDataStore = defineStore('data', () => {
         const requestEditVersion = editVersion;
         const requestSequence = ++saveSequence;
         try {
-            const submitted = captureEditorData();
-            const startingEditorData = JSON.stringify(submitted);
-            const payload = {
+            let submitted = captureEditorData();
+            let startingEditorData = JSON.stringify(submitted);
+            let submittedEditVersion = requestEditVersion;
+            const strict = subscriptionProtocol.value === 'd1-v1';
+            let payload = {
                 misubs: submitted.misubs,
                 profiles: submitted.profiles.map((profile) => {
                     const normalizedProfile = { ...profile };
@@ -196,20 +262,76 @@ export const useDataStore = defineStore('data', () => {
                     return normalizedProfile;
                 }),
             };
-            pruneInvalidReferences(payload.profiles, payload.misubs);
+            if (strict) {
+                if (!pendingSubmission) {
+                    const operations = buildSubscriptionEditOperations(
+                        lastSavedData,
+                        asSnapshot(submitted)
+                    );
+                    if (!operations.length) {
+                        clearDirty();
+                        return true;
+                    }
+                    pendingSubmission = {
+                        request: {
+                            operationId: createSubscriptionOperationId(),
+                            baseVersion: cloneData(snapshotVersion),
+                            operations,
+                        },
+                        submitted,
+                        serialized: startingEditorData,
+                        editVersion: requestEditVersion,
+                    };
+                }
+                submitted = pendingSubmission.submitted;
+                startingEditorData = pendingSubmission.serialized;
+                submittedEditVersion = pendingSubmission.editVersion;
+                payload = cloneData(pendingSubmission.request);
+            } else {
+                pruneInvalidReferences(payload.profiles, payload.misubs);
+            }
             const result = await api.post('/api/misubs', payload);
             if (requestLifecycle !== lifecycle) return false;
             if (result?.success !== true) {
+                if (strict && (result?.status === 409 || result?.code?.includes('conflict'))) {
+                    subscriptionConflict.value = true;
+                }
                 throw new Error(result?.message || t('store.saveFailed'));
             }
             if (!validCollections(result.data)) throw new Error(t('store.invalidSaveResponse'));
             const confirmed = cloneData(result.data);
             if (!validCollections(confirmed)) throw new Error(t('store.invalidSaveResponse'));
 
-            const editedDuringSave = editorChangedSince(startingEditorData, requestEditVersion);
+            let rebased;
+            if (strict) {
+                if (!validAcknowledgement(result, payload))
+                    throw new Error(t('store.invalidSaveResponse'));
+                rebased = rebaseSubscriptionEdits(
+                    asSnapshot(submitted),
+                    asSnapshot(captureEditorData()),
+                    {
+                        subscriptions: confirmed.misubs,
+                        profiles: confirmed.profiles,
+                    },
+                    { checkConflicts: confirmed.version.revision > result.receipt.version.revision }
+                );
+                snapshotVersion = cloneData(confirmed.version);
+                pendingSubmission = null;
+            }
+
+            const editedDuringSave = editorChangedSince(startingEditorData, submittedEditVersion);
             lastSavedData.subscriptions = cloneData(confirmed.misubs);
             lastSavedData.profiles = cloneData(confirmed.profiles);
-            if (editedDuringSave) {
+            if (strict && !rebased) {
+                subscriptionConflict.value = true;
+                markDirty();
+                saveState.value = 'idle';
+                showToast(t('store.subscriptionConflict'), 'error');
+            } else if (editedDuringSave) {
+                if (strict) {
+                    subscriptions.value = rebased.subscriptions;
+                    profiles.value = rebased.profiles;
+                }
                 markDirty();
                 saveState.value = 'idle';
             } else {
@@ -221,7 +343,7 @@ export const useDataStore = defineStore('data', () => {
                 clearDirty();
                 saveState.value = 'success';
             }
-            showToast(t('store.dataSaved'), 'success');
+            if (!subscriptionConflict.value) showToast(t('store.dataSaved'), 'success');
             lastUpdated.value = new Date();
             setTimeout(() => {
                 if (
@@ -234,24 +356,29 @@ export const useDataStore = defineStore('data', () => {
             }, 2000);
 
             // Cache only acknowledged collections, independently of the current editor.
-            dataCache.set({
-                misubs: lastSavedData.subscriptions,
-                profiles: lastSavedData.profiles,
-                ruleTemplates: lastSavedData.ruleTemplates,
-                config: lastSavedData.config,
-            });
-            return true;
+            cacheConfirmedData();
+            return !subscriptionConflict.value;
         } catch (error) {
             if (requestLifecycle !== lifecycle) return false;
-            markDirty();
+            if (subscriptionProtocol.value === 'd1-v1' && error?.status === 409) {
+                subscriptionConflict.value = true;
+            }
+            editorStore.markDirty();
             console.error('[Store] Failed to save data:', error);
-            showToast(t('store.saveDataFailed', { message: error.message }), 'error');
+            showToast(
+                subscriptionConflict.value
+                    ? t('store.subscriptionConflict')
+                    : t('store.saveDataFailed', { message: error.message }),
+                'error'
+            );
             saveState.value = 'idle';
             return false;
         } finally {
-            saving = false;
-            isLoading.value = false;
-            if (saveState.value === 'saving') saveState.value = 'idle';
+            if (requestLifecycle === lifecycle) {
+                saving = false;
+                isLoading.value = false;
+                if (saveState.value === 'saving') saveState.value = 'idle';
+            }
         }
     }
 
@@ -271,22 +398,48 @@ export const useDataStore = defineStore('data', () => {
      */
     async function saveSettings(newSettings, options = {}) {
         const { silent = false, preferencesOnly = false } = options;
-        editorStore.setLoading(true);
+        const request = beginDomainSave('settings');
         try {
+            const strict = subscriptionProtocol.value === 'd1-v1';
+            const metadata = domainMutationMetadata({
+                subscriptionProtocol: subscriptionProtocol.value,
+                version: configVersion,
+            });
+            const submitted = cloneData(newSettings);
+            const editorAtStart = cloneData(settingsStore.config);
+            const confirmedAtStart = cloneData(lastSavedData.config);
             const result = await api.post(
                 '/api/settings',
-                newSettings,
+                strict ? { ...metadata, settings: submitted } : submitted,
                 preferencesOnly ? { headers: { 'X-MiSub-Save-Scope': 'preferences' } } : {}
             );
 
-            if (!result.success) {
+            if (!currentDomainSave('settings', request)) return false;
+            if (!result?.success) {
                 throw new Error(result.message || t('store.saveSettingsFailed'));
             }
 
-            applySavedSettings(newSettings);
+            if (!validDomainAcknowledgement(result, metadata, isStrictSettingsData))
+                throw new Error(t('store.invalidDataResponse'));
+            const confirmed = strict
+                ? cloneData(result.data)
+                : { ...confirmedAtStart, ...submitted };
+            const displayed = strict
+                ? { ...DEFAULT_SETTINGS, ...confirmed }
+                : { ...editorAtStart, ...submitted };
+            const intended = replayDomainEdits(editorAtStart, settingsStore.config, {
+                ...editorAtStart,
+                ...submitted,
+            });
+            const submittedBaseline = { ...DEFAULT_SETTINGS, ...confirmedAtStart, ...submitted };
+            const changed = !sameDomainData(submittedBaseline, intended);
+            settingsStore.setConfig(replayDomainEdits(submittedBaseline, intended, displayed));
+            if (strict) configVersion = acknowledgedDomainVersion(result, changed);
+            syncCachedConfig(confirmed);
             if (!silent) showToast(t('store.settingsUpdated'), 'success');
             return true;
         } catch (error) {
+            if (!currentDomainSave('settings', request)) return false;
             console.error('Failed to save settings:', error);
             if (!silent) {
                 showToast(
@@ -296,35 +449,201 @@ export const useDataStore = defineStore('data', () => {
             }
             throw error;
         } finally {
-            editorStore.setLoading(false);
+            finishDomainSave('settings', request);
+        }
+    }
+
+    async function refreshSubscriptionRuntime(id) {
+        const saved = lastSavedData.subscriptions.find((item) => item.id === id);
+        const current = subscriptions.value.find((item) => item.id === id);
+        if (
+            subscriptionProtocol.value !== 'd1-v1' ||
+            !hasAuthoritativeBaseline ||
+            isLoading.value ||
+            pendingSubmission ||
+            subscriptionConflict.value ||
+            !saved ||
+            !current ||
+            JSON.stringify(editableSubscriptionFields('subscriptions', saved)) !==
+                JSON.stringify(editableSubscriptionFields('subscriptions', current))
+        ) {
+            return {
+                success: false,
+                error: t('store.runtimeNeedsSavedData'),
+                errorType: 'validation',
+            };
+        }
+        const requestLifecycle = lifecycle;
+        saving = true;
+        isLoading.value = true;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), TIMING.REQUEST_TIMEOUT_MS);
+        try {
+            const result = await api.post(
+                '/api/node_count',
+                {
+                    subscriptionId: id,
+                    baseVersion: cloneData(snapshotVersion),
+                    operationId: createSubscriptionOperationId(),
+                },
+                { signal: controller.signal }
+            );
+            if (requestLifecycle !== lifecycle)
+                return { success: false, error: t('store.runtimeNeedsSavedData') };
+            if (!result?.success || result.applied !== true) {
+                return {
+                    success: false,
+                    error: result?.message || t('store.runtimeNotApplied'),
+                    errorType: 'server',
+                };
+            }
+            const confirmed = result.subscriptionSnapshot;
+            if (
+                !confirmed ||
+                !validCollections({
+                    misubs: confirmed.subscriptions,
+                    profiles: confirmed.profiles,
+                }) ||
+                !isSubscriptionVersion(confirmed.version) ||
+                confirmed.version.epoch !== snapshotVersion.epoch ||
+                confirmed.version.revision < snapshotVersion.revision
+            ) {
+                throw new Error(t('store.invalidDataResponse'));
+            }
+            const edited = asSnapshot(captureEditorData());
+            const targetChanged = hasObservationConfigurationChange(
+                saved,
+                edited.subscriptions.find((item) => item.id === id)
+            );
+            const hasEdits = buildSubscriptionEditOperations(lastSavedData, edited).length > 0;
+            const rebased = rebaseSubscriptionEdits(lastSavedData, edited, confirmed);
+            lastSavedData.subscriptions = cloneData(confirmed.subscriptions);
+            lastSavedData.profiles = cloneData(confirmed.profiles);
+            snapshotVersion = cloneData(confirmed.version);
+            cacheConfirmedData();
+            if (!rebased) {
+                subscriptionConflict.value = true;
+                markDirty();
+                return {
+                    success: false,
+                    error: t('store.subscriptionConflict'),
+                    errorType: 'conflict',
+                };
+            }
+            subscriptions.value = rebased.subscriptions;
+            profiles.value = rebased.profiles;
+            lastUpdated.value = new Date();
+            if (hasEdits) markDirty();
+            if (targetChanged)
+                return {
+                    success: false,
+                    error: t('store.runtimeNotApplied'),
+                    errorType: 'validation',
+                };
+            const observed = confirmed.subscriptions.find((item) => item.id === id);
+            if (!observed)
+                return {
+                    success: false,
+                    error: t('store.runtimeNeedsSavedData'),
+                    errorType: 'conflict',
+                };
+            return {
+                success: true,
+                data: { count: observed.nodeCount || 0, userInfo: observed.userInfo || null },
+                applied: true,
+            };
+        } catch (error) {
+            if (requestLifecycle === lifecycle && error?.status === 409)
+                subscriptionConflict.value = true;
+            return {
+                success: false,
+                error: subscriptionConflict.value ? t('store.subscriptionConflict') : error.message,
+                errorType: error?.status === 409 ? 'conflict' : 'server',
+            };
+        } finally {
+            clearTimeout(timeout);
+            if (requestLifecycle === lifecycle) {
+                saving = false;
+                isLoading.value = false;
+            }
         }
     }
 
     // Keep successful settings edits visible even when navigating before a scheduled reload.
-    function applySavedSettings(newSettings) {
+    function applySavedSettings(newSettings, acknowledgement = null) {
         settingsStore.updateConfig(newSettings);
+        if (acknowledgement?.subscriptionProtocol === 'd1-v1')
+            configVersion = cloneData(acknowledgement.version);
         syncCachedConfig(settingsStore.config);
     }
 
     async function fetchRuleTemplates() {
+        const sequence = ++rulesReadSequence;
+        const requestGeneration = rulesRequest;
+        const requestLifecycle = lifecycle;
+        const editorAtStart = cloneData(ruleTemplates.value);
         const result = await api.get('/api/rule_templates');
-        ruleTemplates.value = Array.isArray(result?.data) ? result.data : [];
+        if (
+            requestLifecycle !== lifecycle ||
+            sequence !== rulesReadSequence ||
+            requestGeneration !== rulesRequest
+        )
+            return false;
+        if (!sameDomainData(editorAtStart, ruleTemplates.value)) return false;
+        if (
+            !validDomainResponse(result, validIdentifiedCollection, {
+                strict: rulesProtocol === 'd1-v1',
+            })
+        )
+            throw new Error(t('store.invalidDataResponse'));
+        ruleTemplates.value = cloneData(result.data);
+        rulesRequest += 1;
+        rulesProtocol = result.subscriptionProtocol === 'd1-v1' ? 'd1-v1' : 'legacy';
+        rulesVersion = result.subscriptionProtocol === 'd1-v1' ? { ...result.version } : null;
         lastSavedData.ruleTemplates = JSON.parse(JSON.stringify(ruleTemplates.value));
         return ruleTemplates.value;
     }
 
     async function saveRuleTemplates(items = ruleTemplates.value) {
-        editorStore.setLoading(true);
+        const request = beginDomainSave('rules');
+        const sequence = ++rulesRequest;
         try {
-            const result = await api.post('/api/rule_templates', { templates: items });
-            if (!result.success) {
+            const strict = rulesProtocol === 'd1-v1';
+            const metadata = domainMutationMetadata({
+                subscriptionProtocol: rulesProtocol,
+                version: rulesVersion,
+            });
+            const submitted = cloneData(items);
+            const editorAtStart = cloneData(ruleTemplates.value);
+            const result = await api.post('/api/rule_templates', {
+                templates: submitted,
+                ...metadata,
+            });
+            if (!currentDomainSave('rules', request) || sequence !== rulesRequest) return false;
+            if (!result?.success) {
                 throw new Error(result.message || t('store.saveRuleTemplatesFailed'));
             }
-            ruleTemplates.value = Array.isArray(result.data) ? result.data : [];
-            lastSavedData.ruleTemplates = JSON.parse(JSON.stringify(ruleTemplates.value));
+            if (
+                !validIdentifiedCollection(result.data) ||
+                !validDomainAcknowledgement(result, metadata, validIdentifiedCollection)
+            )
+                throw new Error(t('store.invalidDataResponse'));
+            const changed = !sameDomainData(editorAtStart, ruleTemplates.value);
+            rulesVersion = strict ? acknowledgedDomainVersion(result, changed) : null;
+            ruleTemplates.value = replayDomainEdits(
+                editorAtStart,
+                ruleTemplates.value,
+                result.data
+            );
+            lastSavedData.ruleTemplates = cloneData(result.data);
+            if (changed) editorStore.markDirty();
+            const cached = dataCache.get();
+            if (cached) dataCache.set({ ...cached, ruleTemplates: cloneData(result.data) });
+            rulesRequest += 1;
             showToast(t('store.ruleTemplatesSaved'), 'success');
             return ruleTemplates.value;
         } catch (error) {
+            if (!currentDomainSave('rules', request) || sequence !== rulesRequest) return false;
             console.error('Failed to save rule templates:', error);
             showToast(
                 t('store.saveRuleTemplatesFailedWithMessage', { message: error.message }),
@@ -332,11 +651,35 @@ export const useDataStore = defineStore('data', () => {
             );
             throw error;
         } finally {
-            editorStore.setLoading(false);
+            finishDomainSave('rules', request);
         }
     }
 
     // --- Helpers ---
+
+    function invalidateDomainRequests() {
+        rulesRequest += 1;
+        domainSaves.clear();
+        editorStore.setLoading(false);
+    }
+
+    function beginDomainSave(domain) {
+        if (domainSaves.has(domain)) throw new Error(t('store.tooFrequent'));
+        const request = { lifecycle };
+        domainSaves.set(domain, request);
+        editorStore.setLoading(true);
+        return request;
+    }
+
+    function currentDomainSave(domain, request) {
+        return request.lifecycle === lifecycle && domainSaves.get(domain) === request;
+    }
+
+    function finishDomainSave(domain, request) {
+        if (!currentDomainSave(domain, request)) return;
+        domainSaves.delete(domain);
+        editorStore.setLoading(domainSaves.size > 0);
+    }
 
     function captureEditorData() {
         return {
@@ -355,11 +698,50 @@ export const useDataStore = defineStore('data', () => {
         }
     }
 
-    function clearCachedData() {
+    function invalidateRequests() {
         lifecycle += 1;
+        invalidateDomainRequests();
+        fetchDataPromise = null;
+        saveSequence += 1;
+        saving = false;
+        isLoading.value = false;
+        saveState.value = 'idle';
+    }
+
+    function clearCachedData() {
+        invalidateRequests();
+        subscriptions.value = [];
+        profiles.value = [];
+        ruleTemplates.value = [];
+        settingsStore.setConfig({ ...DEFAULT_SETTINGS });
+        lastSavedData = { subscriptions: [], profiles: [], ruleTemplates: [], config: {} };
+        clearDirty();
+        editorStore.setLastUpdated(null);
         hasAuthoritativeBaseline = false;
+        subscriptionProtocol.value = 'legacy';
+        subscriptionConflict.value = false;
+        snapshotVersion = null;
+        configVersion = null;
+        rulesVersion = null;
+        rulesProtocol = 'legacy';
+        pendingSubmission = null;
         lastUpdated.value = null;
         dataCache.clear();
+    }
+
+    function cacheConfirmedData() {
+        dataCache.set({
+            misubs: lastSavedData.subscriptions,
+            profiles: lastSavedData.profiles,
+            ruleTemplates: lastSavedData.ruleTemplates,
+            config: lastSavedData.config,
+            ...(subscriptionProtocol.value === 'd1-v1'
+                ? {
+                      subscriptionProtocol: 'd1-v1',
+                      version: cloneData(snapshotVersion),
+                  }
+                : {}),
+        });
     }
 
     function isSavedNode(node) {
@@ -379,10 +761,7 @@ export const useDataStore = defineStore('data', () => {
 
         dataCache.set({
             ...cachedData,
-            config: {
-                ...(cachedData.config || {}),
-                ...(nextConfig || {}),
-            },
+            config: cloneData(nextConfig),
         });
     }
 
@@ -512,6 +891,8 @@ export const useDataStore = defineStore('data', () => {
         settings,
         isLoading,
         saveState,
+        subscriptionProtocol,
+        subscriptionConflict,
         lastUpdated,
         hasDataLoaded,
         isDirty,
@@ -523,6 +904,7 @@ export const useDataStore = defineStore('data', () => {
         // Actions
         fetchData,
         saveData,
+        refreshSubscriptionRuntime,
         saveSettings,
         applySavedSettings,
         fetchRuleTemplates,

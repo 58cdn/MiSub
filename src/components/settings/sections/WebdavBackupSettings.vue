@@ -4,6 +4,7 @@
     import { useToastStore } from '../../../stores/toast.js';
     import { useI18n } from '../../../i18n/index.js';
     import { confirmAction } from '../../../composables/useConfirm.js';
+    import { domainMutationMetadata } from '../../../shared/domain-mutation.js';
     import Input from '../../ui/Input.vue';
 
     const props = defineProps({
@@ -104,12 +105,19 @@
                         scope === 'dataAndSettings'
                             ? t('settings.webdavScopeDataAndSettings')
                             : t('settings.webdavScopeDataOnly');
+                    const metadata = domainMutationMetadata(await api.get('/api/data'), {
+                        restore: true,
+                    });
                     const confirmed = await confirmAction({
                         message: t('settings.webdavRestoreLocalConfirm', { scope: label }),
                         variant: 'danger',
                     });
                     if (!confirmed) return;
-                    const result = await api.post('/api/backup/restore', { payload, scope });
+                    const result = await api.post('/api/backup/restore', {
+                        payload,
+                        scope,
+                        ...metadata,
+                    });
                     if (!result.success)
                         throw new Error(result.message || t('settings.webdavRestoreFailed'));
                     showToast(t('settings.webdavRestoreSuccessReload'), 'success');
@@ -151,14 +159,18 @@
 
     const restoreRemoteFile = async (file) => {
         if (!file?.path) return;
-        const confirmed = await confirmAction({
-            message: t('settings.webdavRestoreRemoteConfirm', { name: file.name }),
-            variant: 'danger',
-        });
-        if (!confirmed) return;
         isRestoring.value = true;
         try {
-            const result = await api.post('/api/backup/webdav/restore', { file: file.path });
+            const metadata = domainMutationMetadata(await api.get('/api/data'), { restore: true });
+            const confirmed = await confirmAction({
+                message: t('settings.webdavRestoreRemoteConfirm', { name: file.name }),
+                variant: 'danger',
+            });
+            if (!confirmed) return;
+            const result = await api.post('/api/backup/webdav/restore', {
+                file: file.path,
+                ...metadata,
+            });
             if (!result.success)
                 throw new Error(result.message || t('settings.webdavRestoreFailed'));
             showToast(t('settings.webdavRestoreRemoteSuccessReload'), 'success');

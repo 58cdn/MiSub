@@ -1,6 +1,6 @@
 # 订阅写入版本与兼容迁移设计
 
-关联 [Issue #33](https://github.com/58cdn/MiSub/issues/33)。本文是待实施协议设计，不新增运行时能力、数据库 schema、绑定或生产资源。[PR #41](https://github.com/58cdn/MiSub/pull/41) 处理读取失败与保存前校验，[PR #42](https://github.com/58cdn/MiSub/pull/42) 处理浏览器编辑与保存响应；两者不提供本文的跨请求事务保证。
+关联 [Issue #33](https://github.com/58cdn/MiSub/issues/33)。本文记录协议目标与迁移设计；默认关闭的 D1 实现及其实际支持边界见 [PR #44 运行时约定](subscription-runtime-contract.md)，不自动创建生产 schema、绑定或资源。[PR #41](https://github.com/58cdn/MiSub/pull/41) 处理读取失败与保存前校验，[PR #42](https://github.com/58cdn/MiSub/pull/42) 处理浏览器编辑与保存响应；两者不提供本文的跨请求事务保证。
 
 ## 一致性目标
 
@@ -89,7 +89,7 @@ KV-only 实例目前无法只改本地 JavaScript 就获得跨实例条件事务
 - 旧网页/外部 API、Cron、Telegram、下载副作用均不能绕开版本入口。
 - 跨 isolate 的独立 Worker 本地集成测试；需要实际平台确认的行为另行验收，不把内存 Map 当作分布式 KV。
 - 敏感字段不出现在日志/错误/测试证据；所有默认 fixture 合成，网络禁止。
-- 分期为：严格读取与本地编辑保护 → 协议及 D1 本地实现 → 全 writer 转换及迁移演练 → 专项授权后维护窗口和实网验收。当前只交付严格读取、本地编辑保护与本设计，版本事务协议尚未实现。
+- 分期为：严格读取与本地编辑保护 → 协议及 D1 本地实现 → 全 writer 转换及迁移演练 → 专项授权后维护窗口和实网验收。[离线 SQL 内核](subscription-atomic-model.md)与[默认关闭的运行时接入](subscription-runtime-contract.md)分别记录模型和应用能力；离线通过不代替生产迁移验收。
 
 ## 审计基线
 
