@@ -14,7 +14,7 @@ import release_gate as gate
 import release_recovery as recovery
 import source_build as source
 
-VERSION, COMMIT = "0.2.0", "a" * 40
+VERSION, COMMIT = "0.2.0", "9ccee76c3cab149f34dca96c304310c9574c0d29"
 RUN_ID, DRAFT_ID, REPOSITORY_ID, ATTEMPT = 72, 123, 456, 1
 STAMP = "2026-01-01T00:00:00Z"
 
@@ -115,6 +115,8 @@ class RecoveryTests(unittest.TestCase):
         gate.save(self.source / "detector/source-build-lock.json", self.lock)
         self.lock_sha = source.digest(source.json_bytes(self.lock))
         self.wrapper_files = [("LICENSE", b"Fixture MIT license\n", 0o644),
+            ("detector/release-catalog.json", source.json_bytes({"schemaVersion": 1, "distributionReady": False, "release": None,
+                "legacyReleases": [{"version": "0.1.0", "tag": "probe-v0.1.0", "capabilities": []}]}), 0o644),
             ("detector/bootstrap/install.sh", b"readonly MISUB_RELEASE_VERSION=''\nreadonly MISUB_RELEASE_COMMIT=''\nreadonly MISUB_RELEASE_ASSETS=''\n", 0o644),
             ("detector/bootstrap/install.ps1", b"$MisubReleaseVersion = ''\n$MisubReleaseCommit = ''\n$MisubReleaseSize = 0\n$MisubReleaseSha256 = ''\n", 0o644)]
         self.tree = source.git_tree(self.wrapper_files)
@@ -179,6 +181,27 @@ class RecoveryTests(unittest.TestCase):
     def assert_no_write(self):
         self.assertFalse(self.client.published)
         self.assertFalse(any(fields for _, fields in self.client.requests))
+
+    def test_schema2_assembly_rechecks_doctor_for_every_platform(self):
+        import test_release_cli as cli
+        inputs = self.root / "input"
+        for target in gate.TARGETS:
+            path = inputs / ("source-candidate-" + target) / ("evidence-" + target + ".json")
+            evidence = gate.read_json(path)
+            report = cli.doctor_fixture()
+            report.update(version=VERSION, revision=COMMIT, platform=target, kernelLockVersion=self.lock["source"]["version"])
+            evidence.update(schemaVersion=2, doctor=report, doctorHomeUnchanged=True, installationTokenElevated=False,
+                            versionOutput=f"misub-probe {VERSION} ({COMMIT}); mihomo {self.lock['source']['version']}")
+            path.write_bytes(source.json_bytes(evidence))
+        output = self.root / "schema2-release"
+        with self.snapshot_patch(), mock.patch.object(gate, "verify_doctor_report", wraps=gate.verify_doctor_report) as verifier:
+            self.assertEqual(gate.assemble_materials(self.source, inputs, output, VERSION, COMMIT)["files"], 26)
+            self.assertEqual({call.args[3] for call in verifier.call_args_list}, set(gate.TARGETS))
+        self.assertEqual(len(gate.verify_release_files(output, VERSION, COMMIT)), 26)
+        evidence["doctor"]["checks"] = []
+        path.write_bytes(source.json_bytes(evidence))
+        with self.snapshot_patch(), self.assertRaisesRegex(gate.GateError, "doctor_checks"):
+            gate.assemble_materials(self.source, inputs, self.root / "rejected", VERSION, COMMIT)
 
     def test_default_verifies_all_26_actual_assets_and_never_writes(self):
         result = self.recover()

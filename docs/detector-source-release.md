@@ -26,8 +26,13 @@ wrapper 输入通过 `git archive` 从工作流的精确 commit 读取，并重�
 - Go race 全套测试、`go vet`，并解析 JSON 测试结果，要求四个真实内核回环测试
   通过：节点路由、禁止直连回退、Provider TLS 身份以及拒绝不可信节点证书。
   跳过关键测试不能通过此门槛。
-- 对最终可执行文件运行 `--capabilities`，逐字匹配协议、版本、源码 commit 和
-  平台；随后执行 `--self-test` 与 `--version`。
+- 对最终可执行文件运行 `--capabilities` 与 `--version`，逐字匹配协议、版本、
+  源码 commit、平台和内核锁版本；随后执行 `--self-test`。
+- 在隔离的用户目录、安装目录和临时目录运行 `--doctor --json --config`，
+  指向一个不存在的临时配置。必须返回退出码 1、八项准确的只读诊断、正确的
+  构建身份，且不得创建文件。服务、内核执行和网络均须标为 `not_run`。
+  安装项根据独立读取的当前令牌/root 状态检查，提升权限的 runner 必须报告
+  `installation_regular_user_required`；此检查不改变系统权限。
 - Bash 或 Windows PowerShell 的本地 mock 引导安装 fixture。测试不会配对、
   注册用户服务、启用登录启动或连接真实节点。
 
@@ -63,6 +68,11 @@ PowerShell 7 经 Python 继承不兼容的模块。该处理仅作用于子进�
 原生构建及源码包报告保留 `releaseReady:false`，因为它们尚无认证的发行来源
 证明。一般 CI 会显示具体材料阻塞；手动发行要求材料门槛通过后，才向同一次
 Actions 运行传输候选资产。PR、push 和 `publish=false` 不上传二进制制品。
+
+新候选使用 native evidence schema 2，组装阶段再次核对版本和 doctor 报告。
+schema 1 仅用于恢复既有 `0.2.0`、源码提交
+`9ccee76c3cab149f34dca96c304310c9574c0d29` 的原资产；完整源码 tree、文件摘要
+与原始发行运行的认证来源证明仍须通过原有验证，其他候选不能降级此门槛。
 
 ## 认证来源与发布顺序
 
@@ -115,6 +125,10 @@ Actions 运行传输候选资产。PR、push 和 `publish=false` 不上传二进
 发行状态，再通过独立审查的目录更新启用网页命令。代码合并、普通 Pages 部署、
 候选构建成功，都不能单独说明用户已能安装。
 
+组装从同一源码快照读取已发布目录并保留其历史版本。新的引导脚本必须为
+无 BOM、无 NUL 的 LF UTF-8 文本，每份不超过 64 KiB，以满足短安装命令的
+下载边界。下一版的准备与交接见 [Probe 0.3.0 发行清单](detector-release-0.3.0.md)。
+
 真实设备安装、浏览器配对批准、持久凭据配置和真实节点验收由用户明确执行或
 逐项确认。上述 CI 使用临时和回环 fixture，不构成这些实网验收。
 
@@ -127,7 +141,7 @@ Actions 运行传输候选资产。PR、push 和 `publish=false` 不上传二进
 ```sh
 python3 -B -m unittest discover -s detector/scripts -p 'test_release_gate.py' -v
 python3 -B detector/scripts/release_gate.py native \
-  --target linux-amd64 --version 0.2.0 --commit EXACT_COMMIT \
+  --target linux-amd64 --version 0.3.0 --commit EXACT_COMMIT \
   --work-dir /absolute/new/temporary/build-directory
 ```
 

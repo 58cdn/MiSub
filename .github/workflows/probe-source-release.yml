@@ -10,7 +10,7 @@ on:
       version:
         description: New immutable Probe version (existing tags are rejected)
         type: string
-        default: '0.2.0'
+        default: '0.3.0'
         required: true
       publish:
         description: Publish a new release only after native, material and provenance gates pass
@@ -56,7 +56,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
-      RELEASE_VERSION: ${{ inputs.version || '0.2.0' }}
+      RELEASE_VERSION: ${{ inputs.version || '0.3.0' }}
       RELEASE_COMMIT: ${{ github.sha }}
       RELEASE_TARGET: ${{ matrix.target }}
       MISUB_PUBLISH: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish && 'true' || 'false' }}
