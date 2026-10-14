@@ -51,7 +51,17 @@ jobs:
         run: npm ci
 
       - name: Run tests
-        run: npm run test:run
+        env:
+          TEST_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: npm run test:ci
+
+      - name: Retain Vitest discovery and completion summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-summary
+          path: tmp/test-gates/vitest-summary.json
+          if-no-files-found: error
 
       - name: Build Pages assets
         run: npm run build
