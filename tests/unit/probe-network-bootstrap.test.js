@@ -265,73 +265,78 @@ try { ${command} } catch { [Console]::Error.WriteLine($_.Exception.Message); exi
     expectConfigurationPreserved();
     return result;
 }
-describe.skipIf(!powershell)('Windows short installer with an offline HttpMessageHandler', () => {
-    it('verifies a two-hop download and passes discrete arguments', () => {
-        const result = runWindows({ mode: 'chain' });
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout.trim()).toBe(`executed|${origin}|${id}|False`);
-        expect(result.stderr).toContain('fixture_calls=3');
-    });
-    it('isolates resume and never sends a previous window', () => {
-        const result = runWindows({ resume: true });
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout.trim()).toBe('executed|||True');
-    });
-    it.each(forbidden)('rejects redirect %s without requesting it', (location) => {
-        const result = runWindows({ mode: 'redirect', location });
-        expect(result.status).not.toBe(0);
-        expect(result.stdout).toBe('');
-        expect(result.stderr).toContain('fixture_calls=1');
-        expect(result.stderr).not.toContain(location);
-    });
-    it('bounds trusted redirect loops', () => {
-        const result = runWindows({
-            mode: 'redirect',
-            location: 'https://objects.githubusercontent.com/loop',
+// Allow PowerShell startup and Add-Type compilation within the child's 15-second bound.
+describe.skipIf(!powershell)(
+    'Windows short installer with an offline HttpMessageHandler',
+    { timeout: 20000 },
+    () => {
+        it('verifies a two-hop download and passes discrete arguments', () => {
+            const result = runWindows({ mode: 'chain' });
+            expect(result.status, result.stderr).toBe(0);
+            expect(result.stdout.trim()).toBe(`executed|${origin}|${id}|False`);
+            expect(result.stderr).toContain('fixture_calls=3');
         });
-        expect(result.status).not.toBe(0);
-        expect(result.stdout).toBe('');
-        expect(result.stderr).toContain('fixture_calls=3');
-    });
-    it.each(['http', 'timeout'])('never executes after %s', (mode) => {
-        const result = runWindows({ mode });
-        expect(result.status).not.toBe(0);
-        expect(result.stdout).toBe('');
-        expect(result.stderr).toContain('No installer was executed');
-    });
-    it.each([
-        ['truncated', scripts.windows.slice(0, -1)],
-        ['altered', scripts.windows.replace('executed', 'tampered')],
-        ['oversized', scripts.windows + 'x'.repeat(4000)],
-    ])('rejects %s before script parsing', (_, body) => {
-        const result = runWindows({ body });
-        expect(result.status).not.toBe(0);
-        expect(result.stdout).toBe('');
-        expect(result.stderr).toContain('No installer was executed');
-    });
-    it('rejects a digest-matching malformed UTF-8 script', () => {
-        const script = Buffer.concat([Buffer.from(scripts.windows), Buffer.from([0xff])]);
-        const result = runWindows({ script, body: script });
-        expect(result.status).not.toBe(0);
-        expect(result.stdout).toBe('');
-        expect(result.stderr).toContain('No installer was executed');
-    });
-    it.each(
-        ['MachinePolicy', 'UserPolicy'].flatMap((policyScope) =>
-            ['Restricted', 'AllSigned', 'RemoteSigned'].map((policy) => [policyScope, policy])
-        )
-    )('honors organization %s %s before network access', (policyScope, policy) => {
-        const result = runWindows({ policy, policyScope });
-        expect(result.status).not.toBe(0);
-        expect(result.stdout).toBe('');
-        expect(result.stderr).toContain('organization script policy');
-        expect(result.stderr).toContain('fixture_calls=0');
-    });
-    it('honors local AllSigned before network access', () => {
-        const result = runWindows({ localPolicy: 'AllSigned' });
-        expect(result.status).not.toBe(0);
-        expect(result.stdout).toBe('');
-        expect(result.stderr).toContain('signed scripts are required');
-        expect(result.stderr).toContain('fixture_calls=0');
-    });
-});
+        it('isolates resume and never sends a previous window', () => {
+            const result = runWindows({ resume: true });
+            expect(result.status, result.stderr).toBe(0);
+            expect(result.stdout.trim()).toBe('executed|||True');
+        });
+        it.each(forbidden)('rejects redirect %s without requesting it', (location) => {
+            const result = runWindows({ mode: 'redirect', location });
+            expect(result.status).not.toBe(0);
+            expect(result.stdout).toBe('');
+            expect(result.stderr).toContain('fixture_calls=1');
+            expect(result.stderr).not.toContain(location);
+        });
+        it('bounds trusted redirect loops', () => {
+            const result = runWindows({
+                mode: 'redirect',
+                location: 'https://objects.githubusercontent.com/loop',
+            });
+            expect(result.status).not.toBe(0);
+            expect(result.stdout).toBe('');
+            expect(result.stderr).toContain('fixture_calls=3');
+        });
+        it.each(['http', 'timeout'])('never executes after %s', (mode) => {
+            const result = runWindows({ mode });
+            expect(result.status).not.toBe(0);
+            expect(result.stdout).toBe('');
+            expect(result.stderr).toContain('No installer was executed');
+        });
+        it.each([
+            ['truncated', scripts.windows.slice(0, -1)],
+            ['altered', scripts.windows.replace('executed', 'tampered')],
+            ['oversized', scripts.windows + 'x'.repeat(4000)],
+        ])('rejects %s before script parsing', (_, body) => {
+            const result = runWindows({ body });
+            expect(result.status).not.toBe(0);
+            expect(result.stdout).toBe('');
+            expect(result.stderr).toContain('No installer was executed');
+        });
+        it('rejects a digest-matching malformed UTF-8 script', () => {
+            const script = Buffer.concat([Buffer.from(scripts.windows), Buffer.from([0xff])]);
+            const result = runWindows({ script, body: script });
+            expect(result.status).not.toBe(0);
+            expect(result.stdout).toBe('');
+            expect(result.stderr).toContain('No installer was executed');
+        });
+        it.each(
+            ['MachinePolicy', 'UserPolicy'].flatMap((policyScope) =>
+                ['Restricted', 'AllSigned', 'RemoteSigned'].map((policy) => [policyScope, policy])
+            )
+        )('honors organization %s %s before network access', (policyScope, policy) => {
+            const result = runWindows({ policy, policyScope });
+            expect(result.status).not.toBe(0);
+            expect(result.stdout).toBe('');
+            expect(result.stderr).toContain('organization script policy');
+            expect(result.stderr).toContain('fixture_calls=0');
+        });
+        it('honors local AllSigned before network access', () => {
+            const result = runWindows({ localPolicy: 'AllSigned' });
+            expect(result.status).not.toBe(0);
+            expect(result.stdout).toBe('');
+            expect(result.stderr).toContain('signed scripts are required');
+            expect(result.stderr).toContain('fixture_calls=0');
+        });
+    }
+);
