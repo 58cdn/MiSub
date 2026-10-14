@@ -232,7 +232,12 @@ await context.route('**/*', async (route) => {
         if (url.pathname === '/api/data')
             return json(
                 (await authMiddleware(request, env))
-                    ? { misubs: [], profiles: [], config: { isDefaultPassword: false } }
+                    ? {
+                          misubs: [],
+                          profiles: [],
+                          ruleTemplates: [],
+                          config: { isDefaultPassword: false },
+                      }
                     : { authenticated: false }
             );
         if (url.pathname === '/api/public_config')

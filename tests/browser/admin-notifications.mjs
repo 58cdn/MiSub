@@ -109,7 +109,12 @@ await context.route('**/*', async (route) => {
     if (url.pathname === '/api/data')
         return json(
             loggedIn
-                ? { misubs: [], profiles: [], config: { isDefaultPassword: false } }
+                ? {
+                      misubs: [],
+                      profiles: [],
+                      ruleTemplates: [],
+                      config: { isDefaultPassword: false },
+                  }
                 : { authenticated: false }
         );
     if (url.pathname === '/api/github/release') return json({});

@@ -188,6 +188,61 @@ const existingProduction = () => ({
     env_vars: { ADMIN_PASSWORD: { type: 'secret_text' } },
 });
 
+test('automatic release preserves an approved session binding and its exact mode', (t) => {
+    const sessionId = 'cccccccc-2222-4333-8444-555555555555';
+    for (const enabled of [false, true]) {
+        const production = existingProduction();
+        production.d1_databases = { MISUB_SESSION_DB: { id: sessionId } };
+        if (enabled) production.env_vars.SESSION_AUTH_MODE = { type: 'plain_text', value: 'd1-v1' };
+        const result = runScript(t, [project(production)], automatic);
+        expectDeployed(result);
+        assert.equal(result.calls.length, 1);
+        assert.ok(result.config.includes(`database_id = "${sessionId}"`));
+        assert.equal(result.config.includes('SESSION_AUTH_MODE = "d1-v1"'), enabled);
+    }
+});
+
+test('CI environment cannot provision or enable session authority', (t) => {
+    const result = runScript(t, [project(existingProduction())], {
+        ...automatic, SESSION_AUTH_MODE: 'd1-v1',
+        CLOUDFLARE_SESSION_D1_DATABASE_ID: 'cccccccc-2222-4333-8444-555555555555',
+    });
+    expectDeployed(result);
+    assert.equal(result.calls.length, 1);
+    assert.ok(!result.config.includes('SESSION_AUTH_MODE'));
+    assert.ok(!result.config.includes('MISUB_SESSION_DB'));
+});
+
+test('refuses invalid session modes or a mode with no existing database', (t) => {
+    for (const mode of [
+        { type: 'secret_text', value: 'd1-v1' },
+        { type: 'plain_text', value: '' },
+        { type: 'plain_text', value: 'legacy' },
+        { type: 'plain_text', value: 'd1-v1\n[bad]' },
+        { type: 'plain_text', value: 'd1-v1' },
+    ]) {
+        const production = existingProduction();
+        production.env_vars.SESSION_AUTH_MODE = mode;
+        const result = runScript(t, [project(production)], automatic);
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.equal(result.config, '');
+    }
+});
+
+test('refuses sharing the session database with every other supported D1 binding', (t) => {
+    for (const binding of ['MISUB_DB', 'MISUB_PROBE_DB', 'MISUB_SECURITY_DB']) {
+        const production = existingProduction();
+        const id = 'abcdefab-2222-4333-8444-555555555555';
+        production.d1_databases = { [binding]: { id }, MISUB_SESSION_DB: { id: id.toUpperCase() } };
+        const result = runScript(t, [project(production)], automatic);
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.equal(result.config, '');
+        assert.match(result.output, /MISUB_SESSION_DB must use an independent database/);
+    }
+});
+
 test('automatic release preserves credentials and all existing resource IDs', (t) => {
     const production = existingProduction();
     const probeId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
