@@ -28,6 +28,7 @@
 
     // State
     // State
+    const activeStatusFilter = ref(resolveSubscriptionStatusFilter(route.query?.status) || '');
     const isSortingSubs = ref(false);
     const showDeleteSubsModal = ref(false);
 
@@ -36,6 +37,11 @@
         filteredSubscriptions,
         searchQuery: subscriptionSearchQuery,
         subsCurrentPage,
+        subsItemsPerPage,
+        changeSubsPageSize,
+        isRefreshing,
+        refreshError,
+        lastRefreshAt,
         subsTotalPages,
         paginatedSubscriptions,
         changeSubsPage,
@@ -47,7 +53,10 @@
         handleUpdateNodeCount,
         batchUpdateAllSubscriptions,
         reorderSubscriptions,
-    } = useSubscriptions(markDirty);
+    } = useSubscriptions(markDirty, {
+        statusFilter: activeStatusFilter,
+        configurablePagination: true,
+    });
 
     const { addNodesFromBulk } = useManualNodes(markDirty);
 
@@ -201,7 +210,6 @@
     // --- Dashboard deep-link status filter (?status=error / expired / ...) ---
     // The dashboard health cards link here with a status. Previously the query
     // was dropped, so the user landed on an unfiltered list.
-    const activeStatusFilter = ref('');
     const STATUS_FILTER_LABEL_KEYS = {
         disabled: 'subscriptions.filterStatusDisabled',
         error: 'subscriptions.filterStatusError',
@@ -249,7 +257,7 @@
 <template>
     <div class="max-w-(--breakpoint-xl) mx-auto">
         <SubscriptionPanel
-            :subscriptions="visibleSubscriptions"
+            :subscriptions="isSortingSubs ? subscriptions : visibleSubscriptions"
             :paginated-subscriptions="paginatedSubscriptions"
             :search-query="subscriptionSearchQuery"
             :filtered-count="filteredSubscriptions.length"
@@ -257,6 +265,12 @@
             :status-filter-label="statusFilterLabel"
             :current-page="subsCurrentPage"
             :total-pages="subsTotalPages"
+            :page-size="subsItemsPerPage"
+            :is-refreshing="isRefreshing"
+            :refresh-error="refreshError"
+            :last-refresh-at="lastRefreshAt"
+            :pagination-busy="dataStore.isLoading"
+            @update:page-size="changeSubsPageSize"
             :is-sorting="isSortingSubs"
             searchable
             @clear-status-filter="clearStatusFilter"

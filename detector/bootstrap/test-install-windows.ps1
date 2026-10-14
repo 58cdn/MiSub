@@ -18,6 +18,36 @@ function Reject([scriptblock] $Action, [string] $Code, [string] $Name) {
 }
 
 Initialize-ProbeNative
+$normalMessage = [MiSub.Bootstrap.Native]::RegularUserError($false, $false, $false)
+Check ($null -eq $normalMessage) 'ordinary token accepted'
+Check ($null -eq [MiSub.Bootstrap.Native]::RegularUserError($false, $false, $true)) 'filtered built-in administrator is not rejected by account identity'
+$adminMessage = [MiSub.Bootstrap.Native]::RegularUserError($false, $true, $false)
+Check ($adminMessage.Contains('enabled administrator role') -and $adminMessage.Contains('Start menu') -and $adminMessage.Contains('inherit elevation')) 'administrator-token rejection explains non-elevated desktop launch'
+$builtInMessage = [MiSub.Bootstrap.Native]::RegularUserError($false, $true, $true)
+Check ($builtInMessage.Contains('built-in Administrator') -and $builtInMessage.Contains('existing standard Windows user') -and $builtInMessage.Contains('may keep full privileges')) 'full built-in administrator explains supported existing-account path'
+foreach ($system in @($false, $true)) {
+    foreach ($admin in @($false, $true)) {
+        foreach ($builtIn in @($false, $true)) {
+            $message = [MiSub.Bootstrap.Native]::RegularUserError($system, $admin, $builtIn)
+            Check (($null -ne $message) -eq ($system -or $admin)) 'complete synthetic identity matrix preserves the permission boundary'
+            if ($system) { Check ($message.Contains('SYSTEM') -and $message.Contains('Sign in')) 'SYSTEM rejection has explicit interactive-user guidance' }
+        }
+    }
+}
+$builtInSid = [Security.Principal.SecurityIdentifier]::new('S-1-5-21-100-200-300-500')
+Check ($builtInSid.IsWellKnown([Security.Principal.WellKnownSidType]::AccountAdministratorSid)) 'built-in account identification uses SID independent of account name'
+$ordinarySid = [Security.Principal.SecurityIdentifier]::new('S-1-5-21-100-200-300-1001')
+Check (-not $ordinarySid.IsWellKnown([Security.Principal.WellKnownSidType]::AccountAdministratorSid)) 'ordinary account SID is not the built-in administrator'
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+try {
+    $enabledAdmin = ([Security.Principal.WindowsPrincipal]::new($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if ($identity.IsSystem -or $enabledAdmin) {
+        Reject { Assert-ProbeRegularUser } 'bootstrap_requires_regular_user:' 'real current identity is rejected when privileged'
+    } else {
+        Assert-ProbeRegularUser
+        Check $true 'real ordinary current identity passes read-only permission check'
+    }
+} finally { $identity.Dispose() }
 Check ([MiSub.Bootstrap.Native]::Architecture() -eq 'windows-amd64') 'native Windows x64 mapping'
 Reject { [MiSub.Bootstrap.Native]::MapArchitecture(12) } 'unsupported_windows_architecture' 'native ARM64 refused even when shell emulates x64'
 Reject { [MiSub.Bootstrap.Native]::MapArchitecture(0) } 'unsupported_windows_architecture' 'native x86 refused'
@@ -125,8 +155,13 @@ public sealed class ProbeFixtureHandler : HttpMessageHandler {
     $script:FixtureConfig = Join-Path $fixtureRoot 'fixture-config.json'
     $script:Calls = New-Object 'Collections.Generic.List[string]'
     $script:Scenario = 'new'
+    $realEnvironment = ${function:Get-ProbeEnvironment}
+    $realUserGuard = ${function:Assert-ProbeRegularUser}
     function Get-ProbeEnvironment { return @{ Platform = 'windows-amd64'; Config = $script:FixtureConfig } }
-    function New-ProbeWorkspace { return New-Object MiSub.Bootstrap.Workspace($script:FixtureRoot) }
+    function New-ProbeWorkspace {
+        $script:WorkspaceCalls++
+        return New-Object MiSub.Bootstrap.Workspace($script:FixtureRoot)
+    }
     function Receive-ProbeAsset {
         param($Release, $Destination)
         $script:Calls.Add('download')
@@ -157,11 +192,27 @@ public sealed class ProbeFixtureHandler : HttpMessageHandler {
         }
     }
     function Reset-Fixture([string] $Scenario) {
-        $script:Scenario = $Scenario; $script:Calls.Clear()
+        $script:Scenario = $Scenario; $script:Calls.Clear(); $script:WorkspaceCalls = 0
         if ([IO.File]::Exists($script:FixtureConfig)) { [IO.File]::Delete($script:FixtureConfig) }
     }
     $origin = 'https://fixture.invalid'
     $window = '00000000-0000-0000-0000-000000000000'
+    $fixtureEnvironment = ${function:Get-ProbeEnvironment}
+    Set-Item Function:Get-ProbeEnvironment $realEnvironment
+    try {
+        foreach ($rejectedContext in @(@($false, $true, $false), @($false, $true, $true), @($true, $true, $false))) {
+            $script:RejectedContext = $rejectedContext
+            function Assert-ProbeRegularUser {
+                throw [MiSub.Bootstrap.Native]::RegularUserError($script:RejectedContext[0], $script:RejectedContext[1], $script:RejectedContext[2])
+            }
+            Reset-Fixture 'permission-rejected'
+            Reject { Invoke-ProbeBootstrap $origin $window } 'bootstrap_requires_regular_user:' 'privileged context rejected through the real environment preflight'
+            Check ($script:WorkspaceCalls -eq 0 -and $script:Calls.Count -eq 0 -and -not [IO.File]::Exists($script:FixtureConfig)) 'permission rejection prevents workspace creation, download, CLI execution and credentials'
+        }
+    } finally {
+        Set-Item Function:Get-ProbeEnvironment $fixtureEnvironment
+        Set-Item Function:Assert-ProbeRegularUser $realUserGuard
+    }
     Reset-Fixture 'new'
     Invoke-ProbeBootstrap $origin $window
     Check (($script:Calls -join ',') -eq ('download,--capabilities,--setup|--server|' + $origin + '|--pair-window|' + $window + '|--config|' + $script:FixtureConfig)) 'new installation invokes native setup once through absolute verified executable'

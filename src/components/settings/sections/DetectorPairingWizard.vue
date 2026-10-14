@@ -759,8 +759,8 @@
                     {{
                         terminalChoice === 'windows'
                             ? L(
-                                  '支持 Windows 10 / Server 2016 及以上 x64，使用普通用户 PowerShell 5.1 或以上。命令直接下载并校验原生 exe。',
-                                  'Windows 10 / Server 2016 or newer, x64, with PowerShell 5.1 or newer as a regular user. The command downloads and verifies the native exe directly.'
+                                  '支持 Windows 10 / Server 2016 及以上 x64，使用普通用户 PowerShell 5.1 或以上。命令下载并校验固定版本脚本，再安装检测器。',
+                                  'Windows 10 / Server 2016 or newer, x64, with PowerShell 5.1 or newer as a regular user. The command verifies a fixed-version script, then installs the detector.'
                               )
                             : L(
                                   '支持 macOS 13 及以上、具有可用用户级 systemd 的 Linux，自动识别 amd64 / arm64。需要 Bash、curl 和 SHA-256 工具。',
@@ -790,7 +790,7 @@
                                   '已复制恢复命令；它不会重新配对。',
                                   'Resume command copied; it does not pair again.'
                               )
-                            : L('已复制完整安装命令。', 'Complete installation command copied.')
+                            : L('已复制网络安装命令。', 'Network installation command copied.')
                 }}
             </p>
             <details
@@ -889,8 +889,8 @@
                         <p>
                             {{
                                 L(
-                                    '复制完整命令到你控制的设备终端，一次粘贴即可自动下载、校验和配对。核对短码并在此批准后，将安装并启动检测器；已有配置会保留，不设置登录自启。无需先下载文件或切换目录。',
-                                    'Copy the complete command into a terminal on your device. One paste downloads, verifies and pairs the client. After you compare the code and approve here, it installs and starts the detector. Existing configuration is preserved; login startup is not enabled. No prior download or directory change is needed.'
+                                    '复制下方网络命令到你控制的设备终端。它会下载并校验固定版本安装脚本；核对短码并在此批准后，安装并启动检测器。已有配置会保留，不设置登录自启。',
+                                    'Copy the network command below into a terminal on your device. It downloads and verifies a fixed-version installer. After you compare the code and approve here, it installs and starts the detector. Existing configuration is preserved; login startup is not enabled.'
                                 )
                             }}
                         </p>
@@ -911,6 +911,22 @@
                                 class="pair-command max-h-80 overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs leading-relaxed dark:border-gray-700 dark:bg-gray-950"
                             ><code>{{ command }}</code></pre>
                         </details>
+                        <p
+                            class="text-xs text-gray-500 dark:text-gray-400"
+                            data-testid="pairing-network-help"
+                        >
+                            {{
+                                terminalChoice === 'windows'
+                                    ? L(
+                                          '下载失败时先检查 GitHub HTTPS 直连；当前 Windows 发行不使用系统代理。签名或组织策略限制时请联系管理员，不要更改策略重试。',
+                                          'If downloading fails, check direct HTTPS access to GitHub; this Windows release does not use system proxies. Contact your administrator for signing or organization policy restrictions; do not change policy to retry.'
+                                      )
+                                    : L(
+                                          '下载失败时检查 GitHub HTTPS 连接及终端代理设置后重试；校验失败不会执行安装脚本。',
+                                          'If downloading fails, check GitHub HTTPS access and terminal proxy settings before retrying. Failed verification never executes the installer.'
+                                      )
+                            }}
+                        </p>
                     </div>
                     <p class="text-xs text-gray-500 dark:text-gray-400">
                         {{

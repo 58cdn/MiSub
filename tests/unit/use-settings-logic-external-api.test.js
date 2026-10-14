@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
+import { useDataStore } from '../../src/stores/useDataStore.js';
+import { useSubscriptions } from '../../src/composables/useSubscriptions.js';
 
 const { fetchSettings, saveSettings, resetSettings, showToast } = vi.hoisted(() => ({
     fetchSettings: vi.fn(),
@@ -28,6 +31,7 @@ import { useSettingsLogic } from '../../src/composables/useSettingsLogic.js';
 
 describe('useSettingsLogic externalApi normalization', () => {
     beforeEach(() => {
+        setActivePinia(createPinia());
         fetchSettings.mockReset();
         saveSettings.mockReset();
         resetSettings.mockReset();
@@ -60,8 +64,13 @@ describe('useSettingsLogic externalApi normalization', () => {
         try {
             const { settings, handleSave, restartCountdown } = useSettingsLogic();
             settings.value.storageType = 'kv';
+            settings.value.groupsPageSize = 50;
 
             expect(await handleSave()).toBe(true);
+            expect(useDataStore().settings.groupsPageSize).toBe(50);
+            expect(
+                useSubscriptions(vi.fn(), { configurablePagination: true }).subsItemsPerPage.value
+            ).toBe(50);
             expect(restartCountdown.value).toBe(3);
             await vi.advanceTimersByTimeAsync(1000);
             expect(restartCountdown.value).toBe(2);

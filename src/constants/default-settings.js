@@ -7,6 +7,7 @@ import { DEFAULT_SUBCONVERTER_BACKEND } from './subconverter-backends.js';
 
 export const DEFAULT_SETTINGS = {
     FileName: 'MiSub',
+    groupsPageSize: 20,
     mytoken: 'auto',
     profileToken: 'profiles',
     defaultLocale: 'zh-CN',

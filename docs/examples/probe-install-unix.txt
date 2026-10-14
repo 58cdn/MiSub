@@ -1,0 +1,25 @@
+# DISPLAY EXAMPLE ONLY — DO NOT EXECUTE. Synthetic site and public window.
+bash -c 'set -euo pipefail
+export LC_ALL=C
+trap '"'"'printf "%s\n" "MiSub: download/verification failed; check HTTPS access, proxy and retry. No installer was executed." >&2'"'"' EXIT
+u='"'"'https://github.com/58cdn/MiSub/releases/download/probe-v0.2.0/install.sh'"'"'; n=13917; hash='"'"'b30e2f17570eb7ac8b4af3151a3bf7c34ddded39b130c594aa5a7afe2ead69b2'"'"'
+for i in 0 1 2; do
+    r=$(command curl -q --silent --fail --proto '"'"'=https'"'"' --tlsv1.2 --connect-timeout 10 --max-time 45 --max-redirs 0 --max-filesize "$n" --range "0-$((n-1))" --write-out '"'"'\n%{http_code} %{redirect_url}'"'"' "$u" | command head -c "$((n+8192))" | command tr '"'"'\000'"'"' '"'"'\r'"'"' && printf .)
+    r=${r%.}
+    [ "${#r}" -lt "$((n+8192))" ]
+    [[ "$r" != *$'"'"'\r'"'"'* ]]
+    status=${r##*$'"'"'\n'"'"'}; body=${r%$'"'"'\n'"'"'*}
+    case "$status" in
+        '"'"'200 '"'"'|'"'"'206 '"'"') break ;;
+        301\ *|302\ *|303\ *|307\ *|308\ *)
+            u=${status#* }
+            [[ "$u" != *\\* && "$u" =~ ^https://(release-assets\.githubusercontent\.com|objects\.githubusercontent\.com)/[^[:space:]#]+$ ]] && [ "$i" -lt 2 ] || exit 1 ;;
+        *) exit 1 ;;
+    esac
+done
+[ "${#body}" -eq "$n" ]
+if command -v sha256sum >/dev/null 2>&1; then h=$(printf %s "$body" | command sha256sum); else h=$(printf %s "$body" | command shasum -a 256); fi
+[ "${h%% *}" = "$hash" ]
+trap - EXIT
+command bash -c "$body" -- --server "$1" --pair-window "$2"
+' -- 'https://misub.fixture.invalid' '11111111-1111-4111-8111-111111111111'
