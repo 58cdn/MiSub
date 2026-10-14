@@ -52,7 +52,8 @@ const normalize = (value) =>
         .replace(/[\u200B-\u200D]/g, '')
         .trim()
         .replace(/^['"]|['"]$/g, '');
-async function passwordAccess(request, payload, env, recordSuccess) {
+async function passwordAccess(request, payload, env) {
+    if (typeof payload?.password !== 'string') throw fail(400, 'invalid_password');
     let security;
     try {
         security = await loginSecurityContext(request, env);
@@ -60,27 +61,17 @@ async function passwordAccess(request, payload, env, recordSuccess) {
     } catch {
         return { response: securityUnavailable() };
     }
-    const matched =
-        typeof payload?.password === 'string' &&
-        normalize(payload.password) === normalize(await getAdminPassword(env));
-    let summary = { enabled: false, warning: null };
-    // Ticket preparation shares the failure/lock guard but does not consume a
-    // success warning. The actual password login records success exactly once.
-    if (security.store && (!matched || recordSuccess)) {
+    const matched = normalize(payload.password) === normalize(await getAdminPassword(env));
+    if (security.store && !matched) {
         try {
-            const result = await security.store.record(
-                security.ip,
-                matched,
-                matched ? loginDevice(request) : undefined
-            );
+            const result = await security.store.record(security.ip, false);
             if (result.lockedUntil) return { response: loginLocked(result.lockedUntil) };
-            summary = { enabled: result.enabled, warning: result.warning };
         } catch {
             return { response: securityUnavailable() };
         }
     }
     if (!matched) throw fail(401, 'wrong_password');
-    return { summary };
+    return security;
 }
 
 export async function handleSessionRequest(request, env, path) {
@@ -106,15 +97,31 @@ export async function handleSessionRequest(request, env, path) {
         requireMutation(request);
         const payload = await readJsonWithLimit(request, JSON_BODY_LIMITS.auth);
         if (path === '/session/prepare') {
-            const access = await passwordAccess(request, payload, env, false);
+            const access = await passwordAccess(request, payload, env);
             if (access.response) return access.response;
             return sessionResponse(await authority.issueTicket());
         }
         if (path === '/login') {
-            const access = await passwordAccess(request, payload, env, true);
+            const access = await passwordAccess(request, payload, env);
             if (access.response) return access.response;
             const result = await authority.login(payload, header);
-            result.loginSecurity = access.summary;
+            result.loginSecurity = { enabled: false, warning: null };
+            // The pending SID cannot authenticate without its Cookie and confirmation.
+            // Recheck admission and commit its one audit before releasing that Cookie.
+            if (access.store) {
+                try {
+                    const summary = await access.store.record(
+                        access.ip,
+                        true,
+                        loginDevice(request),
+                        result.id
+                    );
+                    if (summary.lockedUntil) return loginLocked(summary.lockedUntil);
+                    result.loginSecurity = { enabled: summary.enabled, warning: summary.warning };
+                } catch {
+                    return securityUnavailable();
+                }
+            }
             if ((await getAuthDebugInfo(env))?.adminPassword?.isDefaultFallback) {
                 result.securityWarning = {
                     type: 'default_admin_password',

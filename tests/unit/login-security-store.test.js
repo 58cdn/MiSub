@@ -20,6 +20,36 @@ function fixture() {
 afterEach(() => databases.splice(0).forEach((db) => db.close()));
 
 describe('D1 login security transactions', () => {
+    it('admits a stable SID once across concurrent retries and preserves subsequent failures', async () => {
+        const { store, sqlite } = fixture();
+        await store.record(IP, false);
+        const id = 'a'.repeat(32);
+        const results = await Promise.all(
+            Array.from({ length: 20 }, () => store.record(IP, true, device, id))
+        );
+        expect(new Set(results.map((r) => r.warning.id)).size).toBe(1);
+        expect(
+            sqlite
+                .prepare("SELECT COUNT(*) n FROM login_security_events WHERE type='login_success'")
+                .get().n
+        ).toBe(1);
+        for (let n = 0; n < 10; n++) await store.record(IP, false);
+        expect((await store.record(IP, true, device, id)).lockedUntil).not.toBeNull();
+        expect(sqlite.prepare('SELECT COUNT(*) n FROM login_security_failures').get().n).toBe(10);
+    });
+    it('keeps a stable warning after read acknowledgement and hides it while disabled', async () => {
+        const { store, sqlite } = fixture();
+        const id = 'b'.repeat(32);
+        await store.record(IP, false);
+        const first = await store.record(IP, true, device, id);
+        await store.markRead([first.warning.id]);
+        expect((await store.record(IP, true, device, id)).warning).toEqual(first.warning);
+        sqlite.exec('UPDATE login_security_config SET enabled=0');
+        expect(await store.record(IP, true, device, id)).toMatchObject({
+            enabled: false,
+            warning: null,
+        });
+    });
     it('locks exactly on 10, rejects 11 and valid passwords, does not extend, unlocks at the exact boundary', async () => {
         const { store, clock, sqlite } = fixture();
         for (let i = 1; i <= 9; i++) expect((await store.record(IP, false)).lockedUntil).toBeNull();

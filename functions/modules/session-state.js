@@ -54,7 +54,9 @@ const validate = (row) => {
                 !timestamp(s.absoluteExpires) ||
                 s.expires > s.absoluteExpires ||
                 typeof s.active !== 'boolean' ||
-                typeof s.revoked !== 'boolean'
+                typeof s.revoked !== 'boolean' ||
+                (s.replaceIds !== undefined && !ids(s.replaceIds, 32)) ||
+                (s.replaceTickets !== undefined && !ids(s.replaceTickets, 64))
         ) ||
         Object.values(state.tickets).some(
             (t) =>

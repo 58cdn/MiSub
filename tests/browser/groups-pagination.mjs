@@ -72,6 +72,8 @@ try {
         if (url.origin !== origin) return route.abort();
         if (!url.pathname.startsWith('/api/')) return route.continue();
         requests.push({ path: url.pathname, method: req.method() });
+        if (url.pathname === '/api/session/protocol')
+            return route.fulfill({ json: { protocol: 'legacy' } });
         if (url.pathname === '/api/data') {
             if (pendingData) await pendingData;
             if (failData)
@@ -317,7 +319,10 @@ try {
     });
     releaseData();
     pendingData = null;
-    await range('显示 1 至 45 共 45 条结果', 'Initial loading completed: 显示 1 至 45 共 45 条结果');
+    await range(
+        '显示 1 至 45 共 45 条结果',
+        'Initial loading completed: 显示 1 至 45 共 45 条结果'
+    );
     failData = true;
     const [failureResponse] = await Promise.all([
         page.waitForResponse((response) => new URL(response.url()).pathname === '/api/data'),

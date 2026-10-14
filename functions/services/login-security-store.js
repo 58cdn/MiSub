@@ -62,10 +62,13 @@ export class LoginSecurityStore {
             ),
         ];
     }
-    async record(ip, matched, device = {}) {
-        const operation = crypto.randomUUID();
+    async record(ip, matched, device = {}, loginId = null) {
+        if (loginId !== null && (!matched || !/^[a-f0-9]{32}$/.test(loginId)))
+            throw new Error('invalid_login_operation');
+        const operation = loginId ?? crypto.randomUUID();
         const reset = `login_security_ips.failures=0 OR login_security_ips.window_started_at<=${CLOCK}-${LOGIN_WINDOW_MS} OR login_security_ips.locked_until>0`;
-        const admitted = `EXISTS(SELECT 1 FROM login_security_ips WHERE ip=? AND operation_id=?) AND ${ENABLED}`;
+        const admitted = `EXISTS(SELECT 1 FROM login_security_ips i WHERE ip=? AND operation_id=?
+            AND NOT EXISTS(SELECT 1 FROM login_security_events e WHERE e.operation_id=i.operation_id AND e.type='login_success')) AND ${ENABLED}`;
         // One D1 batch is one transaction: admission, count, audit and warning consumption
         // cannot interleave with another attempt. A rejected lock keeps its original expiry.
         const statements = [
@@ -74,6 +77,7 @@ export class LoginSecurityStore {
             this.q(
                 `INSERT INTO login_security_ips(ip,failures,window_started_at,locked_until,updated_at,operation_id)
                 SELECT ?,?,${CLOCK},0,${CLOCK},? WHERE ${ENABLED}
+                    AND NOT EXISTS(SELECT 1 FROM login_security_events WHERE operation_id=? AND type='login_success')
                 ON CONFLICT(ip) DO UPDATE SET
                     failures=CASE WHEN ? THEN 0 WHEN ${reset} THEN 1 ELSE login_security_ips.failures+1 END,
                     window_started_at=CASE WHEN ? OR ${reset} THEN ${CLOCK} ELSE login_security_ips.window_started_at END,
@@ -82,6 +86,7 @@ export class LoginSecurityStore {
                 WHERE login_security_ips.locked_until<=${CLOCK}`,
                 ip,
                 matched ? 0 : 1,
+                operation,
                 operation,
                 +matched,
                 +matched,
@@ -136,14 +141,15 @@ export class LoginSecurityStore {
             enabled: config.enabled === 1,
             lockedUntil:
                 config.enabled && state?.locked_until > config.clock_ms ? state.locked_until : null,
-            warning: warning
-                ? {
-                      id: warning.id,
-                      failedAttempts: warning.failed_attempts,
-                      since: warning.since,
-                      lastFailureAt: warning.last_failure_at,
-                  }
-                : null,
+            warning:
+                config.enabled && warning
+                    ? {
+                          id: warning.id,
+                          failedAttempts: warning.failed_attempts,
+                          since: warning.since,
+                          lastFailureAt: warning.last_failure_at,
+                      }
+                    : null,
         };
     }
     async list({ before = null, limit = 20, audit = false } = {}) {

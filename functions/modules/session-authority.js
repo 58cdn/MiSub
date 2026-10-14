@@ -204,6 +204,7 @@ export class SessionAuthority {
         return this.mutate(async (state, now) => {
             const row = await this.ticket(state, ticket);
             if (row.cancelled) throw fail(409, 'login_cancelled');
+            if (row.deadline <= now) throw fail(409, 'ticket_expired');
             if (row.sid)
                 return {
                     success: true,
@@ -211,7 +212,6 @@ export class SessionAuthority {
                     active: live(state.sessions[row.sid], now) && state.sessions[row.sid].active,
                     setCookies: [],
                 };
-            if (row.deadline <= now) throw fail(409, 'ticket_expired');
             const replaced = [];
             for (const value of priorTickets) {
                 if (value.id === ticket.id) throw fail(400, 'self_replacement');
@@ -234,14 +234,10 @@ export class SessionAuthority {
                 absoluteExpires: now + ABSOLUTE_TTL,
                 active: false,
                 revoked: false,
+                replaceIds: [...priorIds],
+                replaceTickets: priorTickets.map((value) => value.id),
             };
             row.sid = id;
-            for (const oldId of priorIds)
-                if (state.sessions[oldId]) state.sessions[oldId].revoked = true;
-            for (const old of replaced) {
-                old.cancelled = true;
-                if (state.sessions[old.sid]) state.sessions[old.sid].revoked = true;
-            }
             return {
                 success: true,
                 id,
@@ -256,6 +252,19 @@ export class SessionAuthority {
             const { sessions } = await this.proven(state, header);
             const session = sessions.find((s) => s.id === row.sid);
             if (row.cancelled || !session) throw fail(409, 'session_confirmation_failed');
+            // Replace only the fixed, proven targets saved when this SID was prepared.
+            // Confirmation proves the client received a Cookie after security admission.
+            for (const id of session.replaceIds || [])
+                if (state.sessions[id]) state.sessions[id].revoked = true;
+            for (const id of session.replaceTickets || []) {
+                const old = state.tickets[id];
+                if (old) {
+                    old.cancelled = true;
+                    if (state.sessions[old.sid]) state.sessions[old.sid].revoked = true;
+                }
+            }
+            delete state.sessions[row.sid].replaceIds;
+            delete state.sessions[row.sid].replaceTickets;
             state.sessions[row.sid].active = true;
             state.sessions[row.sid].expires = Math.min(
                 now + SESSION_DURATION,
