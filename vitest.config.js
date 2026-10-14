@@ -7,6 +7,8 @@ export default defineConfig({
         globals: true,
         environment: 'happy-dom',
         passWithNoTests: false,
+        // Native PowerShell and Miniflare runtimes share the Windows runner.
+        fileParallelism: process.platform !== 'win32',
         include: ['tests/**/*.{test,spec}.{js,ts}'],
         coverage: {
             provider: 'v8',
