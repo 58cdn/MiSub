@@ -84,6 +84,13 @@
             "cases": "checks",
             "errors": ["external", "errors"],
             "passed": true
+        },
+        {
+            "file": "tests/browser/subscription-form-integration.mjs",
+            "report": "report.json",
+            "cases": "checks",
+            "errors": ["errors", "kvWrites"],
+            "passed": true
         }
     ]
 }

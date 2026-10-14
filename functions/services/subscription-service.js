@@ -19,6 +19,13 @@ import { runOperatorChain } from '../utils/operator-runner.js';
 import { createTimeoutFetch } from '../modules/utils.js';
 import { assertPublicNetworkUrl } from '../modules/security-utils.js';
 import { isSuspiciousNodeCountDrop } from './node-cache-service.js';
+import {
+    isAtomicSubscriptionStorage,
+    captureSubscriptionIdentity,
+    commitRuntimeObservation,
+    getProtocolError,
+} from './subscription-protocol/index.js';
+import { detectSubscriptionBodyError } from '../modules/handlers/node-handler.js';
 
 /**
  * 订阅获取配置常量
@@ -385,6 +392,8 @@ async function writeSubscriptionNodeCache(storage, sub, nodes) {
 
 async function writeSubscriptionRuntimeInfo(storage, sub, runtimeInfo = {}) {
     if (!storage || !sub?.id) return false;
+    // Strict observations use the captured canonical scope and ordered commit queue below.
+    if (isAtomicSubscriptionStorage(storage)) return false;
     const { nodeCount, userInfo, lastGoodNodeCount, detectedName } = runtimeInfo;
     const hasUserInfo = Object.prototype.hasOwnProperty.call(runtimeInfo, 'userInfo');
     const hasLastGoodNodeCount = Object.prototype.hasOwnProperty.call(
@@ -713,9 +722,22 @@ export async function generateCombinedNodeList(
     const processedManualNodeList = manualProcessedLines.join('\n');
 
     const httpSubs = misubs.filter(
-        (sub) => sub && sub.url && /^https?:\/\//i.test(sub.url) && !/^https?:\/\/[^/?#]+:\d+\/?#/i.test(sub.url)
+        (sub) =>
+            sub &&
+            sub.url &&
+            /^https?:\/\//i.test(sub.url) &&
+            !/^https?:\/\/[^/?#]+:\d+\/?#/i.test(sub.url)
     );
     const limiter = createConcurrencyLimiter(FETCH_CONFIG.CONCURRENCY);
+    const storage = context?.storage;
+    const atomic = isAtomicSubscriptionStorage(storage);
+    const snapshot =
+        atomic && httpSubs.length
+            ? context.subscriptionSnapshot || (await storage.readSubscriptionSnapshot())
+            : null;
+    const pendingObservations = [];
+    const runtimeStatuses = {};
+    if (atomic && context) context.subscriptionRuntimeObservations = runtimeStatuses;
     let upstreamSuccessCount = 0; // 追踪真正从远程拉取成功的订阅数（不含 per-sub 缓存回退）
 
     /**
@@ -726,7 +748,20 @@ export async function generateCombinedNodeList(
     const fetchSingleSubscription = async (sub) => {
         const cacheEnabled = sub?.enableNodeCache === true;
         const storage = context?.storage;
+        if (atomic)
+            runtimeStatuses[sub.id] = {
+                status: 'scoped',
+                reason: 'unverified_request',
+                userInfoScope: 'download_response',
+            };
         const recordEmptyRuntimeInfo = () => {
+            if (atomic) {
+                const status = runtimeStatuses[sub.id];
+                if (status && status.status === 'fetching') {
+                    Object.assign(status, { status: 'skipped', reason: 'fetch_failed' });
+                }
+                return;
+            }
             if (cacheEnabled) return;
             const runtimeInfo = {
                 nodeCount: 0,
@@ -767,6 +802,60 @@ export async function generateCombinedNodeList(
             }
             requestUrl = assertPublicNetworkUrl(requestUrl).toString();
 
+            let observation = null;
+            if (atomic) {
+                const status = {
+                    status: 'scoped',
+                    reason: null,
+                    userInfoScope: 'download_response',
+                };
+                runtimeStatuses[sub.id] = status;
+                const target = snapshot.subscriptions.find((item) => item.id === sub.id);
+                let identity;
+                try {
+                    identity = await captureSubscriptionIdentity(sub);
+                    if (!target || identity !== (await captureSubscriptionIdentity(target)))
+                        status.reason = 'identity_conflict';
+                } catch {
+                    status.reason = 'identity_conflict';
+                }
+                const canonicalUA =
+                    (typeof target?.customUserAgent === 'string' &&
+                        target.customUserAgent.trim()) ||
+                    getProcessedUserAgent('v2rayN/7.23', target?.url);
+                let canonicalUrl = target?.url;
+                if (
+                    target?.fetchProxy &&
+                    typeof target.fetchProxy === 'string' &&
+                    target.fetchProxy.trim()
+                ) {
+                    canonicalUrl = buildFetchProxyUrl(target.fetchProxy, target.url, canonicalUA);
+                }
+                if (!status.reason) {
+                    if (!target.enabled) status.reason = 'disabled_source';
+                    else if (cacheEnabled) status.reason = 'cache_scope';
+                    else if (processedUserAgent !== canonicalUA) status.reason = 'user_agent_scope';
+                    else if (
+                        ![0, 1].includes(snapshot.requestPolicy) ||
+                        Boolean(skipCertVerify) !== (snapshot.requestPolicy === 1)
+                    )
+                        status.reason = 'tls_scope';
+                    else if (requestUrl !== new URL(canonicalUrl).toString())
+                        status.reason = 'request_url_scope';
+                }
+                if (!status.reason) {
+                    status.status = 'fetching';
+                    observation = {
+                        operationId: crypto.randomUUID(),
+                        epoch: snapshot.version.epoch,
+                        id: sub.id,
+                        identity,
+                        observedAt: Date.now(),
+                        requestPolicy: snapshot.requestPolicy,
+                    };
+                }
+            }
+
             const response = await fetchWithRetry(requestUrl, {
                 headers: requestHeaders,
                 redirect: 'follow',
@@ -774,8 +863,9 @@ export async function generateCombinedNodeList(
                     ? {
                           cf: {
                               insecureSkipVerify: true,
-                              allowUntrusted: true,
-                              validateCertificate: false,
+                              ...(!atomic
+                                  ? { allowUntrusted: true, validateCertificate: false }
+                                  : {}),
                           },
                       }
                     : {}),
@@ -787,6 +877,39 @@ export async function generateCombinedNodeList(
             }
             const buffer = await response.arrayBuffer();
             let text = new TextDecoder('utf-8').decode(buffer);
+
+            // Count the untransformed response with the same parser and error gate as node_count.
+            let rawNodeCount = null;
+            if (atomic) {
+                const status = runtimeStatuses[sub.id];
+                const rawNodes = detectSubscriptionBodyError(text)
+                    ? []
+                    : parseNodeList(text, { plusAsSpace: Boolean(sub.plusAsSpace) });
+                const rawCount = rawNodes.length;
+                rawNodeCount = rawCount;
+                const knownCount = Math.max(
+                    Number(sub.lastGoodNodeCount) || 0,
+                    Number(sub.nodeCount) || 0
+                );
+                status.rawNodeCount = rawCount;
+                if (observation && rawCount === 0)
+                    Object.assign(status, {
+                        status: 'skipped',
+                        reason: 'invalid_or_empty_response',
+                    });
+                else if (observation && isSuspiciousNodeCountDrop(knownCount, rawCount))
+                    Object.assign(status, { status: 'skipped', reason: 'observation_protected' });
+                else if (observation) {
+                    status.status = 'pending';
+                    pendingObservations.push({
+                        ...observation,
+                        fields: {
+                            nodeCount: rawCount,
+                            ...(rawCount >= 10 ? { lastGoodNodeCount: rawCount } : {}),
+                        },
+                    });
+                }
+            }
 
             text = await decodeBase64Content(text);
 
@@ -814,7 +937,7 @@ export async function generateCombinedNodeList(
             );
             if (
                 Number.isFinite(knownNodeCount) &&
-                isSuspiciousNodeCountDrop(knownNodeCount, realNodes.length)
+                isSuspiciousNodeCountDrop(knownNodeCount, atomic ? rawNodeCount : realNodes.length)
             ) {
                 const cachedNodes = await readCachedNodes();
                 console.warn(
@@ -861,7 +984,8 @@ export async function generateCombinedNodeList(
                     ...(realNodes.length >= 10 ? { lastGoodNodeCount: realNodes.length } : {}),
                 };
                 recordCurrentRequestRuntimeInfo(context, sub, runtimeInfo);
-                scheduleSubscriptionRuntimeInfoUpdate(context, storage, sub, runtimeInfo);
+                if (!atomic)
+                    scheduleSubscriptionRuntimeInfoUpdate(context, storage, sub, runtimeInfo);
             }
 
             // 判断是否启用订阅前缀（智能重命名启用时跳过）
@@ -880,6 +1004,35 @@ export async function generateCombinedNodeList(
     // 使用并发控制器限制同时请求数量，避免网络拥塞
     const subPromises = httpSubs.map((sub) => limiter(() => fetchSingleSubscription(sub)));
     const processedSubContents = await Promise.all(subPromises);
+    if (pendingObservations.length) {
+        const commitTask = (async () => {
+            let failed = false;
+            for (const observation of pendingObservations) {
+                const status = runtimeStatuses[observation.id];
+                if (failed) {
+                    Object.assign(status, { status: 'error', reason: 'prior_commit_failed' });
+                    continue;
+                }
+                try {
+                    const result = await commitRuntimeObservation(storage, observation);
+                    Object.assign(
+                        status,
+                        result.applied
+                            ? { status: 'applied', reason: null, replayed: result.replayed }
+                            : { status: 'rejected', reason: result.reason }
+                    );
+                } catch (error) {
+                    failed = true;
+                    Object.assign(status, {
+                        status: 'error',
+                        reason: getProtocolError(error).code,
+                    });
+                }
+            }
+        })();
+        if (typeof context?.waitUntil === 'function') context.waitUntil(commitTask);
+        else await commitTask;
+    }
 
     // --- 阶段 1: 原始数据汇聚 (Raw Data Aggregation) ---
     const rawCombinedLines = (processedManualNodeList + '\n' + processedSubContents.join('\n'))

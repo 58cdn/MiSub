@@ -152,13 +152,20 @@ export async function saveMisubs(misubs, profiles) {
     }
 }
 
-export async function fetchNodeCount(subUrl, fetchProxy = '', plusAsSpace = false, userAgent = '') {
+export async function fetchNodeCount(
+    subUrl,
+    fetchProxy = '',
+    plusAsSpace = false,
+    userAgent = '',
+    { inspectOnly = false } = {}
+) {
     let timeoutId;
     try {
         const controller = new AbortController();
         timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒超时
 
         const payload = { url: subUrl };
+        if (inspectOnly) payload.inspectOnly = true;
         if (fetchProxy) {
             payload.fetchProxy = fetchProxy;
         }
@@ -175,7 +182,7 @@ export async function fetchNodeCount(subUrl, fetchProxy = '', plusAsSpace = fals
             return normalizeApiFailure(data, t('settings.updateNodeInfoFailed'));
         }
 
-        return { success: true, data }; // data 包含 { count, userInfo }
+        return { success: true, data: data?.success === true ? data.data : data };
     } catch (error) {
         return handleApiError(error, 'fetchNodeCount');
     } finally {
@@ -186,6 +193,8 @@ export async function fetchNodeCount(subUrl, fetchProxy = '', plusAsSpace = fals
 export async function fetchSettings() {
     try {
         const data = await api.get(`/api/settings?t=${Date.now()}`);
+        if (data?.subscriptionProtocol !== undefined || data?.success === false || data?.error)
+            return data;
         return { success: true, data };
     } catch (error) {
         return handleApiError(error, 'fetchSettings');
@@ -214,9 +223,12 @@ export async function fetchPublicConfig({ shouldHandleUnauthorized } = {}) {
     }
 }
 
-export async function saveSettings(settings) {
+export async function saveSettings(settings, metadata = {}) {
     try {
-        return await api.post('/api/settings', settings);
+        return await api.post(
+            '/api/settings',
+            metadata.baseVersion ? { ...metadata, settings } : settings
+        );
     } catch (error) {
         return handleApiError(error, 'saveSettings');
     }
@@ -226,9 +238,9 @@ export async function saveSettings(settings) {
  * 恢复出厂设置（仅限设置项，不删除节点和订阅组）
  * @returns {Promise<Object>} - 重置结果
  */
-export async function resetSettings() {
+export async function resetSettings(metadata = {}) {
     try {
-        return await api.post('/api/settings/reset');
+        return await api.post('/api/settings/reset', metadata);
     } catch (error) {
         return handleApiError(error, 'resetSettings');
     }
