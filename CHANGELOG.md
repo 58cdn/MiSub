@@ -45,6 +45,7 @@ MiSub 主应用与 MiSub Probe 独立维护版本；检测器 Git 标签采用 `
 
 ### 修复
 
+- Windows 安装权限错误按管理员令牌、内置 Administrator 和 SYSTEM 给出普通用户运行路径，并说明过滤令牌与当前用户安装目录的支持边界。（[#34]）
 - 检测器发行按固定 Release ID 验收草稿和公开，支持完整核验已有产物与来源证明后继续发布。（[#31]）
 - 草稿公开后的资产校验接受固定 tag 下载地址的规范化变化，同时保持 Release、资产 ID、文件摘要及其他身份字段校验。（[#29]）
 - 配对安装入口核对已发行客户端的版本、平台、能力与资产摘要；未发行、读取失败或平台缺少兼容包时显示不可用并保留高级配置入口。（[#24]）
@@ -131,4 +132,5 @@ MiSub 主应用与 MiSub Probe 独立维护版本；检测器 Git 标签采用 `
 [#29]: https://github.com/58cdn/MiSub/pull/29
 [#30]: https://github.com/58cdn/MiSub/pull/30
 [#31]: https://github.com/58cdn/MiSub/pull/31
+[#34]: https://github.com/58cdn/MiSub/issues/34
 [#35]: https://github.com/58cdn/MiSub/issues/35
