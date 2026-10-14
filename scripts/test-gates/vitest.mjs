@@ -22,6 +22,8 @@ if (args.length !== 1 || !args[0] || args[0].startsWith('-')) {
         version: 1,
         suite: 'vitest',
         evidence: 'offline',
+        platform: process.platform,
+        platformPolicy: 'scripts/test-gates/vitest-platforms.json',
         head: null,
         sourceHead: null,
         dirty: null,
@@ -87,6 +89,9 @@ if (args.length !== 1 || !args[0] || args[0].startsWith('-')) {
         summary.unrun = summary.expected.map((file) => ({ file, reason: 'not_executed' }));
         if (summary.expected.length === 0)
             throw new Error('Expected Vitest file inventory is empty.');
+        const platformPolicy = JSON.parse(
+            await readFile(resolve(root, summary.platformPolicy), 'utf8')
+        );
         temporary = await mkdtemp(join(tmpdir(), 'misub-vitest-gate-'));
         const vitest = resolve(root, 'node_modules/vitest/vitest.mjs');
         const discoveryPath = join(temporary, 'discovery.json');
@@ -122,7 +127,8 @@ if (args.length !== 1 || !args[0] || args[0].startsWith('-')) {
             const completion = inspectVitestCompletion(
                 root,
                 summary.expected,
-                await load(completionPath, 'Completion')
+                await load(completionPath, 'Completion'),
+                { platform: process.platform, policy: platformPolicy }
             );
             summary.completed = completion.completed;
             summary.counts = completion.counts;

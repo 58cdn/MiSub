@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -39,6 +39,32 @@ const report = (files = expected) => ({
 const discoveryErrors = (value, inventory = expected) =>
     inspectVitestDiscovery(root, inventory, value).errors;
 const completion = (value, inventory = expected) => inspectVitestCompletion(root, inventory, value);
+const platformPolicy = JSON.parse(
+    await readFile(
+        new URL('../../scripts/test-gates/vitest-platforms.json', import.meta.url),
+        'utf8'
+    )
+);
+const nativeCase = platformPolicy.allowedSkips[0];
+const nativeFiles = [nativeCase.file, expected[0]];
+const platformReport = (status = 'skipped') => {
+    const value = report(nativeFiles);
+    value.testResults[0].assertionResults[0].fullName = nativeCase.fullName;
+    value.testResults[0].assertionResults[0].status = status;
+    if (status !== 'passed') {
+        value.numPassedTests--;
+        value[
+            status === 'todo'
+                ? 'numTodoTests'
+                : status === 'failed'
+                  ? 'numFailedTests'
+                  : 'numPendingTests'
+        ]++;
+    }
+    return value;
+};
+const platformCompletion = (value, platform = 'linux', policy = platformPolicy) =>
+    inspectVitestCompletion(root, nativeFiles, value, { platform, policy });
 
 test('inventory independently finds nested JS/TS tests and excludes scripts and helpers', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'vitest-inventory-test-'));
@@ -224,4 +250,162 @@ test('full-suite CLI rejects missing arguments, filters and extra arguments befo
         assert.equal(result.status, 2);
         assert.match(result.stderr, /full suite; no filters/);
     }
+});
+
+test('platform policy permits only the named native parser skip on Linux and macOS', () => {
+    assert.deepEqual(platformPolicy.allowedSkips, [
+        {
+            file: 'tests/unit/probe-bootstrap-command.test.js',
+            fullName:
+                'auditable one-command probe bootstrap parses complete native commands with Windows PowerShell 5.1 without executing them',
+            platforms: ['linux', 'darwin'],
+            requiredPlatform: 'win32',
+            reason: 'Windows PowerShell 5.1 native command parsing must execute in the Windows Vitest CI lane.',
+        },
+    ]);
+    for (const platform of ['linux', 'darwin']) {
+        const result = platformCompletion(platformReport(), platform);
+        assert.deepEqual(result.errors, []);
+        assert.equal(result.counts.allowedSkipped, 1);
+        assert.equal(result.counts.passed, 1);
+        assert.equal(result.counts.total, 2);
+        assert.deepEqual(result.unrun, [
+            {
+                file: nativeCase.file,
+                test: nativeCase.fullName,
+                reason: 'allowed_platform_skip',
+                platform,
+                requiredPlatform: 'win32',
+                policyReason: nativeCase.reason,
+            },
+        ]);
+    }
+});
+
+test('native parser must execute on Windows and cannot be skipped on other unregistered platforms', () => {
+    for (const platform of ['win32', 'freebsd', 'linux-x64', '']) {
+        const result = platformCompletion(platformReport(), platform);
+        assert.ok(result.errors.length > 0);
+        assert.equal(result.counts.allowedSkipped, 0);
+        assert.equal(result.unrun[0].reason, 'skipped');
+    }
+});
+
+test('an omitted platform uses the real Node platform', () => {
+    const result = inspectVitestCompletion(root, nativeFiles, platformReport(), {
+        policy: platformPolicy,
+    });
+    const allowed = nativeCase.platforms.includes(process.platform);
+    assert.equal(result.errors.length === 0, allowed);
+    assert.equal(result.counts.allowedSkipped, allowed ? 1 : 0);
+});
+
+test('a registered parser that executes and passes is accepted on every platform', () => {
+    for (const platform of ['win32', 'linux', 'darwin']) {
+        const result = platformCompletion(platformReport('passed'), platform);
+        assert.deepEqual(result.errors, []);
+        assert.equal(result.counts.allowedSkipped, 0);
+        assert.equal(result.counts.passed, 2);
+        assert.deepEqual(result.unrun, []);
+    }
+});
+
+test('platform rules never permit pending, todo or failed parser results', () => {
+    for (const status of ['pending', 'todo', 'failed']) {
+        const result = platformCompletion(platformReport(status));
+        assert.ok(result.errors.length > 0);
+        assert.equal(result.counts.allowedSkipped, 0);
+    }
+});
+
+test('an unknown skipped test still fails alongside an allowed platform skip', () => {
+    const value = platformReport();
+    value.testResults[1].assertionResults[0].status = 'skipped';
+    value.numPendingTests++;
+    value.numPassedTests--;
+    const result = platformCompletion(value);
+    assert.ok(result.errors.length > 0);
+    assert.equal(result.counts.allowedSkipped, 1);
+    assert.equal(result.unrun[1].reason, 'skipped');
+});
+
+test('policy requires an exact full name, exact file and exactly one reported case even when all pass', () => {
+    for (const change of [
+        (value) => {
+            value.testResults[0].assertionResults[0].fullName += ' renamed';
+        },
+        (value) => {
+            delete value.testResults[0].assertionResults[0].fullName;
+        },
+        (value) => {
+            value.testResults[0].assertionResults[0].fullName = nativeCase.fullName.toUpperCase();
+        },
+        (value) => {
+            value.testResults[1].assertionResults[0].fullName = nativeCase.fullName;
+            value.testResults[0].assertionResults[0].fullName = 'other';
+        },
+        (value) => {
+            value.testResults[0].assertionResults.push({
+                ...value.testResults[0].assertionResults[0],
+            });
+            value.numTotalTests++;
+            value.numPassedTests++;
+        },
+    ]) {
+        const value = platformReport('passed');
+        change(value);
+        assert.ok(
+            platformCompletion(value).errors.some((error) =>
+                error.includes('exactly one matching assertion')
+            )
+        );
+    }
+});
+
+test('platform policy rejects stale, duplicate or malformed rules', () => {
+    for (const policy of [
+        null,
+        {},
+        { ...platformPolicy, version: 2 },
+        { ...platformPolicy, unknown: true },
+        { version: 1, allowedSkips: [nativeCase, nativeCase] },
+        ...[
+            { file: 'tests/unit/removed.test.js' },
+            { fullName: '' },
+            { fullName: `${nativeCase.fullName} ` },
+            { platforms: ['win32'] },
+            { platforms: ['linux', 'linux'] },
+            { platforms: [] },
+            { requiredPlatform: 'linux' },
+            { reason: '' },
+            { reason: null },
+            { unknown: true },
+        ].map((patch) => ({ version: 1, allowedSkips: [{ ...nativeCase, ...patch }] })),
+    ])
+        assert.ok(platformCompletion(platformReport('passed'), 'linux', policy).errors.length > 0);
+});
+
+test('duplicate named skipped assertions fail even when all aggregate counts agree', () => {
+    const value = platformReport();
+    value.testResults[0].assertionResults.push({ ...value.testResults[0].assertionResults[0] });
+    value.numTotalTests++;
+    value.numPendingTests++;
+    const result = platformCompletion(value);
+    assert.equal(result.counts.allowedSkipped, 2);
+    assert.ok(result.errors.some((error) => error.includes('exactly one matching assertion')));
+});
+
+test('platform skip counts must match actual assertions and cannot cover zero executed tests', () => {
+    for (const patch of [{ numPendingTests: 0 }, { numPendingTests: 2 }, { numPassedTests: 2 }]) {
+        assert.ok(platformCompletion({ ...platformReport(), ...patch }).errors.length > 0);
+    }
+    const value = platformReport();
+    value.testResults = [value.testResults[0]];
+    value.numTotalTests = 1;
+    value.numPassedTests = 0;
+    const result = inspectVitestCompletion(root, [nativeCase.file], value, {
+        platform: 'linux',
+        policy: platformPolicy,
+    });
+    assert.ok(result.errors.some((error) => error.includes('zero passing tests')));
 });

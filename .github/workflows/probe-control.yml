@@ -8,6 +8,27 @@ permissions:
 env:
   TEST_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
 jobs:
+  vitest-windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Test acceptance gates on Windows
+        run: npm run test:gates
+      - name: Run complete Vitest suite including Windows PowerShell syntax
+        run: npm run test:ci
+      - name: Retain Windows completion summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-windows-summary
+          path: tmp/test-gates/vitest-summary.json
+          if-no-files-found: error
   contracts:
     runs-on: ubuntu-latest
     steps:

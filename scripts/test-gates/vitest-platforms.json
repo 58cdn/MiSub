@@ -1,0 +1,12 @@
+{
+    "version": 1,
+    "allowedSkips": [
+        {
+            "file": "tests/unit/probe-bootstrap-command.test.js",
+            "fullName": "auditable one-command probe bootstrap parses complete native commands with Windows PowerShell 5.1 without executing them",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "Windows PowerShell 5.1 native command parsing must execute in the Windows Vitest CI lane."
+        }
+    ]
+}

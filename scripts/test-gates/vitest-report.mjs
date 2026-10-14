@@ -91,9 +91,55 @@ export function inspectVitestDiscovery(root, expected, discovery) {
     return { discovered, errors };
 }
 
-export function inspectVitestCompletion(root, expected, report) {
+function platformRules(policy, inventory, errors) {
+    const rules = new Map();
+    if (!record(policy) || policy.version !== 1 || !Array.isArray(policy.allowedSkips)) {
+        errors.push('Vitest platform policy is missing or invalid.');
+        return rules;
+    }
+    if (Object.keys(policy).some((key) => !['version', 'allowedSkips'].includes(key))) {
+        errors.push('Vitest platform policy contains unknown fields.');
+    }
+    for (const rule of policy.allowedSkips) {
+        if (
+            !record(rule) ||
+            Object.keys(rule).some(
+                (key) =>
+                    !['file', 'fullName', 'platforms', 'requiredPlatform', 'reason'].includes(key)
+            ) ||
+            typeof rule.file !== 'string' ||
+            !inventory.includes(rule.file) ||
+            typeof rule.fullName !== 'string' ||
+            !rule.fullName.trim() ||
+            rule.fullName !== rule.fullName.trim() ||
+            !Array.isArray(rule.platforms) ||
+            rule.platforms.length === 0 ||
+            rule.platforms.some((platform) => !['linux', 'darwin'].includes(platform)) ||
+            new Set(rule.platforms).size !== rule.platforms.length ||
+            rule.requiredPlatform !== 'win32' ||
+            typeof rule.reason !== 'string' ||
+            !rule.reason.trim()
+        ) {
+            errors.push('Vitest platform skip rule is invalid or references an absent test file.');
+            continue;
+        }
+        const key = JSON.stringify([rule.file, rule.fullName]);
+        if (rules.has(key))
+            errors.push(`Duplicate Vitest platform skip rule: ${rule.file} / ${rule.fullName}`);
+        else rules.set(key, { ...rule, matches: 0 });
+    }
+    return rules;
+}
+
+export function inspectVitestCompletion(
+    root,
+    expected,
+    report,
+    { platform = process.platform, policy = { version: 1, allowedSkips: [] } } = {}
+) {
     const errors = [];
     const inventory = expectedFiles(expected, errors);
+    const rules = platformRules(policy, inventory, errors);
     const files = [];
     const unrun = [];
     const counts = {};
@@ -115,11 +161,12 @@ export function inspectVitestCompletion(root, expected, report) {
     }
     if (!(counts.total > 0) || !(counts.passed > 0))
         errors.push('Vitest completed zero passing tests.');
-    for (const name of ['failed', 'pending', 'todo', 'failedSuites']) {
+    for (const name of ['failed', 'todo', 'failedSuites']) {
         if (counts[name] !== 0) errors.push(`Vitest completion ${name} count must be zero.`);
     }
     let assertionCount = 0;
     let passedCount = 0;
+    let allowedSkipped = 0;
     if (!Array.isArray(source.testResults) || source.testResults.length === 0) {
         errors.push('Vitest completion file results are empty or invalid.');
     } else {
@@ -144,11 +191,28 @@ export function inspectVitestCompletion(root, expected, report) {
             }
             for (const assertion of item.assertionResults) {
                 assertionCount++;
+                const rule =
+                    record(assertion) && typeof assertion.fullName === 'string'
+                        ? rules.get(JSON.stringify([file, assertion.fullName]))
+                        : undefined;
+                if (rule) rule.matches++;
                 if (record(assertion) && assertion.status === 'passed') {
                     passedCount++;
                     continue;
                 }
                 const status = record(assertion) ? assertion.status : undefined;
+                if (status === 'skipped' && rule?.platforms.includes(platform)) {
+                    allowedSkipped++;
+                    unrun.push({
+                        file,
+                        test: assertion.fullName,
+                        reason: 'allowed_platform_skip',
+                        platform,
+                        requiredPlatform: rule.requiredPlatform,
+                        policyReason: rule.reason,
+                    });
+                    continue;
+                }
                 errors.push(`Vitest assertion did not pass in ${file}: ${String(status)}`);
                 if (status !== 'failed') {
                     unrun.push({
@@ -162,7 +226,16 @@ export function inspectVitestCompletion(root, expected, report) {
             }
         }
     }
+    for (const rule of rules.values()) {
+        if (rule.matches !== 1)
+            errors.push(
+                `Vitest platform policy requires exactly one matching assertion: ${rule.file} / ${rule.fullName} (found ${rule.matches}).`
+            );
+    }
     counts.assertions = assertionCount;
+    counts.allowedSkipped = allowedSkipped;
+    if (counts.pending !== allowedSkipped)
+        errors.push('Vitest pending count differs from explicitly allowed platform skips.');
     if (counts.total !== assertionCount)
         errors.push('Vitest total count differs from reported assertions.');
     if (counts.passed !== passedCount)
