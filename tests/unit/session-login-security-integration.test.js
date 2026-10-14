@@ -124,8 +124,9 @@ describe('durable sessions share the login security password guard', () => {
         expect(cookies(first)).toBe('');
         expect(counts(f).audits).toBe(0);
         const retry = await rpc(f, '/login', { password, ticket });
-        expect(retry.status).toBe(200);
+        expect(retry.status).toBe(503);
         expect(cookies(retry)).toBe('');
+        expect(counts(f).audits).toBe(0);
         expect(Object.values(f.state().sessions).every((s) => !s.active)).toBe(true);
     });
     it('keeps admission effective when the tenth failure commits after the success transaction', async () => {
@@ -146,6 +147,38 @@ describe('durable sessions share the login security password guard', () => {
         expect(counts(f)).toEqual({ audits: 1, failures: 10 });
         expect((await rpc(f, '/login', { password, ticket })).status).toBe(429);
     });
+    it.each(['before-check', 'before-commit'])(
+        'never creates an audit on old ticket replay after enabling security (%s)',
+        async (disabledAt) => {
+            const f = fixture();
+            if (disabledAt === 'before-check')
+                f.security.sqlite.exec('UPDATE login_security_config SET enabled=0');
+            const ticket = await prepare(f);
+            if (disabledAt === 'before-commit') {
+                const batch = f.security.binding.batch;
+                f.security.binding.batch = async (statements) => {
+                    f.security.binding.batch = batch;
+                    f.security.sqlite.exec('UPDATE login_security_config SET enabled=0');
+                    return batch(statements);
+                };
+            }
+            const response = await rpc(f, '/login', { password, ticket });
+            expect(response.status).toBe(200);
+            expect((await rpc(f, '/session/confirm', { ticket }, cookies(response))).status).toBe(
+                200
+            );
+            f.security.sqlite.exec('UPDATE login_security_config SET enabled=1');
+            await rpc(f, '/login', { password: 'wrong' });
+            const replay = await rpc(f, '/login', { password, ticket });
+            expect(replay.status).toBe(503);
+            expect(cookies(replay)).toBe('');
+            expect(counts(f)).toEqual({ audits: 0, failures: 1 });
+            expect(
+                (await new SessionAuthority(f.binding).authenticate(cookies(response)))
+                    .isAuthenticated
+            ).toBe(true);
+        }
+    );
     it.each(['outage', 'lock'])(
         'preserves the old session if final security admission loses to %s',
         async (failure) => {

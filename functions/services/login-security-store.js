@@ -62,12 +62,13 @@ export class LoginSecurityStore {
             ),
         ];
     }
-    async record(ip, matched, device = {}, loginId = null) {
+    async record(ip, matched, device = {}, loginId = null, { replayOnly = false } = {}) {
         if (loginId !== null && (!matched || !/^[a-f0-9]{32}$/.test(loginId)))
             throw new Error('invalid_login_operation');
+        if (replayOnly && (!matched || loginId === null)) throw new Error('invalid_login_replay');
         const operation = loginId ?? crypto.randomUUID();
         const reset = `login_security_ips.failures=0 OR login_security_ips.window_started_at<=${CLOCK}-${LOGIN_WINDOW_MS} OR login_security_ips.locked_until>0`;
-        const admitted = `EXISTS(SELECT 1 FROM login_security_ips i WHERE ip=? AND operation_id=?
+        const admitted = `${replayOnly ? '0' : '1'} AND EXISTS(SELECT 1 FROM login_security_ips i WHERE ip=? AND operation_id=?
             AND NOT EXISTS(SELECT 1 FROM login_security_events e WHERE e.operation_id=i.operation_id AND e.type='login_success')) AND ${ENABLED}`;
         // One D1 batch is one transaction: admission, count, audit and warning consumption
         // cannot interleave with another attempt. A rejected lock keeps its original expiry.
@@ -76,7 +77,7 @@ export class LoginSecurityStore {
             ...this.cleanup(),
             this.q(
                 `INSERT INTO login_security_ips(ip,failures,window_started_at,locked_until,updated_at,operation_id)
-                SELECT ?,?,${CLOCK},0,${CLOCK},? WHERE ${ENABLED}
+                SELECT ?,?,${CLOCK},0,${CLOCK},? WHERE ${ENABLED} AND ?
                     AND NOT EXISTS(SELECT 1 FROM login_security_events WHERE operation_id=? AND type='login_success')
                 ON CONFLICT(ip) DO UPDATE SET
                     failures=CASE WHEN ? THEN 0 WHEN ${reset} THEN 1 ELSE login_security_ips.failures+1 END,
@@ -87,6 +88,7 @@ export class LoginSecurityStore {
                 ip,
                 matched ? 0 : 1,
                 operation,
+                +!replayOnly,
                 operation,
                 +matched,
                 +matched,
@@ -126,6 +128,10 @@ export class LoginSecurityStore {
             );
         }
         statements.push(
+            this.q(
+                "SELECT id FROM login_security_events WHERE operation_id=? AND type='login_success'",
+                operation
+            ),
             this.q('SELECT enabled,clock_ms FROM login_security_config WHERE id=1'),
             this.q('SELECT locked_until,operation_id FROM login_security_ips WHERE ip=?', ip),
             this.q(
@@ -137,6 +143,8 @@ export class LoginSecurityStore {
         const config = result.at(-3).results[0];
         const state = result.at(-2).results[0];
         const warning = result.at(-1).results[0];
+        if (replayOnly && config.enabled && !result.at(-4).results[0])
+            throw new Error('login_admission_unconfirmed');
         return {
             enabled: config.enabled === 1,
             lockedUntil:

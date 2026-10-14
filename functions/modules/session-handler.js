@@ -114,7 +114,8 @@ export async function handleSessionRequest(request, env, path) {
                         access.ip,
                         true,
                         loginDevice(request),
-                        result.id
+                        result.id,
+                        { replayOnly: result.setCookies.length === 0 }
                     );
                     if (summary.lockedUntil) return loginLocked(summary.lockedUntil);
                     result.loginSecurity = { enabled: summary.enabled, warning: summary.warning };
