@@ -128,6 +128,25 @@ describe('authoritative versioned subscription saves', () => {
             JSON.parse(sessionStorage.getItem('misub_data_cache')).misubs[0].nodeCount
         ).toBeUndefined();
     });
+    it.each(['response lost', 'HTTP 503'])(
+        'clears unsaved state after retrying %s with no later editor changes',
+        async (message) => {
+            const store = loaded();
+            store.updateSubscription('a', { name: 'submitted' });
+            post.mockRejectedValueOnce(new Error(message));
+            expect(await store.saveData()).toBe(false);
+            expect(store.isDirty).toBe(true);
+            const first = clone(post.mock.calls[0][1]);
+            post.mockImplementation((_url, request) =>
+                acknowledgement(request, [node('a', 'submitted')])
+            );
+            expect(await store.saveData()).toBe(true);
+            expect(post.mock.calls[1][1]).toEqual(first);
+            expect(store.isDirty).toBe(false);
+            expect(store.saveState).toBe('success');
+            expect(store.subscriptions[0].name).toBe('submitted');
+        }
+    );
     it('reuses the original operation after a lost response and keeps later edits separate', async () => {
         const store = loaded();
         store.updateSubscription('a', { name: 'first' });

@@ -363,7 +363,7 @@ export const useDataStore = defineStore('data', () => {
             if (subscriptionProtocol.value === 'd1-v1' && error?.status === 409) {
                 subscriptionConflict.value = true;
             }
-            markDirty();
+            editorStore.markDirty();
             console.error('[Store] Failed to save data:', error);
             showToast(
                 subscriptionConflict.value
