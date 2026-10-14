@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
 import { build } from 'esbuild';
 import { createSessionFixture } from '../fixtures/session-authority.js';
+import { securityDatabase } from '../fixtures/login-security-db.js';
 import { handleApiRequest } from '../../functions/modules/api-router.js';
 import { renewAuthSession } from '../../functions/modules/auth-middleware.js';
 
@@ -74,7 +75,7 @@ const report = {
     requests: [],
     scope: 'Actual functions/api-router and src/lib/session-client on intercepted HTTPS in Chromium; isolated SQLite D1 adapter. No production, external network or real Cloudflare D1.',
 };
-let browser, context, fixture, pendingGate;
+let browser, context, fixture, securityFixture, pendingGate;
 const gates = new Set();
 function gate(path, mode = 'response') {
     let release, reached;
@@ -95,10 +96,13 @@ async function newPage() {
     await page.waitForFunction(() => window.client);
     return page;
 }
-async function fresh() {
+async function fresh({ security = false } = {}) {
     await context?.close();
     fixture?.close();
+    securityFixture?.sqlite.close();
+    securityFixture = security ? securityDatabase() : null;
     fixture = createSessionFixture();
+    if (securityFixture) fixture.env.MISUB_SECURITY_DB = securityFixture.binding;
     pendingGate = null;
     context = await browser.newContext();
     context.on('page', (page) => page.on('pageerror', (e) => report.pageErrors.push(e.message)));
@@ -128,6 +132,8 @@ async function fresh() {
             headers,
             ...(['GET', 'HEAD'].includes(incoming.method()) ? {} : { body: incoming.postData() }),
         });
+        if (securityFixture) Object.defineProperty(request, 'cf', { value: { colo: 'TEST' } });
+        if (securityFixture) request.headers.set('CF-Connecting-IP', '203.0.113.1');
         let response;
         if (url.pathname === '/api/fixture-renew')
             response = await renewAuthSession(request, fixture.env, new Response('{}'), {
@@ -188,6 +194,37 @@ try {
         const result = await logout(p);
         assert.equal(result.logoutConfirmed, true);
         assert.equal((await check(p)).authenticated, false);
+    });
+    await test('enabled login security locks both browser password entrypoints', async () => {
+        const p = await fresh({ security: true });
+        const statuses = await p.evaluate(async () => {
+            const results = [];
+            for (let n = 0; n < 10; n++)
+                results.push(
+                    await client.login('wrong').then(
+                        () => 200,
+                        (e) => e.status
+                    )
+                );
+            results.push(
+                await client.login('synthetic-password').then(
+                    () => 200,
+                    (e) => e.status
+                )
+            );
+            return results;
+        });
+        assert.deepEqual(statuses, [...Array(9).fill(401), 429, 429]);
+        assert.equal((await check(p)).authenticated, false);
+    });
+    await test('ticket preparation preserves login warnings for the actual session store', async () => {
+        const p = await fresh({ security: true });
+        await p.evaluate(() => client.login('wrong').catch(() => {}));
+        await p.evaluate(() => store.login('synthetic-password'));
+        assert.equal(await p.evaluate(() => store.sessionState), 'loggedIn');
+        assert.equal(await p.evaluate(() => store.loginSecurity.enabled), true);
+        assert.ok(await p.evaluate(() => store.loginSecurity.warning));
+        assert.equal((await check(p)).authenticated, true);
     });
     for (const [path, mode] of [
         ['/api/login', 'response'],
@@ -521,6 +558,7 @@ try {
     for (const g of gates) g.release();
     await context?.close();
     fixture?.close();
+    securityFixture?.sqlite.close();
     await browser?.close();
     await writeFile(resolve(output, 'report.json'), JSON.stringify(report, null, 2));
     console.log(
