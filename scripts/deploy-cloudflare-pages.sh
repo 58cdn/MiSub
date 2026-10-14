@@ -37,7 +37,10 @@ status="$(curl --silent --show-error --output "$project_json" --write-out '%{htt
   --header "${api_auth[0]}" "${api_base}/pages/projects/${project_name}")"
 case "$status" in
   200)
-    jq -e '.success == true' "$project_json" >/dev/null
+    if ! jq -e '.success == true' "$project_json" >/dev/null 2>&1; then
+      echo '::error::Cloudflare Pages project lookup returned an invalid result.'
+      exit 1
+    fi
     echo "Using existing Pages project: $project_name"
     ;;
   404)
@@ -67,13 +70,13 @@ if ! jq -e '
     type == "object" and (.id | type) == "string" and (.id | test("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$"))) and
   all(($p.env_vars // {} | .[]);
     type == "object" and (.type == "secret_text" or .type == "plain_text"))
-' "$project_json" >/dev/null; then
+' "$project_json" >/dev/null 2>&1; then
   echo '::error::Existing Pages production binding metadata is invalid. Refusing to replace configuration.'
   exit 1
 fi
 
 if [[ "$existing_only" == true ]]; then
-  if ! jq -e '.result.production_branch == "main"' "$project_json" >/dev/null; then
+  if ! jq -e '.result.production_branch == "main"' "$project_json" >/dev/null 2>&1; then
     echo '::error::Automatic release requires the existing Pages production branch to be main.'
     exit 1
   fi
@@ -81,7 +84,7 @@ if [[ "$existing_only" == true ]]; then
     (.result.deployment_configs.production.env_vars // {}) as $vars |
     $vars.ADMIN_PASSWORD.type == "secret_text" and
     (($vars | has("COOKIE_SECRET") | not) or $vars.COOKIE_SECRET.type == "secret_text")
-  ' "$project_json" >/dev/null; then
+  ' "$project_json" >/dev/null 2>&1; then
     echo '::error::Automatic release requires existing production secret bindings; it cannot provision or replace credentials.'
     exit 1
   fi
@@ -91,7 +94,7 @@ fi
 if ! jq -e '[
   (.result.deployment_configs.production.kv_namespaces // {} | keys[] | select(. != "MISUB_KV")),
   (.result.deployment_configs.production.d1_databases // {} | keys[] | select(. != "MISUB_DB" and . != "MISUB_PROBE_DB"))
-] | length == 0' "$project_json" >/dev/null; then
+] | length == 0' "$project_json" >/dev/null 2>&1; then
   echo "::error::Existing Pages project has other KV/D1 bindings. Review them before replacing its Wrangler configuration."
   exit 1
 fi
@@ -113,7 +116,7 @@ if ! jq -e '
     [($p.browsers // {} | keys[])] +
     [($p.mtls_certificates // {} | keys[])]
   ) | length == 0
-' "$project_json" >/dev/null; then
+' "$project_json" >/dev/null 2>&1; then
   echo "::error::Existing Pages project has additional production settings. Back up and migrate them before using this Wrangler-managed deployment."
   exit 1
 fi
