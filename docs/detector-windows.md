@@ -6,7 +6,7 @@ Use a non-elevated PowerShell opened normally from an existing user's desktop. I
 
 ## Running and pairing
 
-For [MiSub Probe 0.2.0](https://github.com/58cdn/MiSub/releases/tag/probe-v0.2.0), use the [one-command installation guide](detector-one-command-install.md). The default PowerShell command downloads and verifies the raw EXE and calls native `--setup` to pair, save private configuration, install and explicitly start after browser approval. It does not execute a downloaded `.ps1` or change execution policy. A separately downloaded `install.ps1` is an advanced option only where local policy already permits that script.
+Distribution is currently paused; the [one-command installation guide](detector-one-command-install.md) records the current status. The site does not generate installation or online recovery commands for old releases. Existing clients, configuration and server identities are preserved. A replacement release must pass asset and target-environment acceptance before downloads are enabled; Windows execution policy remains unchanged.
 
 The commands below are advanced examples for an already downloaded and verified local executable. Direct `--pair` only saves configuration and exits. The older `probe-v0.1.0` does not support this pairing flow. Use an absolute local path in a private directory, such as `%LOCALAPPDATA%\MiSubProbe\probe.json`; existing paths must already satisfy the ACL and ownership checks.
 

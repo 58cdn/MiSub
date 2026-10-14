@@ -163,7 +163,7 @@ npm run preview
 
 For optional node diagnostics, open **Settings → Data & integrations → Add / manage detectors → Install and connect a detector**. Select the device's terminal, open an installation window, and copy the complete command to that device. It downloads and verifies the client; review the short code, site and session fingerprint in MiSub before approving installation and startup. Confirm the first server communication, then select nodes and approve credential sharing for a diagnostic task. See the [installation guide](docs/detector-one-command-install.md) and [node diagnostics guide](docs/node-probes.md).
 
-[MiSub Probe 0.2.0](https://github.com/58cdn/MiSub/releases/tag/probe-v0.2.0) is versioned independently of the MiSub web application. The older `probe-v0.1.0` does not support the pairing and installation commands used by this guide.
+MiSub Probe is versioned independently of the MiSub web application. Distribution is currently paused: the site does not generate installation or online recovery commands for old releases. Existing clients, configuration and server identities are preserved; a validated replacement release is required before enabling new downloads.
 
 ## Operator Chain
 
