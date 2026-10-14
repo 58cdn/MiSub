@@ -29,6 +29,7 @@ describe('useDataStore 错误提示契约（单次提示、不冒泡拒绝）', 
     beforeEach(() => {
         setActivePinia(createPinia());
         localStorage.clear();
+        sessionStorage.clear();
         showToast.mockReset();
         apiGet.mockReset();
         apiPost.mockReset();
@@ -57,6 +58,7 @@ describe('useDataStore 错误提示契约（单次提示、不冒泡拒绝）', 
         apiPost.mockRejectedValue(new Error('save failed'));
         const { useDataStore } = await import('../../src/stores/useDataStore.js');
         const store = useDataStore();
+        store.hydrateFromData({ misubs: [], profiles: [], ruleTemplates: [], config: {} });
 
         await expect(store.saveData()).resolves.toBe(false);
         expect(showToast).toHaveBeenCalledTimes(1);
@@ -67,6 +69,7 @@ describe('useDataStore 错误提示契约（单次提示、不冒泡拒绝）', 
         apiPost.mockResolvedValue({ success: true, data: { misubs: [], profiles: [] } });
         const { useDataStore } = await import('../../src/stores/useDataStore.js');
         const store = useDataStore();
+        store.hydrateFromData({ misubs: [], profiles: [], ruleTemplates: [], config: {} });
 
         await expect(store.saveData()).resolves.toBe(true);
     });
