@@ -901,7 +901,7 @@ components:
                 id: { type: string }
                 name: { type: string }
                 proxy: { type: [object, 'null'], additionalProperties: true, description: Private Mihomo proxy map; only assigned detector can retrieve this. }
-                format: { $ref: '#/components/schemas/Check' }
+                format: { $ref: '#/components/schemas/FormatCheck' }
             types: { type: array, items: { $ref: '#/components/schemas/CheckType' } }
             options:
               allOf:
@@ -911,6 +911,7 @@ components:
             attempt: { type: integer, minimum: 1, maximum: 3 }
             leaseMs: { type: integer, const: 90000 }
     Check:
+      description: Shared field types. Result checks use the type-specific schemas below; unknown fields are discarded by the result endpoint. Measurements are optional and never synthesized.
       type: object
       required: [status, code]
       properties:
@@ -919,19 +920,107 @@ components:
           type: string
           enum: [ok, invalid_format, unsupported_protocol, unsupported_transport, unsafe_target, dns_failed, connect_failed, tls_failed, request_failed, http_error, deadline, cancelled, prerequisite_failed, kernel_missing, kernel_failed, probe_inconclusive, region_blocked, service_reachable, native_unlocked, originals_only, rate_limited, traffic_limit, task_expired]
         latencyMs: { type: number, minimum: 0, maximum: 180000 }
-        bytes: { type: number, minimum: 0, maximum: 20971520 }
+        bytes: { type: integer, minimum: 0, maximum: 20971520 }
         bytesPerSecond: { type: number, minimum: 0, maximum: 1000000000000 }
-        httpStatus: { type: integer, minimum: 0, maximum: 599 }
+        httpStatus: { type: integer, minimum: 100, maximum: 599 }
         retryAfterSeconds: { type: integer, minimum: 0, maximum: 86400, description: Only for unknown/rate_limited HTTP 429; never a successful measurement. }
         region: { type: string, pattern: '^[A-Z]{2}$' }
+    FormatCheck:
+      allOf:
+        - { $ref: '#/components/schemas/Check' }
+        - oneOf:
+            - {properties: {status: {const: passed}, code: {const: ok}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: invalid_format}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_protocol}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_transport}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+    TCPCheck:
+      allOf:
+        - { $ref: '#/components/schemas/Check' }
+        - oneOf:
+            - {properties: {status: {const: failed}, code: {const: invalid_format}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: dns_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: connect_failed}, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: blocked}, code: {const: unsafe_target}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_protocol}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_transport}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: skipped}, code: {const: prerequisite_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: passed}, code: {const: ok}, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: timeout}, code: {const: deadline}, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: cancelled}, code: {const: cancelled}, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+    ProxyCheck:
+      allOf:
+        - { $ref: '#/components/schemas/Check' }
+        - oneOf:
+            - {properties: {status: {const: failed}, code: {const: invalid_format}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: dns_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: request_failed}, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: http_error}, bytes: false, bytesPerSecond: false, retryAfterSeconds: false, region: false, httpStatus: {not: {const: 429}}}}
+            - {properties: {status: {const: blocked}, code: {const: unsafe_target}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_protocol}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_transport}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: kernel_missing}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: kernel_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: cancelled}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: skipped}, code: {const: prerequisite_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: passed}, code: {const: ok}, bytes: false, bytesPerSecond: false, retryAfterSeconds: false, region: false, httpStatus: {const: 204}}}
+            - {properties: {status: {const: timeout}, code: {const: deadline}, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: cancelled}, code: {const: cancelled}, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unknown}, code: {const: rate_limited}, latencyMs: false, bytes: false, bytesPerSecond: false, region: false, httpStatus: {const: 429}}, required: [httpStatus]}
+    SpeedCheck:
+      allOf:
+        - { $ref: '#/components/schemas/Check' }
+        - oneOf:
+            - {properties: {status: {const: failed}, code: {const: invalid_format}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: dns_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: request_failed}, retryAfterSeconds: false, region: false, httpStatus: {const: 200}}}
+            - {properties: {status: {const: failed}, code: {const: http_error}, latencyMs: false, bytes: false, bytesPerSecond: false, retryAfterSeconds: false, region: false, httpStatus: {not: {const: 429}}}}
+            - {properties: {status: {const: blocked}, code: {const: unsafe_target}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_protocol}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_transport}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: kernel_missing}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: kernel_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: cancelled}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: skipped}, code: {const: prerequisite_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: passed}, code: {const: ok}, retryAfterSeconds: false, region: false, httpStatus: {const: 200}, bytes: {minimum: 65536}}}
+            - {properties: {status: {const: timeout}, code: {const: deadline}, retryAfterSeconds: false, region: false, httpStatus: {const: 200}}}
+            - {properties: {status: {const: cancelled}, code: {const: cancelled}, retryAfterSeconds: false, region: false, httpStatus: {const: 200}}}
+            - {properties: {status: {const: unknown}, code: {const: probe_inconclusive}, retryAfterSeconds: false, region: false, httpStatus: {const: 200}, bytes: {maximum: 65535}}}
+            - {properties: {status: {const: unknown}, code: {const: rate_limited}, latencyMs: false, bytes: false, bytesPerSecond: false, region: false, httpStatus: {const: 429}}, required: [httpStatus]}
+    UnlockCheck:
+      allOf:
+        - { $ref: '#/components/schemas/Check' }
+        - oneOf:
+            - {properties: {status: {const: failed}, code: {const: invalid_format}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: dns_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: blocked}, code: {const: unsafe_target}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_protocol}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_transport}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: kernel_missing}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: kernel_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: cancelled}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: skipped}, code: {const: prerequisite_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unknown}, code: {const: probe_inconclusive}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: cancelled}, code: {const: cancelled}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+    ServiceCheck:
+      allOf:
+        - { $ref: '#/components/schemas/Check' }
+        - oneOf:
+            - {properties: {status: {const: unknown}, code: {const: probe_inconclusive}, latencyMs: false, bytes: false, bytesPerSecond: false, retryAfterSeconds: false, region: false, httpStatus: {not: {const: 429}}}}
+            - {properties: {status: {const: unknown}, code: {const: service_reachable}, latencyMs: false, bytes: false, bytesPerSecond: false, retryAfterSeconds: false, region: false, httpStatus: {anyOf: [{minimum: 200, maximum: 299}, {const: 401}]}}, allOf: [{if: {required: [httpStatus], properties: {httpStatus: {const: 401}}}, then: {properties: {service: {const: openai}}}}]}
+            - {properties: {status: {const: unknown}, code: {const: rate_limited}, latencyMs: false, bytes: false, bytesPerSecond: false, region: false, httpStatus: {const: 429}}, required: [httpStatus]}
+            - {properties: {status: {const: blocked}, code: {const: region_blocked}, latencyMs: false, bytes: false, bytesPerSecond: false, retryAfterSeconds: false, region: false, httpStatus: {not: {const: 429}}}}
+            - {properties: {status: {const: failed}, code: {const: request_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: timeout}, code: {const: deadline}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: cancelled}, code: {const: cancelled}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: probe_inconclusive}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
     Checks:
       type: object
       additionalProperties: false
       properties:
-        format: { $ref: '#/components/schemas/Check' }
-        tcp: { $ref: '#/components/schemas/Check' }
-        proxy: { $ref: '#/components/schemas/Check' }
-        speed: { $ref: '#/components/schemas/Check' }
+        format: { $ref: '#/components/schemas/FormatCheck' }
+        tcp: { $ref: '#/components/schemas/TCPCheck' }
+        proxy: { $ref: '#/components/schemas/ProxyCheck' }
+        speed: { $ref: '#/components/schemas/SpeedCheck' }
         observations:
           allOf:
             - { $ref: '#/components/schemas/Check' }
@@ -941,14 +1030,16 @@ components:
                 report: { $ref: '#/components/schemas/ObservationReport' }
         unlock:
           allOf:
-            - { $ref: '#/components/schemas/Check' }
+            - { $ref: '#/components/schemas/UnlockCheck' }
+            - if: { properties: { status: { const: unknown } } }
+              then: { required: [services] }
             - properties:
                 services:
                   type: array
                   maxItems: 8
                   items:
                     allOf:
-                      - { $ref: '#/components/schemas/Check' }
+                      - { $ref: '#/components/schemas/ServiceCheck' }
                       - required: [service]
                         properties:
                           service: { $ref: '#/components/schemas/Service' }
