@@ -1,8 +1,11 @@
 import copy
+import gzip
+import io
 import json
 import pathlib
 import tempfile
 import unittest
+import zipfile
 from unittest import mock
 
 import release_gate as gate
@@ -30,6 +33,33 @@ def catalog_fixture():
 
 
 class ReleaseCLITests(unittest.TestCase):
+    def test_source_core_metadata_matches_doctor_and_archive_contract(self):
+        lock = gate.source.load_lock(gate.ROOT / 'detector/source-build-lock.json')
+        payload = b'Synthetic core bytes, never executed.'
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            core = root / 'fixture-core'
+            core.write_bytes(payload)
+            for target in gate.TARGETS:
+                with self.subTest(target=target):
+                    wrapper = root / target
+                    (wrapper / 'detector').mkdir(parents=True)
+                    generated = gate.embed_core(wrapper, core, target, lock)
+                    asset = generated['assets'][target]
+                    self.assertTrue(asset['file'].startswith('mihomo-' + target + '-'))
+                    self.assertIn(lock['source']['version'], asset['file'])
+                    extension = '.zip' if target.startswith('windows-') else '.gz'
+                    archive = (wrapper / 'detector/embedded' / ('kernel' + extension)).read_bytes()
+                    self.assertEqual(asset['sha256'], gate.source.digest(archive))
+                    if extension == '.zip':
+                        with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
+                            self.assertEqual(zipped.namelist(), [asset['entry']])
+                            self.assertEqual(zipped.read(asset['entry']), payload)
+                        self.assertEqual(asset['executableSha256'], gate.source.digest(payload))
+                        self.assertEqual(asset['executableBytes'], len(payload))
+                    else:
+                        self.assertEqual(gzip.decompress(archive), payload)
+
     def test_isolation_covers_configuration_installation_and_temporary_directories(self):
         parent = {'HOME': 'real-home', 'LOCALAPPDATA': 'real-installation', 'PATH': 'trusted-tools'}
         env = gate.cli_environment(pathlib.Path('fixture-home'), parent)

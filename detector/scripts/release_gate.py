@@ -210,7 +210,7 @@ def verify_native_tests(payload):
 
 def embed_core(wrapper, core, target, lock):
     payload = read(core)
-    filename = "mihomo-" + target + (".exe" if target.startswith("windows-") else "")
+    filename = "mihomo-" + target + "-" + lock["source"]["version"] + (".exe" if target.startswith("windows-") else "")
     asset = {"file": filename + (".zip" if target.startswith("windows-") else ".gz")}
     if target.startswith("windows-"):
         out = io.BytesIO()
@@ -313,8 +313,8 @@ def verify_doctor_report(report, version, commit, target, kernel_version, elevat
         require(isinstance(check, dict) and {"id", "state", "code"} <= set(check)
                 and set(check) <= {"id", "state", "code", "remediation", "source"}, "native_doctor_checks_invalid")
         name = check["id"]
-        require(isinstance(name, str) and name in expected and name not in seen
-                and (check["state"], check["code"]) == expected[name], "native_doctor_checks_invalid")
+        require(isinstance(name, str) and name in expected and name not in seen, "native_doctor_checks_invalid")
+        require((check["state"], check["code"]) == expected[name], "native_doctor_checks_invalid:" + name)
         require(check.get("source") == ("explicit_config" if name == "configuration" else None), "native_doctor_checks_invalid")
         seen.add(name)
     return report
