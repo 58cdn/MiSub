@@ -78,6 +78,6 @@
 
 `detector/execution_metadata.go` 中的 `executionRuleSetVersion` 从 `1` 开始。改变状态、错误码、服务判定、来源证据解释或测量含义时，应递增该整数，并更新相应测试与更新日志；纯展示或传输实现修复不必递增。结构不兼容变更另行演进 `schemaVersion`。这两个版本都独立于 observations 的 `probeVersion` / wire schema，不得互相推断。
 
-当前快照只覆盖最终被接受的一次完成结果，不记录每次失败尝试，也不提供 agent 最近能力、独立心跳时间或能力历史。完整能力持久化需要独立的 probe 存储结构和读写生命周期设计，不由结果快照反推。
+当前快照只覆盖最终被接受的一次完成结果，不记录每次失败尝试，也不提供 agent 最近能力、独立心跳时间或能力历史。[领单声明与续租记录](probe-agent-runtime.md)使用独立的 probe 存储结构和分阶段开关，不由结果快照反推。
 
 完整字段定义见 [OpenAPI](node-probes.openapi.yaml)，使用入口见 [节点检测操作说明](node-probes.md)。
