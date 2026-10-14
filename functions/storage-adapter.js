@@ -18,6 +18,33 @@ const DATA_KEYS = {
     PROFILE_DOWNLOAD_COUNT_PREFIX: 'misub_profile_download_count_',
 };
 
+function isCollectionKey(key) {
+    return key === DATA_KEYS.SUBSCRIPTIONS || key === DATA_KEYS.PROFILES;
+}
+
+function collectionReadError(code = 'STORAGE_COLLECTION_READ_FAILED') {
+    const error = new Error(code);
+    error.code = code;
+    return error;
+}
+
+export function validateStoredCollection(items) {
+    if (
+        !Array.isArray(items) ||
+        items.some(
+            (item) =>
+                !item ||
+                typeof item !== 'object' ||
+                Array.isArray(item) ||
+                typeof item.id !== 'string' ||
+                !item.id.trim()
+        )
+    ) {
+        throw collectionReadError();
+    }
+    return items;
+}
+
 const D1_COLLECTION_CACHE_TTL_MS = 30 * 1000;
 const d1CollectionCaches = new WeakMap();
 
@@ -106,6 +133,15 @@ class KVStorageAdapter {
     }
 
     async get(key) {
+        if (isCollectionKey(key)) {
+            try {
+                const raw = await this.kv.get(key);
+                if (raw === null || raw === undefined) return null;
+                return validateStoredCollection(JSON.parse(raw));
+            } catch {
+                throw collectionReadError();
+            }
+        }
         try {
             const raw = await this.kv.get(key);
             if (raw === null || raw === undefined) return null;
@@ -174,7 +210,7 @@ class KVStorageAdapter {
     }
 
     async updateSubscriptionById(id, updater) {
-        const all = (await this.get(DATA_KEYS.SUBSCRIPTIONS)) || [];
+        const all = await this.getAllSubscriptions();
         const index = all.findIndex((item) => item.id === id);
         if (index === -1) return null;
         const updated = updater({ ...all[index] });
@@ -410,35 +446,38 @@ class D1StorageAdapter {
         }
     }
 
-    async getAllSubscriptions() {
-        return readCachedD1Collection(this.db, 'subscriptions', async () => {
+    async _readCollection(table, { authoritative = false } = {}) {
+        const load = async () => {
             try {
-                const results = await this.db.prepare('SELECT data FROM subscriptions').all();
-                if (!Array.isArray(results?.results)) return [];
-
+                const result = await this.db.prepare(`SELECT data FROM ${table}`).all();
+                if (result?.success === false || !Array.isArray(result?.results)) {
+                    throw collectionReadError();
+                }
                 const all = [];
-                results.results.forEach((row) => {
+                for (const row of result.results) {
+                    if (typeof row?.data !== 'string') throw collectionReadError();
                     const parsed = JSON.parse(row.data);
-                    if (Array.isArray(parsed)) {
-                        all.push(...parsed);
-                    } else if (parsed) {
-                        all.push(parsed);
-                    }
-                });
-
-                const deduped = new Map();
-                all.forEach((item) => {
-                    if (item?.id) deduped.set(item.id, item);
-                });
+                    all.push(
+                        ...validateStoredCollection(Array.isArray(parsed) ? parsed : [parsed])
+                    );
+                }
+                const deduped = new Map(all.map((item) => [item.id, item]));
                 return Array.from(deduped.values()).sort(
                     (a, b) => (a.sortIndex || 0) - (b.sortIndex || 0)
                 );
-            } catch (error) {
-                invalidateD1CollectionCache(this.db, 'subscriptions');
-                console.error('[D1] Failed to get all subscriptions:', error);
-                return [];
+            } catch {
+                throw collectionReadError();
             }
-        });
+        };
+        if (authoritative) {
+            invalidateD1CollectionCache(this.db, table);
+            return load();
+        }
+        return readCachedD1Collection(this.db, table, load);
+    }
+
+    async getAllSubscriptions(options) {
+        return this._readCollection('subscriptions', options);
     }
 
     async getProfileById(id) {
@@ -465,35 +504,8 @@ class D1StorageAdapter {
         }
     }
 
-    async getAllProfiles() {
-        return readCachedD1Collection(this.db, 'profiles', async () => {
-            try {
-                const results = await this.db.prepare('SELECT data FROM profiles').all();
-                if (!Array.isArray(results?.results)) return [];
-
-                const all = [];
-                results.results.forEach((row) => {
-                    const parsed = JSON.parse(row.data);
-                    if (Array.isArray(parsed)) {
-                        all.push(...parsed);
-                    } else if (parsed) {
-                        all.push(parsed);
-                    }
-                });
-
-                const deduped = new Map();
-                all.forEach((item) => {
-                    if (item?.id) deduped.set(item.id, item);
-                });
-                return Array.from(deduped.values()).sort(
-                    (a, b) => (a.sortIndex || 0) - (b.sortIndex || 0)
-                );
-            } catch (error) {
-                invalidateD1CollectionCache(this.db, 'profiles');
-                console.error('[D1] Failed to get all profiles:', error);
-                return [];
-            }
-        });
+    async getAllProfiles(options) {
+        return this._readCollection('profiles', options);
     }
 
     async updateSubscriptionById(id, updater) {
@@ -662,7 +674,8 @@ class D1StorageAdapter {
  * 无存储降级适配器（无可用持久化存储时，不读写持久数据）
  */
 class NoopStorageAdapter {
-    async get() {
+    async get(key) {
+        if (isCollectionKey(key)) throw collectionReadError('STORAGE_UNAVAILABLE');
         return null;
     }
     async put() {
@@ -675,10 +688,10 @@ class NoopStorageAdapter {
         return [];
     }
     async getAllSubscriptions() {
-        return [];
+        throw collectionReadError('STORAGE_UNAVAILABLE');
     }
     async getAllProfiles() {
-        return [];
+        throw collectionReadError('STORAGE_UNAVAILABLE');
     }
 }
 
