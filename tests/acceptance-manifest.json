@@ -7,6 +7,7 @@
         "tests/probes/http.check.mjs",
         "tests/probes/observations.check.mjs",
         "tests/probes/pairing.check.mjs",
+        "tests/probes/result-contract.check.mjs",
         "tests/probes/store.check.mjs"
     ],
     "helpers": ["tests/probes/sqlite-helper.mjs"],
