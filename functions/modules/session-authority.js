@@ -391,7 +391,7 @@ export class SessionAuthority {
     }
     async cleanup(header = '') {
         const { state } = await this.store.read();
-        const parsed = parseCookies(header, { maxSessions: 64, maxOperations: 128 });
+        const parsed = parseCookies(header, { maxSessions: 256, maxOperations: 256 });
         const setCookies = [];
         for (const { id } of parsed.sessions)
             if (!live(state.sessions[id], this.now())) setCookies.push(cookie(SID, id, '', 0));
@@ -404,6 +404,6 @@ export class SessionAuthority {
             )
                 setCookies.push(cookie(OP, id, '', 0));
         }
-        return { success: true, setCookies: setCookies.slice(0, 32) };
+        return { success: true, more: setCookies.length > 32, setCookies: setCookies.slice(0, 32) };
     }
 }

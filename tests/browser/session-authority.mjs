@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
+import { build } from 'esbuild';
 import { createSessionFixture } from '../fixtures/session-authority.js';
 import { handleApiRequest } from '../../functions/modules/api-router.js';
 import { renewAuthSession } from '../../functions/modules/auth-middleware.js';
@@ -17,6 +18,48 @@ for (const name of ['session-client', 'session-registry', 'http', 'session-gener
         new URL(`../../src/lib/${name}.js`, import.meta.url),
         'utf8'
     );
+// Exercise the actual store and BroadcastChannel as well as the HTTP client.
+// Only unrelated router, business hydration and localization are replaced.
+const mocks = {
+    '../router': 'export default {push:async()=>{}}',
+    '../lib/api': `import {sessionClient} from '/session-client'; export async function login(p){try{return {success:true,data:await sessionClient().login(p)}}catch(e){return {success:false,error:e.message,status:e.status,data:e.data}}} export async function fetchInitialData(){const r=await fetch('/api/session/check');const data=await r.json();return {success:r.ok&&data.authenticated,data,errorType:data.authenticated?undefined:'auth'}} export async function fetchPublicConfig(){return {success:true,data:{enablePublicPage:false}}}`,
+    '../utils/errorHandler.js':
+        'export function handleError(e){(window.errors||=[]).push(e.message)}',
+    '../i18n/index.js': 'export const t=(k)=>k',
+    './useDataStore':
+        'export function useDataStore(){return {clearCachedData(){},hydrateFromData(data){return !!data.authenticated}}}',
+};
+const bundled = await build({
+    stdin: {
+        contents: `import {createPinia,setActivePinia} from 'pinia'; import {useSessionStore} from './src/stores/session.js'; import {createSessionClient,sessionClient,onSessionChange} from './src/lib/session-client.js'; setActivePinia(createPinia()); window.store=useSessionStore(); window.client=sessionClient(); window.createClient=createSessionClient; window.events=[]; onSessionChange(e=>events.push(e));`,
+        resolveDir: process.cwd(),
+    },
+    bundle: true,
+    write: false,
+    format: 'esm',
+    platform: 'browser',
+    plugins: [
+        {
+            name: 'isolated-business-fixtures',
+            setup(b) {
+                b.onResolve({ filter: /.*/ }, (args) => {
+                    if (args.path === '/session-client')
+                        return { path: resolve('src/lib/session-client.js') };
+                    if (
+                        args.importer.replaceAll('\\', '/').endsWith('/src/stores/session.js') &&
+                        Object.hasOwn(mocks, args.path)
+                    )
+                        return { path: args.path, namespace: 'mock' };
+                });
+                b.onLoad({ filter: /.*/, namespace: 'mock' }, (args) => ({
+                    contents: mocks[args.path],
+                    loader: 'js',
+                }));
+            },
+        },
+    ],
+});
+sources['/app.js'] = bundled.outputFiles[0].text;
 const report = {
     head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
     sourceHashes: Object.fromEntries(
@@ -69,7 +112,7 @@ async function fresh() {
         if (url.pathname === '/')
             return route.fulfill({
                 contentType: 'text/html',
-                body: '<!doctype html><title>MiSub session integration</title><script type="module">import {createSessionClient} from "/src/lib/session-client.js"; window.client=createSessionClient();</script>',
+                body: '<!doctype html><title>MiSub session integration</title><script type="module" src="/app.js"></script>',
             });
         if (sources[url.pathname])
             return route.fulfill({ contentType: 'text/javascript', body: sources[url.pathname] });
@@ -189,6 +232,110 @@ try {
         held.release();
         await a.evaluate(() => operation);
         assert.equal((await check(b)).authenticated, true);
+    });
+    for (const path of ['/api/logout', '/api/session/protocol']) {
+        await test(`late ${path} cannot invalidate a newer tab's store`, async () => {
+            const a = await fresh(),
+                b = await newPage();
+            await a.evaluate(() => store.login('synthetic-password'));
+            await b.evaluate(() => store.checkSession());
+            const held = gate(path);
+            await a.evaluate(() => {
+                window.exiting = store.logout();
+            });
+            await held.ready;
+            await b.evaluate(() => store.login('synthetic-password'));
+            assert.equal(await b.evaluate(() => store.sessionState), 'loggedIn');
+            const count = await b.evaluate(() => events.length);
+            held.release();
+            await a.evaluate(() => exiting);
+            // Drain a real channel message after all older publications, then IDB.
+            await b.evaluate(() => {
+                window.drained = new Promise((resolve) => {
+                    const c = new BroadcastChannel('misub-session-events-v1');
+                    c.onmessage = (e) => {
+                        if (e.data.id === 'stale') {
+                            c.close();
+                            resolve();
+                        }
+                    };
+                });
+            });
+            await a.evaluate(() => {
+                const c = new BroadcastChannel('misub-session-events-v1');
+                c.postMessage({ id: 'stale', type: 'logout-pending' });
+                c.close();
+            });
+            await b.evaluate(() => drained);
+            await b.evaluate(() => client.recoveryPending());
+            assert.equal(await b.evaluate(() => store.sessionState), 'loggedIn');
+            assert.equal(await b.evaluate(() => store.logoutPending), false);
+            assert.equal(await b.evaluate(() => events.length), count);
+            assert.equal((await check(b)).authenticated, true);
+        });
+    }
+    await test('129 expired operation cookies drain in bounded batches before login', async () => {
+        const p = await fresh();
+        await context.addCookies(
+            Array.from({ length: 129 }, (_, n) => ({
+                name: '__Host-misub_op_' + n.toString(16).padStart(32, '0'),
+                value: 'a'.repeat(64),
+                domain: new URL(origin).hostname,
+                path: '/',
+                secure: true,
+                httpOnly: true,
+                sameSite: 'Strict',
+            }))
+        );
+        await login(p);
+        assert.equal((await check(p)).authenticated, true);
+        assert.equal(
+            (await context.cookies()).filter((c) => c.name.startsWith('__Host-misub_op_')).length,
+            1
+        );
+    });
+    await test('cleared localStorage cannot reuse a delayed login generation', async () => {
+        const a = await fresh(),
+            b = await newPage();
+        const held = gate('/api/session/protocol');
+        await start(a, 'login');
+        await held.ready;
+        await logout(b).catch(() => {});
+        await b.evaluate(() => localStorage.clear());
+        held.release();
+        assert.equal((await a.evaluate(() => operation)).ok, false);
+        assert.equal((await check(b)).authenticated, false);
+    });
+    await test('delayed IndexedDB open cannot revive login after logout and localStorage clear', async () => {
+        const a = await fresh(),
+            b = await newPage();
+        await a.evaluate(() => {
+            window.client = createClient({
+                indexedDB: {
+                    open(...args) {
+                        const pending = {};
+                        window.releaseOpen = () => {
+                            const actual = indexedDB.open(...args);
+                            for (const name of ['success', 'error', 'blocked', 'upgradeneeded'])
+                                actual['on' + name] = () => {
+                                    pending.result = actual.result;
+                                    pending['on' + name]?.();
+                                };
+                        };
+                        return pending;
+                    },
+                },
+            });
+        });
+        await start(a, 'login');
+        await a.waitForFunction(() => window.releaseOpen);
+        await logout(b).catch(() => {});
+        await login(b);
+        assert.equal((await logout(b)).logoutConfirmed, true);
+        await b.evaluate(() => localStorage.clear());
+        await a.evaluate(() => releaseOpen());
+        assert.equal((await a.evaluate(() => operation)).ok, false);
+        assert.equal((await check(b)).authenticated, false);
     });
     await test('lost capture response retries its same immutable receipt', async () => {
         const p = await fresh();

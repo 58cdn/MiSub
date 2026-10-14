@@ -52,7 +52,19 @@ export function createSessionRegistry(indexedDB, name = 'misub-session-coordinat
             ].map((t) => [t.id, t])
         ).values(),
     ];
+    const event = (state, type) => (state.event = { id: random(16), type });
     return {
+        // Deliver inside the serialized transaction. A newer login acknowledgement
+        // cannot commit between this check and a listener invalidating its UI.
+        deliverEvent: (message, listener) =>
+            transact((state) => {
+                if (!message || message.id !== state.event?.id || message.type !== state.event.type)
+                    return false;
+                listener(message.type);
+                return true;
+            }),
+        recoveryEvent: (id) =>
+            transact((state) => (state.recovery?.id === id ? state.event : null)),
         begin: () =>
             transact((state) => {
                 if (state.recovery) throw new Error('session_recovery_pending');
@@ -107,7 +119,7 @@ export function createSessionRegistry(indexedDB, name = 'misub-session-coordinat
                 state.known[sid] = item.ticket;
                 for (const [key, other] of Object.entries(state.intents))
                     if (key === id || replaced.has(other.ticket?.id)) delete state.intents[key];
-                return true;
+                return event(state, 'login-complete');
             }),
         pending: () => transact((state) => state.recovery),
         beginRecovery: (serverNow) =>
@@ -123,6 +135,7 @@ export function createSessionRegistry(indexedDB, name = 'misub-session-coordinat
                     snapshot: null,
                 };
                 for (const item of Object.values(state.intents)) item.cancelled = true;
+                event(state, 'logout-pending');
                 return state.recovery;
             }),
         bindRecovery: (id, snapshot) =>
@@ -147,12 +160,13 @@ export function createSessionRegistry(indexedDB, name = 'misub-session-coordinat
         completeRecovery: (id) =>
             transact((state) => {
                 const recovery = state.recovery;
-                if (!recovery || recovery.id !== id) return;
+                if (!recovery || recovery.id !== id) return false;
                 if (!recovery.snapshot) throw new Error('session_recovery_unconfirmed');
                 for (const intentId of recovery.intentIds) delete state.intents[intentId];
                 for (const sid of [...recovery.ids, ...recovery.snapshot.ids])
                     delete state.known[sid];
                 state.recovery = null;
+                return event(state, 'logout-complete');
             }),
         resumeFreshLogin: (id, settled) =>
             transact((state) => {
@@ -169,6 +183,7 @@ export function createSessionRegistry(indexedDB, name = 'misub-session-coordinat
                 for (const intentId of recovery.intentIds) delete state.intents[intentId];
                 for (const sid of recovery.ids) delete state.known[sid];
                 state.recovery = null;
+                event(state, 'recovery-settled');
                 return { logoutConfirmed: false };
             }),
         close: async () => (await opened).close(),

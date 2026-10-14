@@ -20,7 +20,11 @@ export function createSessionClient({
         );
     function readFence() {
         try {
-            return { value: storage.getItem(fenceKey) };
+            // A missing key must not become a reusable generation after storage
+            // is cleared while an older login is still opening IndexedDB.
+            let value = storage.getItem(fenceKey);
+            if (!value) storage.setItem(fenceKey, (value = crypto.randomUUID()));
+            return { value };
         } catch {
             return { error: new Error('session_storage_unavailable') };
         }
@@ -40,9 +44,21 @@ export function createSessionClient({
         }
         return result.protocol;
     }
+    async function cleanup() {
+        // Bounded by the 16 KiB Cookie budget; the server deletes at most 32
+        // immutable expired names per response.
+        for (let batch = 0; batch < 8; batch++) {
+            const result = await transport.post('/api/session/cleanup', {}, options);
+            if (!result.more) return;
+        }
+        throw new Error('session_cleanup_incomplete');
+    }
     async function recover({ allowFreshLogin = false, refreshed = false, operation = null } = {}) {
         let recovery = operation || (await local().beginRecovery(Date.now() + serverOffset));
-        notify('logout-pending');
+        const pendingEvent = await local().recoveryEvent(recovery.id);
+        if (!pendingEvent) return { success: false, logoutConfirmed: false, superseded: true };
+        notify(pendingEvent);
+        await cleanup();
         if (!recovery.snapshot) {
             let snapshot;
             try {
@@ -86,14 +102,16 @@ export function createSessionClient({
             options
         );
         if (!result?.success) throw new Error('session_recovery_unconfirmed');
-        await local().completeRecovery(recovery.id);
-        notify('logout-complete');
+        const completed = await local().completeRecovery(recovery.id);
+        if (!completed) return { success: false, logoutConfirmed: false, superseded: true };
+        notify(completed);
         // Expired names are immutable; a delayed cleanup cannot delete a newer SID.
-        await transport.post('/api/session/cleanup', {}, options).catch(() => {});
+        await cleanup().catch(() => {});
         return { success: true, logoutConfirmed: true };
     }
     return {
         protocol,
+        deliverEvent: (message, listener) => local().deliverEvent(message, listener),
         async login(password) {
             // Register before the first HTTP request. The synchronous cross-tab fence
             // also covers IndexedDB opening and protocol-discovery response delays.
@@ -114,7 +132,7 @@ export function createSessionClient({
             }
             if (registered.error) throw registered.error;
             const intent = registered.value;
-            await transport.post('/api/session/cleanup', {}, options);
+            await cleanup();
             assertFence(fence);
             if (!(await local().canStart(intent.id))) throw changed();
             let prepared;
@@ -144,9 +162,10 @@ export function createSessionClient({
                 options
             );
             assertFence(fence);
-            if (!confirmed.success || !(await local().acknowledge(intent.id, confirmed.id)))
-                throw changed();
-            notify('login-complete');
+            const completed =
+                confirmed.success && (await local().acknowledge(intent.id, confirmed.id));
+            if (!completed) throw changed();
+            notify(completed);
             return result;
         },
         async logout() {
@@ -179,7 +198,11 @@ export function onSessionChange(listener) {
     if (!channel && typeof BroadcastChannel !== 'undefined') {
         channel = new BroadcastChannel('misub-session-events-v1');
         channel.onmessage = (event) => {
-            for (const callback of listeners) callback(event.data);
+            sessionClient()
+                .deliverEvent(event.data, (type) => {
+                    for (const callback of listeners) callback(type);
+                })
+                .catch(() => {});
         };
     }
     return () => listeners.delete(listener);

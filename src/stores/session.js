@@ -166,6 +166,7 @@ export const useSessionStore = defineStore('session', () => {
         try {
             const modern = await sessionClient().logout();
             if (modern.protocol === 'd1-v1') {
+                if (modern.superseded) return false;
                 if (generation !== currentSessionGeneration()) return false;
                 logoutPending.value = false;
                 clearSession();
