@@ -44,7 +44,10 @@ describe('session store resilience', () => {
                 loginSecurity: { enabled: true, warning: { id: 42, failedAttempts: 10 } },
             },
         });
-        apiMocks.fetchInitialData.mockResolvedValue({ success: true, data: {} });
+        apiMocks.fetchInitialData.mockResolvedValue({
+            success: true,
+            data: { misubs: [], profiles: [], ruleTemplates: [], config: {} },
+        });
         apiMocks.fetchPublicConfig.mockResolvedValue({ success: true, data: {} });
         await store.login('fixture');
         expect(store.loginSecurity.warning.id).toBe(42);
@@ -87,6 +90,7 @@ describe('session store resilience', () => {
             config: { password: 'changed', isDefaultPassword: false },
             misubs: [],
             profiles: [],
+            ruleTemplates: [],
         };
 
         apiMocks.fetchInitialData.mockResolvedValue({ success: true, data });
@@ -106,7 +110,7 @@ describe('session store resilience', () => {
     it('preserves the last known public config after a later fetch failure', async () => {
         const { useSessionStore } = await import('../../src/stores/session.js');
         const store = useSessionStore();
-        const data = { config: {}, misubs: [], profiles: [] };
+        const data = { config: {}, misubs: [], profiles: [], ruleTemplates: [] };
         apiMocks.fetchInitialData.mockResolvedValue({ success: true, data });
         apiMocks.fetchPublicConfig.mockResolvedValueOnce({
             success: true,
@@ -126,7 +130,10 @@ describe('session store resilience', () => {
         const store = useSessionStore();
         store.sessionState = 'loggedIn';
         apiMocks.apiGet.mockRejectedValue(new Error('network down'));
-        apiMocks.fetchInitialData.mockResolvedValue({ success: true, data: {} });
+        apiMocks.fetchInitialData.mockResolvedValue({
+            success: true,
+            data: { misubs: [], profiles: [], ruleTemplates: [], config: {} },
+        });
 
         const errorSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
         try {
@@ -141,7 +148,10 @@ describe('session store resilience', () => {
         const { useSessionStore } = await import('../../src/stores/session.js');
         const store = useSessionStore();
         apiMocks.login.mockResolvedValue({ success: true, data: {} });
-        apiMocks.fetchInitialData.mockResolvedValue({ success: true, data: {} });
+        apiMocks.fetchInitialData.mockResolvedValue({
+            success: true,
+            data: { misubs: [], profiles: [], ruleTemplates: [], config: {} },
+        });
         apiMocks.fetchPublicConfig.mockResolvedValue({ success: true, data: {} });
 
         await store.login('password');
@@ -165,7 +175,12 @@ describe('session store resilience', () => {
         });
         apiMocks.fetchInitialData.mockResolvedValue({
             success: true,
-            data: { config: { isDefaultPassword: true }, misubs: [], profiles: [] },
+            data: {
+                config: { isDefaultPassword: true },
+                misubs: [],
+                profiles: [],
+                ruleTemplates: [],
+            },
         });
         apiMocks.fetchPublicConfig.mockResolvedValue({
             success: true,
