@@ -1,6 +1,6 @@
 # User-level detector installation
 
-For a first installation, use the [one-command guide](detector-one-command-install.md) with [MiSub Probe 0.2.0](https://github.com/58cdn/MiSub/releases/tag/probe-v0.2.0). This document covers advanced management after obtaining and verifying a local executable. Direct `--install` copies that executable and writes a private manifest; it does not download updates, pair, create credentials, contact MiSub or start a process. Direct `--pair` saves configuration, and `--start` starts an installed client. The default bootstrap explicitly performs these steps in sequence after browser approval. Local manifest hashes detect changed files; they do not authenticate the original executable's source.
+Distribution is currently paused: the site does not offer installation or online recovery commands for the old releases. Existing clients, configuration and server identities are preserved. The [one-command guide](detector-one-command-install.md) describes the flow available after a validated replacement release is enabled. This document covers advanced management of an existing verified local executable. Direct `--install` copies that executable and writes a private manifest; it does not download updates, pair, create credentials, contact MiSub or start a process. Direct `--pair` saves configuration, and `--start` starts an installed client. Local manifest hashes detect changed files; they do not authenticate the original executable's source.
 
 ## Commands
 

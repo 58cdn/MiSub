@@ -39,9 +39,9 @@ const reviewedFiles = {
 };
 
 describe('reviewed probe release catalog', () => {
-    it('activates only the reviewed 0.2.0 source and all seven published file identities', () => {
+    it('preserves the recorded 0.2.0 file identities while keeping distribution paused', () => {
         const verified = validateProbeReleaseCatalog(catalog);
-        expect(verified.distributionReady).toBe(true);
+        expect(verified.distributionReady).toBe(false);
         expect(verified.release).toMatchObject({
             version: '0.2.0',
             tag: 'probe-v0.2.0',
@@ -78,9 +78,9 @@ describe('reviewed probe release catalog', () => {
             { version: '0.1.0', tag: 'probe-v0.1.0', capabilities: [] },
         ]);
         const installation = probeInstallationCapabilities(catalog);
-        expect(installation.reason).toBe('available');
+        expect(installation.reason).toBe('distribution_not_ready');
         expect(installation.targets).toHaveLength(5);
-        expect(installation.targets.every(({ available }) => available)).toBe(true);
+        expect(installation.targets.every(({ available }) => !available)).toBe(true);
     });
     it('validates the production catalog contract and derives only its declared availability', () => {
         const verified = validateProbeReleaseCatalog(catalog);
