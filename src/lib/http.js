@@ -3,6 +3,8 @@
  * Centralizes JSON handling, credentials, and error normalization.
  */
 
+import { currentSessionGeneration } from './session-generation.js';
+
 export class APIError extends Error {
     constructor(message, status = 500, data = null) {
         super(message);
@@ -40,7 +42,8 @@ const parseJson = async (response) => {
 };
 
 export async function request(url, options = {}) {
-    const { headers, body, ...rest } = options;
+    const sessionGeneration = currentSessionGeneration();
+    const { headers, body, shouldHandleUnauthorized = () => true, ...rest } = options;
     const response = await fetch(url, {
         credentials: 'include',
         ...rest,
@@ -50,9 +53,9 @@ export async function request(url, options = {}) {
 
     const data = await parseJson(response);
     if (!response.ok) {
-        if (response.status === 401) {
+        if (response.status === 401 && sessionGeneration === currentSessionGeneration()) {
             try {
-                unauthorizedHandler?.({ url, data });
+                if (shouldHandleUnauthorized()) unauthorizedHandler?.({ url, data });
             } catch (error) {
                 console.warn('[HTTP] Unauthorized handler failed:', error);
             }

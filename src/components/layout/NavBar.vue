@@ -60,7 +60,7 @@
         class="app-nav-bar hidden md:block sticky top-0 z-50 w-full bg-white/90 dark:bg-slate-950/88 backdrop-blur-xl border-b border-gray-200/60 dark:border-white/10 transition-all duration-300"
     >
         <div
-            class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 md:h-[76px] flex items-center justify-between"
+            class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 min-h-16 md:min-h-[76px] py-2 flex flex-wrap items-center justify-between gap-y-2"
         >
             <div class="shrink-0 pr-5">
                 <BrandLogo to="/dashboard" text-size-class="text-lg" :icon-size="32" />
@@ -87,7 +87,7 @@
                 </router-link>
             </nav>
 
-            <div class="flex items-center pl-5 ml-3 gap-2">
+            <div class="flex shrink-0 items-center pl-5 ml-auto gap-2">
                 <NavActionGroup
                     :is-logged-in="isLoggedIn"
                     :show-explore="isPublicEnabled"

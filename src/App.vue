@@ -15,6 +15,8 @@
     import { useI18n } from './i18n/index.js';
     import { configureAuthGuard, translateRouteTitle } from './router/index.js';
     import { readSessionPreference } from './utils/session-preference.js';
+    import { useNotificationsStore } from './stores/notifications.js';
+    import NotificationCenter from './components/notifications/NotificationCenter.vue';
 
     // Lazy components
     const Login = defineAsyncComponent(() => import('./components/modals/Login.vue'));
@@ -42,6 +44,25 @@
     const { initTheme } = themeStore;
 
     const sessionStore = useSessionStore();
+    const notifications = useNotificationsStore();
+    const loginWarning = computed(() => {
+        const warning =
+            sessionStore.loginSecurity?.enabled === true && sessionStore.loginSecurity?.warning;
+        return warning &&
+            notifications.enabled !== false &&
+            notifications.error !== 'forbidden' &&
+            !notifications.readIds.includes(warning.id)
+            ? warning
+            : null;
+    });
+    watch(
+        () => sessionStore.sessionState,
+        (state) => {
+            notifications.reset();
+            if (state === 'loggedIn') void notifications.latest();
+        },
+        { immediate: true }
+    );
     const { sessionState } = storeToRefs(sessionStore);
     const { checkSession, login, logout } = sessionStore;
 
@@ -271,6 +292,7 @@
         class="min-h-screen flex flex-col text-gray-800 dark:text-gray-200 transition-colors duration-300 bg-gray-100 dark:bg-slate-950"
     >
         <!-- Navigation -->
+        <NotificationCenter v-if="isLoggedIn" />
         <NavBar v-if="showModernNavBar" :is-logged-in="true" @logout="logout" />
         <Header
             v-else-if="showLegacyHeader"
@@ -290,6 +312,29 @@
                 },
             ]"
         >
+            <div
+                v-if="isLoggedIn && loginWarning"
+                role="alert"
+                class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-950 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-100"
+            >
+                <div class="min-w-0">
+                    <p class="font-semibold text-sm">{{ t('notifications.warningTip') }}</p>
+                    <p class="mt-1 text-sm leading-6">
+                        {{
+                            t('notifications.failureSummary', {
+                                count: loginWarning.failedAttempts,
+                            })
+                        }}
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    class="min-h-11 px-3 rounded-lg border border-amber-300 dark:border-amber-700 text-sm font-medium hover:bg-amber-100 dark:hover:bg-amber-900/40 focus-visible:outline-2 focus-visible:outline-primary-500"
+                    @click="notifications.open()"
+                >
+                    {{ t('notifications.viewWarning') }}
+                </button>
+            </div>
             <div
                 v-if="sessionState === 'loading'"
                 class="flex flex-col items-center justify-center p-8 min-h-[60vh]"
@@ -386,7 +431,13 @@
                     @discard="handleDiscard"
                 />
 
-                <router-view v-if="layoutMode === 'modern'" v-slot="{ Component }">
+                <router-view
+                    v-if="
+                        layoutMode === 'modern' ||
+                        ['LoginSecurity', 'Settings'].includes(route.name)
+                    "
+                    v-slot="{ Component }"
+                >
                     <transition name="fade" mode="out-in">
                         <RouteErrorBoundary :reset-key="route.fullPath">
                             <component :is="Component" />
@@ -410,7 +461,12 @@
 
             <!-- LOGIN VIEW (Not logged in, not public) -->
             <template v-else>
-                <component :is="loginComponent" :login="login" />
+                <component
+                    :is="loginComponent"
+                    :login="login"
+                    :logout-pending="sessionStore.logoutPending"
+                    :retry-logout="logout"
+                />
             </template>
         </main>
 
@@ -469,7 +525,7 @@
     /* iOS Specific Padding for Fixed Header */
     @supports (-webkit-touch-callout: none) {
         .ios-header-padding {
-            padding-top: calc(env(safe-area-inset-top, 0px) + 80px) !important;
+            padding-top: calc(var(--misub-header-height, 80px) + 16px) !important;
         }
     }
 </style>

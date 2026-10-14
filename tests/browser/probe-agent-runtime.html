@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Detector runtime declaration fixture</title>
+    </head>
+    <body class="bg-gray-50 p-2 text-gray-900 md:p-6 dark:bg-gray-950 dark:text-gray-100">
+        <div id="app"></div>
+        <script type="module">
+            import { createApp, h } from 'vue';
+            import DetectorSettings from '/src/components/settings/sections/DetectorSettings.vue';
+            import { setLocale } from '/src/i18n/index.js';
+            import '/src/assets/main.css';
+            const params = new URLSearchParams(location.search);
+            const locale = params.get('locale') || 'en-US';
+            document.documentElement.lang = locale;
+            document.documentElement.classList.toggle('dark', params.get('theme') === 'dark');
+            localStorage.removeItem('misub:admin:detectors:view:v1');
+            setLocale(locale);
+            createApp({
+                render: () =>
+                    h('main', { class: 'mx-auto min-w-0 max-w-6xl' }, [h(DetectorSettings)]),
+            }).mount('#app');
+        </script>
+    </body>
+</html>

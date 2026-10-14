@@ -16,9 +16,13 @@ D1、Pages 请求和检测节点流量由自己的 Cloudflare/服务器账户承
 
 ## 发布门槛
 
-`Probe detector` 在 Linux amd64/arm64、macOS Intel/Apple Silicon 四个原生 runner 上执行带内核测试、禁止直接回退测试、单文件构建和 `--self-test`，并生成锁定 Mihomo 版本的源码与 vendor 依赖归档。
+`Probe source release` 在 Linux amd64/arm64、macOS Intel/Apple Silicon 与 Windows amd64 五个原生 runner 上从固定源码和工具链构建，执行内核回环、race、vet、能力及引导 fixture。当前 [MiSub Probe 0.2.0](https://github.com/58cdn/MiSub/releases/tag/probe-v0.2.0) 对应源码提交 `9ccee76c3cab149f34dca96c304310c9574c0d29`。原生测试与公开资产核验不等于真实用户设备或节点验收。
 
-push/PR 不发布二进制或源码制品。手动 main `workflow_dispatch` 保留默认关闭的 `publish` 输入，但当前分发材料验收门槛仍为关闭状态：即使选择发布也不会上传或发布。后续需独立审核对应源码、生成的 CA 数据及所有依赖 LICENSE/NOTICE，再通过 PR 打开这道门槛；四平台测试通过本身不足以解锁发布。既有同名 Release 不覆盖、不删除，新版本需显式更新版本与 tag。
+新版本产物由 `58cdn/MiSub` 的 main 显式手动 `workflow_dispatch` 且 `publish=true` 生成；默认 false。完整源码、许可映射、构建绑定及 GitHub 来源证明全部通过后，通过创建草稿返回的固定 Release ID 上传、核对并公开。PR、push 与 `publish=false` 不上传二进制制品，既有标签和资产不覆盖。历史 `Probe detector` 工作流的冻结保持有效。
+
+已有草稿按[恢复流程](detector-draft-recovery.md)操作：默认只读下载并核验完整字节、对应源码与原 run/attempt 签名证明；显式公开前重读原运行、标签、草稿和资产，确认身份未变后只公开同一 Release ID，随后核对实际公开状态。恢复不重新构建、上传或替换资产。原资产源码提交与恢复代码提交分别记录，原 tag 与 CLI 版本身份保持不变。
+
+发行或恢复不会自动修改站点 catalog 或创建检测身份；实际公开资产另行核验并通过目录 PR 后，才由普通 Pages 部署提供网页安装入口。只读核验成功或公开请求结果不确定时，不报告已发行。详见[源码发行说明](detector-source-release.md)。
 
 现有 `probe-v0.1.0` 已由此前 PR #14 于 2026-10-12 发布，含四个运行包、SHA256SUMS 和源码归档；它不含后续 #11 安全修复。现有生产资源和发布资产不会被本次修复修改或撤回。详见[分发材料检查](./detector-hardening.md)。
 
@@ -32,11 +36,13 @@ push/PR 不发布二进制或源码制品。手动 main `workflow_dispatch` 保�
 4. 测试节点使用保留文档地址 `198.51.100.1`。五项必须返回格式通过、四项网络检测明确阻止 unsafe_target；不访问用户节点、不访问流媒体目标、不产生测速下载。
 5. 验证重复提交幂等、两个地点结果独立且没有凭据，最后撤销临时身份并删除配置。测试记录保留正常审计周期，名称明确带 CI 标记。
 
-这验证的是**生产控制面 + 实际检测器通信 + 安全拒绝**。真正的代理链路由四平台 CI 的受控 CONNECT 代理验证；用户自己的节点延迟、下载速度和服务地区结果，仍需用户在其机器运行检测器后逐项确认。不能把保留地址安全测试说成真实节点全部测通或流媒体已解锁。
+这验证的是**生产控制面 + 实际检测器通信 + 安全拒绝**。检测器代理链路由五平台原生 CI 的受控回环代理验证；用户自己的节点延迟、下载速度和服务地区结果，仍需用户在其机器运行检测器后逐项确认。不能把保留地址安全测试说成真实节点全部测通或流媒体已解锁。
 
 成功时 Actions Summary 给出实际生产 URL、部署 URL 与 Git SHA。部署已成功但冒烟失败会明确让工作流失败，不悄悄回滚或修改业务数据。排查时只记录固定错误码，不能输出服务端登录响应、节点 URI、检测器 Token 或内核原始日志。
 
 ## 本地验证
+
+检测器领单能力持久化默认关闭，使用独立迁移文件和 `off → record → read` 阶段。生产建表、启用记录和启用读取需分别审批，普通部署只保留已存在的合法配置，不自动迁移或激活。操作及回滚门槛见 [领单声明与续租记录](probe-agent-runtime.md)。
 
 ```sh
 bash -n scripts/deploy-cloudflare-pages.sh

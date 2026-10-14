@@ -4,6 +4,8 @@ import { agentManagementQuery, agentActionConfirmation } from './probe-agent-man
 import { PAIRING_BODY_BYTES, pairingBody } from './probe-pairing.js';
 import { OBSERVATIONS_VERSION, OBSERVATION_SOURCES } from './probe-observations.js';
 import { PROBE_TYPES, PROBE_SERVICES, MAX_NODES, MAX_AGENTS, MAX_ATTEMPTS, MAX_JOB_BYTES, normalizeOptions, probeError, requireValue } from './probe-contract.js';
+import probeReleaseCatalog from '../../detector/release-catalog.json' with { type: 'json' };
+import { probeInstallationCapabilities } from '../../src/shared/probe-release.js';
 const PREFIX = '/api/probes/v1';
 const LIMIT = 1024 * 1024;
 export async function readProbeJson(request, limit = LIMIT) {
@@ -50,7 +52,7 @@ function managementPage(searchParams) {
     return { offset: read('offset', 0, 0, 100000), limit: read('limit', 20, 1, 50) };
 }
 /** Explicit dependencies make the HTTP/auth boundary testable without a Cloudflare runtime. */
-export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNodes, makeStore = env => new ProbeStore(env.MISUB_PROBE_DB) }) {
+export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNodes, makeStore = env => new ProbeStore(env.MISUB_PROBE_DB, Date.now, { runtimeMode: env.PROBE_AGENT_RUNTIME_MODE }) }) {
     async function resolveNodes(input, env) {
         if (input.scope === 'snapshot') return prepareNodes(input.nodes);
         requireValue(input.scope === 'selected' || input.scope === 'all', 'invalid_scope');
@@ -91,7 +93,7 @@ export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNod
                 if (path.length === 2 && path[1] === 'claim') return json({ success: true, data: await store.claim(agent, body) });
                 requireValue(path.length === 4 && path[1] === 'tasks' && /^[\w-]{1,128}$/.test(path[2]), 'not_found', 404);
                 if (path[3] === 'heartbeat') return json({ success: true, data: await store.heartbeat(agent, path[2], body.leaseToken) });
-                if (path[3] === 'result') return json({ success: true, data: await store.finish(agent, path[2], body.leaseToken, body.checks) });
+                if (path[3] === 'result') return json({ success: true, data: await store.finish(agent, path[2], body.leaseToken, body.checks, body.executionMetadata) });
                 throw probeError('not_found', 404);
             }
             requireValue(await authorizeAdmin(request, env), 'unauthorized', 401);
@@ -120,7 +122,7 @@ export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNod
                 }
                 throw probeError('not_found', 404);
             }
-            if (path.length === 1 && path[0] === 'capabilities' && method === 'GET') return json({ success: true, data: { version: 1, types: PROBE_TYPES, services: PROBE_SERVICES, observationsVersion: OBSERVATIONS_VERSION, sources: OBSERVATION_SOURCES, storageReady: Boolean(env.MISUB_PROBE_DB), maxNodes: MAX_NODES, maxAgents: MAX_AGENTS, maxAttempts: MAX_ATTEMPTS, maxJobDownloadBytes: MAX_JOB_BYTES } });
+            if (path.length === 1 && path[0] === 'capabilities' && method === 'GET') return json({ success: true, data: { version: 1, types: PROBE_TYPES, services: PROBE_SERVICES, observationsVersion: OBSERVATIONS_VERSION, sources: OBSERVATION_SOURCES, storageReady: Boolean(env.MISUB_PROBE_DB), installation: probeInstallationCapabilities(probeReleaseCatalog), maxNodes: MAX_NODES, maxAgents: MAX_AGENTS, maxAttempts: MAX_ATTEMPTS, maxJobDownloadBytes: MAX_JOB_BYTES } });
             if (path.length === 1 && path[0] === 'format' && method === 'POST') {
                 const nodes = await resolveNodes(await readProbeJson(request), env);
                 return json({ success: true, data: { checkedAt: Date.now(), nodes: nodes.map(n=>({id:n.id,name:n.name,checks:{format:n.format}})) } });

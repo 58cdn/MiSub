@@ -1,10 +1,23 @@
 import { ref, computed, onUnmounted, getCurrentInstance } from 'vue';
+import { normalizeGroupsPageSize } from '../../shared/pagination.js';
+import { useDataStore } from '../stores/useDataStore.js';
 import { useToastStore } from '../stores/toast.js';
 import { DEFAULT_SETTINGS } from '../constants/default-settings.js';
 import { fetchSettings, saveSettings, resetSettings } from '../lib/api.js';
 import { useBackupLogic } from './useBackupLogic.js';
 import { t, setLocale } from '../i18n/index.js';
 import { confirmAction } from './useConfirm.js';
+import {
+    acknowledgedDomainVersion,
+    cloneDomainData,
+    domainMutationMetadata,
+    isDomainRecord,
+    isStrictSettingsData,
+    replayDomainEdits,
+    sameDomainData,
+    validDomainAcknowledgement,
+    validDomainResponse,
+} from '../shared/domain-mutation.js';
 
 function normalizeExternalApiConfig(value) {
     const defaults = DEFAULT_SETTINGS.externalApi;
@@ -26,7 +39,8 @@ function normalizeExternalApiConfig(value) {
 }
 
 function normalizeSettingsObject(source = {}) {
-    const merged = { ...DEFAULT_SETTINGS, ...source };
+    const merged = cloneDomainData({ ...DEFAULT_SETTINGS, ...source });
+    merged.groupsPageSize = normalizeGroupsPageSize(merged.groupsPageSize);
     merged.externalApi = normalizeExternalApiConfig(source.externalApi ?? merged.externalApi);
     return merged;
 }
@@ -48,6 +62,11 @@ export function useSettingsLogic() {
     const showMigrationModal = ref(false);
     const restartCountdown = ref(null);
     let reloadTimer = null;
+    let settingsBaseline = null;
+    let lifecycle = 0;
+    let loadSequence = 0;
+    let saveRequest = null;
+    let disposed = false;
 
     const clearReloadTimer = () => {
         if (reloadTimer !== null) {
@@ -57,7 +76,11 @@ export function useSettingsLogic() {
     };
 
     if (getCurrentInstance()) {
-        onUnmounted(clearReloadTimer);
+        onUnmounted(() => {
+            disposed = true;
+            lifecycle += 1;
+            clearReloadTimer();
+        });
     }
 
     // 嵌套配置对象
@@ -66,6 +89,19 @@ export function useSettingsLogic() {
         pageType: 'default',
         redirectUrl: '',
     });
+
+    const editorSnapshot = () =>
+        cloneDomainData({ settings: settings.value, disguise: disguiseConfig.value });
+    const currentSave = (request) =>
+        !disposed && saveRequest === request && request.lifecycle === lifecycle;
+    const applySettings = (incoming) => {
+        settings.value = normalizeSettingsObject(incoming);
+        disguiseConfig.value = {
+            enabled: settings.value.disguise?.enabled ?? false,
+            pageType: settings.value.disguise?.pageType ?? 'default',
+            redirectUrl: settings.value.disguise?.redirectUrl ?? '',
+        };
+    };
 
     // ========== 计算属性 ==========
     const hasWhitespace = computed(() => {
@@ -91,20 +127,38 @@ export function useSettingsLogic() {
      * 从 API 加载设置
      */
     const loadSettings = async () => {
+        const sequence = ++loadSequence;
+        const requestLifecycle = lifecycle;
+        const dataStore = useDataStore();
+        const configRead = dataStore.settingsReadToken();
+        const editorAtStart = editorSnapshot();
+        const currentLoad = () =>
+            !disposed &&
+            sequence === loadSequence &&
+            requestLifecycle === lifecycle &&
+            dataStore.isSettingsReadCurrent(configRead);
         isLoading.value = true;
         try {
             const result = await fetchSettings();
-            if (result.success) {
-                const incoming = result.data && typeof result.data === 'object' ? result.data : {};
-                settings.value = normalizeSettingsObject(incoming);
-
-                if (settings.value.disguise) {
-                    disguiseConfig.value = {
-                        enabled: settings.value.disguise.enabled ?? false,
-                        pageType: settings.value.disguise.pageType ?? 'default',
-                        redirectUrl: settings.value.disguise.redirectUrl ?? '',
-                    };
-                }
+            if (!currentLoad() || !sameDomainData(editorAtStart, editorSnapshot())) return false;
+            if (
+                validDomainResponse(
+                    result,
+                    result?.subscriptionProtocol === 'd1-v1'
+                        ? isStrictSettingsData
+                        : isDomainRecord,
+                    {
+                        strict: settingsBaseline?.subscriptionProtocol === 'd1-v1',
+                    }
+                )
+            ) {
+                settingsBaseline = cloneDomainData(result);
+                applySettings(result.data);
+                lifecycle += 1;
+                saveRequest = null;
+                isSaving.value = false;
+                clearReloadTimer();
+                restartCountdown.value = null;
 
                 if (!settings.value.storageType) {
                     settings.value.storageType = 'kv';
@@ -114,15 +168,17 @@ export function useSettingsLogic() {
                 if (settings.value.defaultLocale) {
                     setLocale(settings.value.defaultLocale);
                 }
+                return true;
             } else {
-                showToast(t('settings.loadFailedWithMessage', { message: result.error }), 'error');
-                settings.value = normalizeSettingsObject(DEFAULT_SETTINGS);
+                showToast(t('settings.loadFailed'), 'error');
+                return false;
             }
         } catch (error) {
+            if (!currentLoad()) return false;
             showToast(t('settings.loadFailed'), 'error');
-            settings.value = normalizeSettingsObject(DEFAULT_SETTINGS);
+            return false;
         } finally {
-            isLoading.value = false;
+            if (sequence === loadSequence && !disposed) isLoading.value = false;
         }
     };
 
@@ -130,6 +186,11 @@ export function useSettingsLogic() {
      * 保存设置到 API
      */
     const handleSave = async () => {
+        if (isSaving.value || disposed) return false;
+        if (!settingsBaseline) {
+            showToast(t('settings.loadFailed'), 'error');
+            return false;
+        }
         if (hasWhitespace.value) {
             showToast(t('settings.noWhitespace'), 'error');
             return false;
@@ -139,16 +200,27 @@ export function useSettingsLogic() {
             return false;
         }
 
+        const request = { lifecycle };
+        saveRequest = request;
+        loadSequence += 1;
+        isLoading.value = false;
         isSaving.value = true;
+        clearReloadTimer();
+        restartCountdown.value = null;
+        const dataStore = useDataStore();
+        let domainRequest;
         try {
+            domainRequest = dataStore.beginSettingsSave();
             if (!settings.value.storageType) settings.value.storageType = 'kv';
             settings.value.externalApi = normalizeExternalApiConfig(settings.value.externalApi);
 
-            const settingsToSave = {
+            const settingsToSave = cloneDomainData({
                 ...settings.value,
+                groupsPageSize: normalizeGroupsPageSize(settings.value.groupsPageSize),
                 externalApi: normalizeExternalApiConfig(settings.value.externalApi),
                 disguise: disguiseConfig.value,
-            };
+            });
+            const editorAtStart = editorSnapshot();
 
             settingsToSave.ruleLevel =
                 settingsToSave.ruleLevel || settingsToSave.clashRuleLevel || 'std';
@@ -158,12 +230,48 @@ export function useSettingsLogic() {
             delete settingsToSave.nodeTransform;
             delete settingsToSave.clashRuleLevel;
 
-            const result = await saveSettings(settingsToSave);
-            if (result.success) {
+            const metadata = domainMutationMetadata(settingsBaseline);
+            const result = await saveSettings(settingsToSave, metadata);
+            if (!currentSave(request) || !dataStore.isSettingsSaveCurrent(domainRequest))
+                return false;
+            if (validDomainAcknowledgement(result, metadata, isStrictSettingsData)) {
+                loadSequence += 1;
+                isLoading.value = false;
+                const edited = !sameDomainData(editorAtStart, editorSnapshot());
+                const confirmed = metadata.baseVersion
+                    ? cloneDomainData(result.data)
+                    : settingsToSave;
+                const current = editorSnapshot();
+                applySettings(confirmed);
+                const rebased = replayDomainEdits(editorAtStart, current, editorSnapshot());
+                settings.value = rebased.settings;
+                disguiseConfig.value = rebased.disguise;
+                settingsBaseline = metadata.baseVersion
+                    ? {
+                          ...cloneDomainData(result),
+                          version: acknowledgedDomainVersion(result, edited),
+                      }
+                    : { success: true, data: cloneDomainData(confirmed) };
+                dataStore.applySavedSettings(
+                    domainRequest,
+                    confirmed,
+                    metadata.baseVersion ? result : null
+                );
+                if (edited) return true;
                 showToast(t('settings.savedReloading'), 'success');
                 clearReloadTimer();
+                const confirmedEditor = editorSnapshot();
                 restartCountdown.value = 3;
                 reloadTimer = setInterval(() => {
+                    if (
+                        disposed ||
+                        lifecycle !== request.lifecycle ||
+                        !sameDomainData(confirmedEditor, editorSnapshot())
+                    ) {
+                        clearReloadTimer();
+                        restartCountdown.value = null;
+                        return;
+                    }
                     restartCountdown.value -= 1;
                     if (restartCountdown.value <= 0) {
                         clearReloadTimer();
@@ -172,13 +280,18 @@ export function useSettingsLogic() {
                 }, 1000);
                 return true;
             } else {
-                throw new Error(result.error || t('settings.saveFailed'));
+                throw new Error(result?.error || t('settings.saveFailed'));
             }
         } catch (error) {
+            if (!currentSave(request)) return false;
             showToast(error.message, 'error');
             return false;
         } finally {
-            isSaving.value = false;
+            dataStore.finishSettingsSave(domainRequest);
+            if (currentSave(request)) {
+                isSaving.value = false;
+                saveRequest = null;
+            }
         }
     };
 
@@ -195,11 +308,17 @@ export function useSettingsLogic() {
      * 处理恢复出厂设置
      */
     const handleReset = async () => {
+        if (!settingsBaseline || disposed || isSaving.value) {
+            showToast(t('settings.loadFailed'), 'error');
+            return;
+        }
+        const metadata = domainMutationMetadata(settingsBaseline);
+        const requestLifecycle = lifecycle;
         const firstConfirmed = await confirmAction({
             message: t('settings.resetConfirm'),
             variant: 'danger',
         });
-        if (!firstConfirmed) {
+        if (!firstConfirmed || disposed || requestLifecycle !== lifecycle) {
             return;
         }
 
@@ -207,23 +326,52 @@ export function useSettingsLogic() {
             message: t('settings.resetConfirmAgain'),
             variant: 'danger',
         });
-        if (!secondConfirmed) {
+        if (!secondConfirmed || disposed || requestLifecycle !== lifecycle || isSaving.value) {
             return;
         }
 
+        const request = { lifecycle };
+        saveRequest = request;
+        loadSequence += 1;
         isLoading.value = true;
+        isSaving.value = true;
+        const dataStore = useDataStore();
+        let domainRequest;
         try {
-            const result = await resetSettings();
-            if (result.success) {
+            domainRequest = dataStore.beginSettingsSave();
+            const result = await resetSettings(metadata);
+            if (!currentSave(request) || !dataStore.isSettingsSaveCurrent(domainRequest))
+                return false;
+            if (validDomainAcknowledgement(result, metadata, isStrictSettingsData)) {
+                dataStore.applySavedSettings(
+                    domainRequest,
+                    result.data || DEFAULT_SETTINGS,
+                    metadata.baseVersion ? result : null
+                );
+                loadSequence += 1;
                 showToast(t('settings.resetSuccess'), 'success');
-                setTimeout(() => window.location.reload(), 1500);
+                const editorAtAck = editorSnapshot();
+                setTimeout(() => {
+                    if (
+                        !disposed &&
+                        lifecycle === requestLifecycle &&
+                        sameDomainData(editorAtAck, editorSnapshot())
+                    )
+                        window.location.reload();
+                }, 1500);
             } else {
                 showToast(t('settings.resetFailedWithMessage', { message: result.error }), 'error');
             }
         } catch (error) {
+            if (!currentSave(request)) return false;
             showToast(t('settings.resetRequestFailed'), 'error');
         } finally {
-            isLoading.value = false;
+            dataStore.finishSettingsSave(domainRequest);
+            if (currentSave(request)) {
+                isLoading.value = false;
+                isSaving.value = false;
+                saveRequest = null;
+            }
         }
     };
 

@@ -39,7 +39,11 @@ func (a *API) post(ctx context.Context, path string, input any, output any) erro
 	}
 	req.Header.Set("Authorization", "Bearer "+a.config.Token)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "MiSub-Probe/"+version)
+	buildVersion := version
+	if !executionBuildVersionValid(buildVersion) {
+		buildVersion = "unknown"
+	}
+	req.Header.Set("User-Agent", "MiSub-Probe/"+buildVersion)
 	resp, err := a.client.Do(req)
 	if err != nil {
 		return errors.New("api_unreachable")
@@ -76,7 +80,11 @@ func (a *API) post(ctx context.Context, path string, input any, output any) erro
 }
 func (a *API) claim(ctx context.Context) (*Task, error) {
 	var task *Task
-	err := a.post(ctx, "claim", map[string]any{"version": version, "platform": runtime.GOOS + "-" + runtime.GOARCH, "observationsVersion": observationsVersion}, &task)
+	err := a.post(ctx, "claim", map[string]any{
+		"version": version, "platform": runtime.GOOS + "-" + runtime.GOARCH,
+		"observationsVersion": observationsVersion,
+		"capabilities":        map[string]int{"schemaVersion": 1, "observationsVersion": observationsVersion},
+	}, &task)
 	if err == nil && task != nil {
 		err = task.validate()
 	}
@@ -93,6 +101,10 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 func (a *API) process(parent context.Context, t Task, binary string) error {
+	return a.processWithExecutor(parent, t, binary, executeTask)
+}
+func (a *API) processWithExecutor(parent context.Context, t Task, binary string, execute func(context.Context, Task, string) map[string]Check) error {
+	metadata := currentExecutionMetadata()
 	lifecycle, cancel := context.WithTimeout(parent, 4*time.Minute)
 	defer cancel()
 	heartbeatDone := make(chan struct{})
@@ -115,12 +127,15 @@ func (a *API) process(parent context.Context, t Task, binary string) error {
 	}()
 	defer func() { cancel(); <-heartbeatDone }()
 	execution, stop := context.WithTimeout(lifecycle, 3*time.Minute)
-	checks := executeTask(execution, t, binary)
+	checks := execute(execution, t, binary)
 	stop()
 	if lifecycle.Err() != nil {
 		return errors.New("task_cancelled_or_lease_lost")
 	}
 	payload := map[string]any{"leaseToken": t.LeaseToken, "checks": checks}
+	if metadata != nil {
+		payload["executionMetadata"] = metadata
+	}
 	// Retry delivery of the same result, never repeat the speed test after a lost ACK.
 	for attempt := 0; attempt < 3; attempt++ {
 		err := a.post(lifecycle, "tasks/"+t.ID+"/result", payload, nil)

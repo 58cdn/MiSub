@@ -1,5 +1,6 @@
 <script setup>
-    import { ref } from 'vue';
+    import { ref, computed, onBeforeUnmount } from 'vue';
+    import { loginRetryDeadline } from '../../lib/admin-notifications.js';
     import { useI18n } from '../../i18n/index.js';
     import Button from '../ui/Button.vue';
 
@@ -10,15 +11,38 @@
     const isLoading = ref(false);
     const error = ref('');
     const showPassword = ref(false);
+    const lockedUntil = ref(0);
+    const now = ref(Date.now());
+    const retrySeconds = computed(() =>
+        Math.max(0, Math.ceil((lockedUntil.value - now.value) / 1000))
+    );
+    let retryTimer;
+    onBeforeUnmount(() => clearInterval(retryTimer));
     // 伪装开启时 /logo.png 对未鉴权请求会被服务端有意 404（指纹防护），
     // 这里降级为内联图标，避免登录页出现「图片损坏」占位符。
     const logoFailed = ref(false);
 
     const props = defineProps({
         login: Function,
+        logoutPending: Boolean,
+        retryLogout: Function,
     });
 
+    const retryPendingLogout = async () => {
+        if (isLoading.value || !props.retryLogout) return;
+        isLoading.value = true;
+        try {
+            if (!(await props.retryLogout())) error.value = t('session.unconfirmed');
+            else error.value = '';
+        } catch {
+            error.value = t('session.unconfirmed');
+        } finally {
+            isLoading.value = false;
+        }
+    };
+
     const submitLogin = async () => {
+        if (isLoading.value || retrySeconds.value > 0) return;
         if (!password.value) {
             error.value = t('login.passwordRequired');
             return;
@@ -28,7 +52,21 @@
         try {
             await props.login(password.value);
         } catch (err) {
-            error.value = err.message || t('login.unknownError');
+            if (err.status === 429 && err.data?.code === 'login_locked') {
+                now.value = Date.now();
+                lockedUntil.value = loginRetryDeadline(err.data, now.value);
+                clearInterval(retryTimer);
+                retryTimer = setInterval(() => {
+                    now.value = Date.now();
+                    if (now.value >= lockedUntil.value) clearInterval(retryTimer);
+                }, 1000);
+                error.value = retrySeconds.value ? '' : err.message || t('login.unknownError');
+            } else {
+                error.value =
+                    err.status === 503
+                        ? t('notifications.serviceError')
+                        : err.message || t('login.unknownError');
+            }
         } finally {
             isLoading.value = false;
         }
@@ -87,6 +125,21 @@
             </div>
 
             <form @submit.prevent="submitLogin" class="space-y-8 relative z-10 w-full mb-4">
+                <div
+                    v-if="logoutPending"
+                    role="alert"
+                    class="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100"
+                >
+                    <p>{{ t('session.unconfirmed') }}</p>
+                    <button
+                        type="button"
+                        :disabled="isLoading"
+                        class="mt-2 font-semibold underline disabled:opacity-50"
+                        @click="retryPendingLogout"
+                    >
+                        {{ t('session.retry') }}
+                    </button>
+                </div>
                 <div class="relative w-full group" :class="{ 'animate-shake': error }">
                     <div
                         class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none transition-colors"
@@ -129,7 +182,11 @@
                         :type="showPassword ? 'text' : 'password'"
                         :placeholder="t('login.passwordPlaceholder')"
                         autocomplete="current-password"
-                        :disabled="isLoading"
+                        :disabled="isLoading || retrySeconds > 0"
+                        :aria-invalid="Boolean(error)"
+                        :aria-describedby="
+                            error ? 'login-error' : retrySeconds > 0 ? 'login-locked' : undefined
+                        "
                         class="w-full bg-transparent border misub-radius-lg py-3.5 pl-11 pr-12 outline-none transition-all duration-300 disabled:opacity-50"
                         :class="[
                             error
@@ -177,20 +234,31 @@
                             />
                         </svg>
                     </button>
-                    <transition name="fade">
-                        <p
-                            v-if="error"
-                            class="absolute top-full mt-2 left-0 right-0 text-center text-xs text-red-500 font-bold tracking-wide flex items-center justify-center gap-1"
-                        >
-                            {{ error }}
-                        </p>
-                    </transition>
+                </div>
+
+                <p
+                    v-if="error"
+                    id="login-error"
+                    role="alert"
+                    class="text-sm leading-6 text-red-600 dark:text-red-400"
+                >
+                    {{ error }}
+                </p>
+                <div
+                    v-if="retrySeconds > 0"
+                    id="login-locked"
+                    role="status"
+                    class="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-700/60 text-sm leading-6 text-amber-950 dark:text-amber-100"
+                >
+                    <p>{{ t('notifications.locked', { seconds: retrySeconds }) }}</p>
+                    <p class="mt-1">{{ t('notifications.lockedHint') }}</p>
                 </div>
 
                 <Button
                     type="submit"
                     class="w-full relative overflow-hidden"
                     :loading="isLoading"
+                    :disabled="retrySeconds > 0"
                     variant="primary"
                     size="lg"
                 >
@@ -339,6 +407,10 @@
     }
 
     @media (prefers-reduced-motion: reduce) {
+        .animate-fade-in-up {
+            opacity: 1 !important;
+            transform: none !important;
+        }
         .animate-blob,
         .animate-float-slow,
         .animate-pulse-slow,

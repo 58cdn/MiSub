@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPinia, setActivePinia } from 'pinia';
+import { useDataStore } from '../../src/stores/useDataStore.js';
+import { useSubscriptions } from '../../src/composables/useSubscriptions.js';
 
 const { fetchSettings, saveSettings, resetSettings, showToast } = vi.hoisted(() => ({
     fetchSettings: vi.fn(),
@@ -28,6 +31,7 @@ import { useSettingsLogic } from '../../src/composables/useSettingsLogic.js';
 
 describe('useSettingsLogic externalApi normalization', () => {
     beforeEach(() => {
+        setActivePinia(createPinia());
         fetchSettings.mockReset();
         saveSettings.mockReset();
         resetSettings.mockReset();
@@ -52,16 +56,23 @@ describe('useSettingsLogic externalApi normalization', () => {
 
     it('shows a visible reload countdown and reloads automatically after saving', async () => {
         vi.useFakeTimers();
+        fetchSettings.mockResolvedValue({ success: true, data: { storageType: 'kv' } });
         saveSettings.mockResolvedValue({ success: true });
         const reload = vi.fn();
         const originalReload = window.location.reload;
         window.location.reload = reload;
 
         try {
-            const { settings, handleSave, restartCountdown } = useSettingsLogic();
+            const { settings, loadSettings, handleSave, restartCountdown } = useSettingsLogic();
+            await loadSettings();
             settings.value.storageType = 'kv';
+            settings.value.groupsPageSize = 50;
 
             expect(await handleSave()).toBe(true);
+            expect(useDataStore().settings.groupsPageSize).toBe(50);
+            expect(
+                useSubscriptions(vi.fn(), { configurablePagination: true }).subsItemsPerPage.value
+            ).toBe(50);
             expect(restartCountdown.value).toBe(3);
             await vi.advanceTimersByTimeAsync(1000);
             expect(restartCountdown.value).toBe(2);
@@ -75,12 +86,14 @@ describe('useSettingsLogic externalApi normalization', () => {
     });
 
     it('normalizes blank token names before saving', async () => {
+        fetchSettings.mockResolvedValue({ success: true, data: { storageType: 'kv' } });
         saveSettings.mockResolvedValue({ success: true });
         const originalReload = window.location.reload;
         window.location.reload = vi.fn();
 
         try {
-            const { settings, handleSave } = useSettingsLogic();
+            const { settings, loadSettings, handleSave } = useSettingsLogic();
+            await loadSettings();
             settings.value.storageType = 'kv';
             settings.value.externalApi = {
                 enabled: true,

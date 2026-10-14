@@ -14,7 +14,7 @@ const d1Id = '11111111-2222-4333-8444-555555555555';
 const sha = 'b'.repeat(40);
 const project = (production = {}, status = 200) => ({
     suffix: '/pages/projects/misub', status,
-    body: { success: status === 200, result: { deployment_configs: { production } } },
+    body: { success: status === 200, result: { production_branch: 'main', deployment_configs: { production } } },
 });
 const namespaces = (result) => ({
     suffix: '/storage/kv/namespaces?per_page=1000', body: { success: true, result },
@@ -107,6 +107,27 @@ function expectDeployed(result) {
     assert.ok(!result.output.includes('https://misub.pages.dev'));
 }
 
+test('preserves an approved independent security binding without creating or migrating it', (t) => {
+    const securityId = '22222222-2222-4333-8444-555555555555';
+    const result = runScript(t, [project({
+        kv_namespaces: { MISUB_KV: { namespace_id: kvId } },
+        d1_databases: { MISUB_DB: { id: d1Id }, MISUB_SECURITY_DB: { id: securityId } },
+    })]);
+    expectDeployed(result);
+    assert.ok(result.config.includes('binding = "MISUB_SECURITY_DB"'));
+    assert.ok(result.config.includes(`database_id = "${securityId}"`));
+    assert.equal(result.calls.length, 2);
+});
+
+test('refuses a security binding pointing at business storage', (t) => {
+    const result = runScript(t, [project({
+        kv_namespaces: { MISUB_KV: { namespace_id: kvId } },
+        d1_databases: { MISUB_DB: { id: d1Id }, MISUB_SECURITY_DB: { id: d1Id } },
+    })]);
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(result.calls, []);
+});
+
 test('retry reuses the project and KV created before the failed deploy', (t) => {
     const result = runScript(t, [
         project({ env_vars: { ADMIN_PASSWORD: { type: 'secret_text' } } }),
@@ -159,4 +180,297 @@ test('authorization errors do not trigger project creation', (t) => {
     assert.notEqual(result.status, 0);
     assert.deepEqual(result.calls, []);
     assert.match(result.output, /HTTP 403/);
+});
+
+const automatic = { GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/main' };
+const existingProduction = () => ({
+    kv_namespaces: { MISUB_KV: { namespace_id: kvId } },
+    env_vars: { ADMIN_PASSWORD: { type: 'secret_text' } },
+});
+
+test('automatic release preserves an approved session binding and its exact mode', (t) => {
+    const sessionId = 'cccccccc-2222-4333-8444-555555555555';
+    for (const enabled of [false, true]) {
+        const production = existingProduction();
+        production.d1_databases = { MISUB_SESSION_DB: { id: sessionId } };
+        if (enabled) production.env_vars.SESSION_AUTH_MODE = { type: 'plain_text', value: 'd1-v1' };
+        const result = runScript(t, [project(production)], automatic);
+        expectDeployed(result);
+        assert.equal(result.calls.length, 1);
+        assert.ok(result.config.includes(`database_id = "${sessionId}"`));
+        assert.equal(result.config.includes('SESSION_AUTH_MODE = "d1-v1"'), enabled);
+        assert.equal((result.config.match(/^\[vars\]$/gm) || []).length, enabled ? 1 : 0);
+        assert.ok(!result.config.includes('PROBE_AGENT_RUNTIME_MODE'));
+    }
+});
+
+test('CI environment cannot provision or enable session authority', (t) => {
+    const result = runScript(t, [project(existingProduction())], {
+        ...automatic, SESSION_AUTH_MODE: 'd1-v1',
+        CLOUDFLARE_SESSION_D1_DATABASE_ID: 'cccccccc-2222-4333-8444-555555555555',
+    });
+    expectDeployed(result);
+    assert.equal(result.calls.length, 1);
+    assert.ok(!result.config.includes('SESSION_AUTH_MODE'));
+    assert.ok(!result.config.includes('MISUB_SESSION_DB'));
+});
+
+test('preserves each approved probe runtime mode without changing resources or credentials', (t) => {
+    const probeId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    for (const mode of ['off', 'record', 'read']) {
+        const production = existingProduction();
+        production.d1_databases = { MISUB_PROBE_DB: { id: probeId } };
+        production.env_vars.PROBE_AGENT_RUNTIME_MODE = { type: 'plain_text', value: mode };
+        const result = runScript(t, [project(production)], {
+            ...automatic, PROBE_AGENT_RUNTIME_MODE: mode === 'read' ? 'off' : 'read',
+        });
+        expectDeployed(result);
+        assert.equal(result.calls.length, 1);
+        assert.ok(result.config.includes(`database_id = "${probeId}"`));
+        assert.ok(result.config.includes(`PROBE_AGENT_RUNTIME_MODE = "${mode}"`));
+        assert.equal((result.config.match(/^\[vars\]$/gm) || []).length, 1);
+        assert.ok(!result.config.includes('SESSION_AUTH_MODE'));
+    }
+});
+
+test('an approved off probe runtime mode needs no database binding', (t) => {
+    const production = existingProduction();
+    production.env_vars.PROBE_AGENT_RUNTIME_MODE = { type: 'plain_text', value: 'off' };
+    const result = runScript(t, [project(production)], automatic);
+    expectDeployed(result);
+    assert.equal(result.calls.length, 1);
+    assert.ok(result.config.includes('PROBE_AGENT_RUNTIME_MODE = "off"'));
+    assert.ok(!result.config.includes('MISUB_PROBE_DB'));
+});
+
+test('CI and manual environment inputs cannot introduce a probe runtime mode', (t) => {
+    for (const trigger of [automatic, { GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch' }]) {
+        for (const mode of ['off', 'record', 'read']) {
+            const result = runScript(t, [project(existingProduction())], {
+                ...trigger, PROBE_AGENT_RUNTIME_MODE: mode,
+            });
+            expectDeployed(result);
+            assert.equal(result.calls.length, trigger === automatic ? 1 : 2);
+            assert.ok(!result.config.includes('PROBE_AGENT_RUNTIME_MODE'));
+            assert.ok(!result.config.includes('MISUB_PROBE_DB'));
+            assert.ok(!result.config.includes('[vars]'));
+        }
+    }
+});
+
+test('preserves session and probe modes in one variables table', (t) => {
+    const production = existingProduction();
+    production.env_vars.SESSION_AUTH_MODE = { type: 'plain_text', value: 'd1-v1' };
+    production.env_vars.PROBE_AGENT_RUNTIME_MODE = { type: 'plain_text', value: 'read' };
+    production.d1_databases = {
+        MISUB_SESSION_DB: { id: 'cccccccc-2222-4333-8444-555555555555' },
+        MISUB_PROBE_DB: { id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' },
+    };
+    const result = runScript(t, [project(production)], automatic);
+    expectDeployed(result);
+    assert.equal(result.calls.length, 1);
+    assert.equal((result.config.match(/^\[vars\]$/gm) || []).length, 1);
+    assert.match(result.config, /\[vars\]\nSESSION_AUTH_MODE = "d1-v1"\nPROBE_AGENT_RUNTIME_MODE = "read"\n/);
+});
+
+test('refuses invalid probe runtime values and types before any writes', (t) => {
+    for (const mode of [
+        { type: 'secret_text', value: 'read' },
+        { type: 'plain_text' },
+        { type: 'plain_text', value: null },
+        { type: 'plain_text', value: false },
+        { type: 'plain_text', value: 0 },
+        { type: 'plain_text', value: ['off'] },
+        { type: 'plain_text', value: {} },
+        ...['', 'READ', 'legacy', ' read', 'record ', 'off\n', 'read\n[bad]'].map(value => ({ type: 'plain_text', value })),
+    ]) {
+        const production = existingProduction();
+        production.d1_databases = { MISUB_PROBE_DB: { id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' } };
+        production.env_vars.PROBE_AGENT_RUNTIME_MODE = mode;
+        const result = runScript(t, [project(production)], automatic);
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.deepEqual(result.remaining, []);
+        assert.equal(result.config, '');
+        assert.match(result.output, /Existing probe runtime mode must be plain_text/);
+    }
+});
+
+test('record and read require an existing probe database, not a provisioning input or another binding', (t) => {
+    for (const mode of ['record', 'read']) {
+        for (const d1_databases of [undefined, { MISUB_DB: { id: d1Id } }]) {
+            const production = existingProduction();
+            production.d1_databases = d1_databases;
+            production.env_vars.PROBE_AGENT_RUNTIME_MODE = { type: 'plain_text', value: mode };
+            const result = runScript(t, [project(production)], {
+                ...automatic, PROVISION_NODE_PROBES: 'true',
+                CLOUDFLARE_PROBE_D1_DATABASE_ID: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+            });
+            assert.notEqual(result.status, 0);
+            assert.deepEqual(result.calls, []);
+            assert.deepEqual(result.remaining, []);
+            assert.equal(result.config, '');
+            assert.match(result.output, /record\/read require an existing MISUB_PROBE_DB binding/);
+        }
+    }
+});
+
+test('a preserved probe runtime mode does not allow unknown production settings', (t) => {
+    const production = existingProduction();
+    production.env_vars.PROBE_AGENT_RUNTIME_MODE = { type: 'plain_text', value: 'off' };
+    production.env_vars.EXTRA = { type: 'plain_text', value: 'unapproved' };
+    const result = runScript(t, [project(production)], automatic);
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(result.calls, []);
+    assert.deepEqual(result.remaining, []);
+    assert.equal(result.config, '');
+    assert.match(result.output, /additional production settings/);
+});
+
+test('refuses invalid session modes or a mode with no existing database', (t) => {
+    for (const mode of [
+        { type: 'secret_text', value: 'd1-v1' },
+        { type: 'plain_text', value: '' },
+        { type: 'plain_text', value: 'legacy' },
+        { type: 'plain_text', value: 'd1-v1\n[bad]' },
+        { type: 'plain_text', value: 'd1-v1' },
+    ]) {
+        const production = existingProduction();
+        production.env_vars.SESSION_AUTH_MODE = mode;
+        const result = runScript(t, [project(production)], automatic);
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.equal(result.config, '');
+    }
+});
+
+test('refuses sharing the session database with every other supported D1 binding', (t) => {
+    for (const binding of ['MISUB_DB', 'MISUB_PROBE_DB', 'MISUB_SECURITY_DB']) {
+        const production = existingProduction();
+        const id = 'abcdefab-2222-4333-8444-555555555555';
+        production.d1_databases = { [binding]: { id }, MISUB_SESSION_DB: { id: id.toUpperCase() } };
+        const result = runScript(t, [project(production)], automatic);
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.equal(result.config, '');
+        assert.match(result.output, /MISUB_SESSION_DB must use an independent database/);
+    }
+});
+
+test('automatic release preserves credentials and all existing resource IDs', (t) => {
+    const production = existingProduction();
+    const probeId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    production.env_vars.COOKIE_SECRET = { type: 'secret_text' };
+    production.d1_databases = { MISUB_DB: { id: d1Id }, MISUB_PROBE_DB: { id: probeId } };
+    const result = runScript(t, [project(production)], {
+        ...automatic, COOKIE_SECRET: 'test-only-different-cookie',
+    });
+    expectDeployed(result);
+    assert.equal(result.calls.length, 1);
+    assert.ok(result.config.includes(`database_id = "${d1Id}"`));
+    assert.ok(result.config.includes(`database_id = "${probeId}"`));
+    assert.match(result.output, /Preserving existing production secret bindings/);
+});
+
+test('automatic release needs no repository copy of the current admin password', (t) => {
+    const result = runScript(t, [project(existingProduction())], {
+        ...automatic, ADMIN_PASSWORD: '', COOKIE_SECRET: 'test-only-unused-cookie',
+    });
+    expectDeployed(result);
+    assert.equal(result.calls.length, 1);
+});
+
+test('automatic release never creates a missing project', (t) => {
+    const result = runScript(t, [project({}, 404)], automatic);
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(result.calls, []);
+    assert.deepEqual(result.remaining, []);
+    assert.match(result.output, /requires an existing Pages project/);
+});
+
+test('automatic release refuses a missing or different production branch', (t) => {
+    for (const branch of [undefined, 'production', '']) {
+        const response = project(existingProduction());
+        response.body.result.production_branch = branch;
+        const result = runScript(t, [response], automatic);
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.deepEqual(result.remaining, []);
+        assert.equal(result.config, '');
+        assert.match(result.output, /production branch to be main/);
+    }
+});
+
+test('automatic release never discovers or creates a missing KV binding', (t) => {
+    const production = existingProduction();
+    delete production.kv_namespaces;
+    const result = runScript(t, [project(production)], automatic);
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(result.calls, []);
+    assert.deepEqual(result.remaining, []);
+    assert.match(result.output, /requires the existing MISUB_KV/);
+});
+
+test('automatic release refuses missing or plaintext production credentials', (t) => {
+    for (const env_vars of [{}, { ADMIN_PASSWORD: { type: 'plain_text' } }, {
+        ADMIN_PASSWORD: { type: 'secret_text' }, COOKIE_SECRET: { type: 'plain_text' },
+    }]) {
+        const result = runScript(t, [project({ ...existingProduction(), env_vars })], automatic);
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.match(result.output, /requires existing production secret bindings/);
+    }
+});
+
+test('automatic release refuses a new business database binding', (t) => {
+    const result = runScript(t, [project(existingProduction())], {
+        ...automatic, CLOUDFLARE_D1_DATABASE_ID: d1Id,
+    });
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(result.calls, []);
+    assert.match(result.output, /cannot add a MISUB_DB binding/);
+});
+
+test('automatic release refuses probe provisioning and a new explicit binding', (t) => {
+    for (const override of [{ PROVISION_NODE_PROBES: 'true' }, { CLOUDFLARE_PROBE_D1_DATABASE_ID: d1Id }]) {
+        const result = runScript(t, [project(existingProduction())], { ...automatic, ...override });
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.deepEqual(result.remaining, []);
+        assert.match(result.output, /cannot provision or add a probe database binding/);
+    }
+});
+
+test('malformed production binding metadata fails before any writes', (t) => {
+    for (const broken of [
+        { r2_buckets: 'unexpected' }, { services: [] }, { env_vars: false },
+        { d1_databases: 'unexpected' }, { kv_namespaces: [] },
+        { d1_databases: { MISUB_DB: {} } }, { d1_databases: { MISUB_PROBE_DB: null } },
+        { d1_databases: { MISUB_DB: { id: '-'.repeat(36) } } },
+        { kv_namespaces: { MISUB_KV: null } },
+        { env_vars: { ADMIN_PASSWORD: 'unexpected' } },
+    ]) {
+        const result = runScript(t, [project({ ...existingProduction(), ...broken })], automatic);
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.deepEqual(result.remaining, []);
+        assert.equal(result.config, '');
+        assert.match(result.output, /binding metadata is invalid/);
+    }
+});
+
+test('automatic release refuses all additional production binding categories', (t) => {
+    for (const extra of [
+        { env_vars: { ADMIN_PASSWORD: { type: 'secret_text' }, EXTRA: { type: 'plain_text' } } },
+        { kv_namespaces: { MISUB_KV: { namespace_id: kvId }, OTHER: { namespace_id: kvId } } },
+        { d1_databases: { OTHER: { id: d1Id } } },
+        ...['r2_buckets', 'durable_object_namespaces', 'services', 'queue_producers', 'hyperdrive_bindings', 'analytics_engine_datasets', 'vectorize_bindings', 'ai_bindings', 'browsers', 'mtls_certificates'].map(key => ({ [key]: { OTHER: {} } })),
+    ]) {
+        const result = runScript(t, [project({ ...existingProduction(), ...extra })], automatic);
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.deepEqual(result.remaining, []);
+        assert.equal(result.config, '');
+        assert.match(result.output, /other KV\/D1 bindings|additional production settings/);
+    }
 });

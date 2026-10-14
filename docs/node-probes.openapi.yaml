@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: MiSub multi-detector API
-  version: 1.4.0
+  version: 1.5.0
   description: |
     HTTPS only. Separate from /api/ext/v1 and /api/nodes/diagnostics.
     Admin writes require the same-origin Origin header and a valid auth_session.
@@ -192,10 +192,18 @@ paths:
       operationId: probeCapabilities
       responses:
         '200':
-          description: Types, service IDs, sources, observationsVersion, storageReady, version, maxNodes, maxAgents, maxAttempts and maxJobDownloadBytes.
+          description: Types, service IDs, sources, observationsVersion, storageReady, version, limits and installation. Installation is reviewed published-asset availability, separate from pairing protocol support. Missing or invalid metadata cannot enable installation.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Envelope' }
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Envelope' }
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          installation: { $ref: '#/components/schemas/InstallationCapabilities' }
         default: { $ref: '#/components/responses/Error' }
   /format:
     post:
@@ -318,6 +326,8 @@ paths:
         The creation timestamp is the job's enqueue time, not a probe execution start time.
         Completion is the server's accepted result or stop time, not an inferred provider observation time.
         checks contains only sanitized persisted evidence; no node URI, configuration, token or lease.
+        executionMetadata is the immutable detector declaration accepted with that task's completion,
+        or null when absent or invalid. It is not the detector's current identity or kernel attestation.
         An optional state filters records, total and nextOffset. The agent summary retains all task states.
       parameters:
         - { $ref: '#/components/parameters/ManagementOffset' }
@@ -451,7 +461,9 @@ paths:
         '200':
           description: |
             data.job has public job metadata; data.nodes has at most 200 records:
-            id, node_id, node_name, agent_id, agent_name, state, attempt, completed_at, checks.
+            id, node_id, node_name, agent_id, agent_name, state, attempt, completed_at, checks, executionMetadata.
+            executionMetadata follows ExecutionMetadata or is null for absent/invalid snapshots.
+            It describes the accepted completion, not the detector's current build or proven execution.
             nextOffset is null at the end. No node URI, proxy configuration, token or lease.
           content:
             application/json:
@@ -476,7 +488,14 @@ paths:
       description: |
         At most one unexpired task lease per identity. An idle response is data=null.
         Default polling is every 60 seconds. Never copy the same identity to multiple machines.
-        Only claims declaring observationsVersion=1 may receive observation tasks.
+        New clients send capabilities={schemaVersion:1,observationsVersion:1} and retain
+        top-level observationsVersion=1 for older servers. A valid nested declaration may
+        omit the top-level field. Only an absent capabilities field permits legacy fallback.
+        Both declaration fields accept arbitrary JSON values at the HTTP boundary.
+        Malformed, unsupported-schema or conflicting declarations cannot receive observation
+        tasks, including mixed tasks containing observations, but may receive ordinary tasks.
+        Each claim completely replaces the recorded declaration; unknown fields are discarded.
+        Scheduling always uses this claim, never a previously persisted declaration or result.
       requestBody:
         required: true
         content:
@@ -486,7 +505,10 @@ paths:
               properties:
                 version: { type: string, maxLength: 50 }
                 platform: { type: string, maxLength: 30 }
-                observationsVersion: { type: integer, const: 1 }
+                observationsVersion:
+                  description: Any JSON value is accepted. Only integer 1 is a supported legacy declaration. When capabilities is present this field must agree with its supported version; otherwise observation tasks are excluded and ordinary tasks remain eligible.
+                capabilities:
+                  description: Any JSON value is accepted. AgentClaimCapabilities describes the supported declaration. Invalid, unknown-schema or conflicting values exclude observation tasks but still allow ordinary tasks; unknown object properties are discarded.
       responses:
         '200':
           description: A private task snapshot with a 90-second lease, or null.
@@ -529,6 +551,11 @@ paths:
         Unknown/passed unlock results require one entry for every requested service.
         Missing measurements are not zero. Never send raw errors, bodies or credentials.
         Observation tasks require one versioned report with every selected source, bound to the task ID.
+        Optional executionMetadata is a sibling of checks, never a field in an input check.
+        The first accepted completion stores its sanitized declaration atomically with checks.
+        Replays of a snapshot require the same canonical metadata; missing or changed metadata
+        returns 409 execution_metadata_conflict. Legacy completions may ACK without backfilling metadata.
+        Invalid metadata returns 400 invalid_execution_metadata. See probe-execution-metadata.md.
       requestBody:
         required: true
         content:
@@ -540,6 +567,10 @@ paths:
                   required: [checks]
                   properties:
                     checks: { $ref: '#/components/schemas/Checks' }
+                    executionMetadata:
+                      oneOf:
+                        - { $ref: '#/components/schemas/ExecutionMetadataInput' }
+                        - { type: 'null' }
       responses:
         '200':
           description: data.accepted=true, data.replay boolean. Private task payload is removed.
@@ -623,6 +654,91 @@ components:
                   code: { type: string }
                   retryAfterSeconds: { type: integer, minimum: 1, maximum: 3600, description: Pairing 429 only; also returned in Retry-After. }
   schemas:
+    ReleaseTarget:
+      type: string
+      enum: [linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64]
+    ReleaseAsset:
+      type: object
+      required: [fileName, url, sha256, size]
+      properties:
+        fileName: { type: string, description: Exact target binary or install.sh/install.ps1 file name. }
+        url: { type: string, format: uri, description: 'Exact HTTPS github.com/58cdn/MiSub/releases/download/{tag}/{fileName} URL.' }
+        sha256: { type: string, pattern: '^[a-f0-9]{64}$', description: Nonzero expected SHA256. }
+        size: { type: integer, minimum: 1, maximum: 134217728 }
+    PublishedProbeRelease:
+      type: object
+      additionalProperties: false
+      required: [version, tag, sourceCommit, bootstrapProtocol, capabilities, assets, bootstrap]
+      properties:
+        version: { type: string, pattern: '^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$', description: Stable release; legacy 0.1.0 is not bootstrap compatible. }
+        tag: { type: string, description: Exactly probe-v followed by version. }
+        sourceCommit: { type: string, pattern: '^[a-f0-9]{40}$', description: Nonzero immutable wrapper revision. }
+        bootstrapProtocol: { const: 1 }
+        capabilities:
+          type: array
+          minItems: 6
+          maxItems: 6
+          uniqueItems: true
+          items: { enum: [pair, install, start, status, check-config, bootstrap-v1] }
+        assets:
+          type: array
+          minItems: 1
+          maxItems: 5
+          description: Unique targets; raw executable names are misub-probe-{target}, with .exe on Windows.
+          items:
+            allOf:
+              - { $ref: '#/components/schemas/ReleaseAsset' }
+              - type: object
+                required: [target]
+                properties:
+                  target: { $ref: '#/components/schemas/ReleaseTarget' }
+        bootstrap:
+          type: object
+          additionalProperties: false
+          description: Only shells with corresponding binary assets; script size is at most 1 MiB.
+          properties:
+            unix: { $ref: '#/components/schemas/ReleaseAsset' }
+            windows: { $ref: '#/components/schemas/ReleaseAsset' }
+    InstallationCapabilities:
+      type: object
+      additionalProperties: false
+      required: [schemaVersion, distributionReady, release, legacyReleases, reason, targets]
+      properties:
+        schemaVersion: { const: 1 }
+        distributionReady: { type: boolean, description: False until an audited release and its actual assets are verified. }
+        release:
+          oneOf:
+            - { type: 'null' }
+            - { $ref: '#/components/schemas/PublishedProbeRelease' }
+        legacyReleases:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            additionalProperties: false
+            required: [version, tag, capabilities]
+            properties:
+              version: { type: string }
+              tag: { type: string }
+              capabilities:
+                type: array
+                uniqueItems: true
+                items: { enum: [pair, install, start, status, check-config, bootstrap-v1] }
+                description: Legacy probe-v0.1.0 has an empty capability set.
+        reason: { enum: [available, distribution_not_ready, invalid_release_catalog] }
+        targets:
+          type: array
+          minItems: 5
+          maxItems: 5
+          description: Each supported target exactly once in the documented target order; missing assets remain unavailable.
+          items:
+            type: object
+            additionalProperties: false
+            required: [target, available, reason]
+            properties:
+              target: { $ref: '#/components/schemas/ReleaseTarget' }
+              available: { type: boolean }
+              reason: { enum: [available, distribution_not_ready, invalid_release_catalog, artifact_unavailable] }
     PairingId: { type: string, pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' }
     PairingUserCode:
       type: string
@@ -728,8 +844,16 @@ components:
               description: Latest retained done task's server result receipt time, including failed checks; excludes stops. Null if absent.
             hidden: { type: boolean, description: Whether a revoked identity is currently archived from default lists. }
             archivedAt: { type: [integer, 'null'], description: Latest archive transition in Unix milliseconds; retained after restore. }
-            lastHeartbeatAt: { type: 'null', description: Heartbeat-only timestamps are not independently persisted. lastSeen includes claims and accepted heartbeats. }
-            capabilities: { type: 'null', description: Capabilities are not persisted or inferred from version/platform. }
+            lastHeartbeatAt:
+              type: [integer, 'null']
+              minimum: 1
+              maximum: 9007199254740991
+              description: Server receipt time of a successful lease renewal, Unix milliseconds. Independent of claim receipt; invalid or future values are null. Null while runtime reads are disabled.
+            capabilities:
+              description: Latest complete claim declaration when runtime reads are enabled. Null for missing or inconsistent records, invalid or future claim times, revoked identities, or disabled reads. Never inferred from version, platform or historical results.
+              oneOf:
+                - { $ref: '#/components/schemas/AgentClaimDeclaration' }
+                - { type: 'null' }
             taskCounts:
               type: object
               required: [queued, running, done, stopped]
@@ -738,6 +862,40 @@ components:
                 running: { type: integer, minimum: 0 }
                 done: { type: integer, minimum: 0 }
                 stopped: { type: integer, minimum: 0, description: Expired or cancelled tasks. }
+    AgentClaimCapabilities:
+      type: object
+      required: [schemaVersion, observationsVersion]
+      description: Versioned claim input. Unknown properties are discarded; this is a detector declaration, not proof of runtime capabilities.
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        observationsVersion: { type: integer, const: 1 }
+    AgentClaimDeclaration:
+      type: object
+      additionalProperties: false
+      required: [source, state, schemaVersion, observationsVersion, receivedAt, freshness]
+      properties:
+        source: { type: string, const: agent_claim }
+        state: { type: string, enum: [declared, legacy, missing, unsupported_schema, invalid_declaration, conflicting_versions] }
+        schemaVersion: { type: [integer, 'null'], enum: [1, null] }
+        observationsVersion: { type: [integer, 'null'], enum: [1, null] }
+        receivedAt: { type: integer, minimum: 1, maximum: 9007199254740991, description: Server receipt time of the claim, Unix milliseconds; never refreshed by a heartbeat. }
+        freshness:
+          type: string
+          enum: [fresh, stale]
+          description: Age of the recorded claim only. Fresh means checkedAt minus receivedAt is less than 300000 milliseconds; it does not establish current availability or capabilities.
+      oneOf:
+        - properties:
+            state: { const: declared }
+            schemaVersion: { const: 1 }
+            observationsVersion: { const: 1 }
+        - properties:
+            state: { const: legacy }
+            schemaVersion: { const: null }
+            observationsVersion: { const: 1 }
+        - properties:
+            state: { enum: [missing, unsupported_schema, invalid_declaration, conflicting_versions] }
+            schemaVersion: { const: null }
+            observationsVersion: { const: null }
     DetectorOverviewPage:
       type: object
       required: [agents, total, nextOffset, checkedAt, onlineWindowMs, retentionDays]
@@ -784,10 +942,33 @@ components:
         attempt: { type: integer, minimum: 0, maximum: 3 }
         createdAt: { type: integer, description: Job creation time in Unix milliseconds. }
         completedAt: { type: [integer, 'null'], description: Server result receipt or stop time in Unix milliseconds; null while unfinished. }
+        executionMetadata:
+          oneOf:
+            - { $ref: '#/components/schemas/ExecutionMetadata' }
+            - { type: 'null' }
         checks:
           oneOf:
             - { $ref: '#/components/schemas/Checks' }
             - { type: 'null' }
+    ExecutionMetadataInput:
+      type: object
+      description: Bounded detector declaration. Unknown fields are discarded. This is not capability negotiation or proof of actual kernel execution.
+      required: [schemaVersion, wrapperVersion, wrapperRevision, platform, ruleSetVersion]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        wrapperVersion: { type: string, maxLength: 64, pattern: '^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$(?![\s\S])' }
+        wrapperRevision: { type: string, pattern: '^(?:[a-f0-9]{40}|source)$(?![\s\S])', description: Build revision or source for a local source build. }
+        platform: { type: string, enum: [linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64] }
+        kernelLockVersion: { type: string, maxLength: 64, pattern: '^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$(?![\s\S])', description: Optional embedded lock declaration; absent means unknown. }
+        ruleSetVersion: { type: integer, minimum: 1, maximum: 65535, description: Explicit classification rule-set baseline, independent of the observations wire schema. }
+    ExecutionMetadata:
+      description: Immutable declaration accepted with the successful task completion. The server fixes source to detector_reported; it is not an attestation. Legacy and incomplete snapshots are returned as null.
+      allOf:
+        - { $ref: '#/components/schemas/ExecutionMetadataInput' }
+        - type: object
+          required: [source]
+          properties:
+            source: { type: string, const: detector_reported, readOnly: true }
     Lease:
       type: object
       required: [leaseToken]
@@ -808,7 +989,7 @@ components:
                 id: { type: string }
                 name: { type: string }
                 proxy: { type: [object, 'null'], additionalProperties: true, description: Private Mihomo proxy map; only assigned detector can retrieve this. }
-                format: { $ref: '#/components/schemas/Check' }
+                format: { $ref: '#/components/schemas/FormatCheck' }
             types: { type: array, items: { $ref: '#/components/schemas/CheckType' } }
             options:
               allOf:
@@ -818,6 +999,7 @@ components:
             attempt: { type: integer, minimum: 1, maximum: 3 }
             leaseMs: { type: integer, const: 90000 }
     Check:
+      description: Shared field types. Result checks use the type-specific schemas below; unknown fields are discarded by the result endpoint. Measurements are optional and never synthesized.
       type: object
       required: [status, code]
       properties:
@@ -826,19 +1008,107 @@ components:
           type: string
           enum: [ok, invalid_format, unsupported_protocol, unsupported_transport, unsafe_target, dns_failed, connect_failed, tls_failed, request_failed, http_error, deadline, cancelled, prerequisite_failed, kernel_missing, kernel_failed, probe_inconclusive, region_blocked, service_reachable, native_unlocked, originals_only, rate_limited, traffic_limit, task_expired]
         latencyMs: { type: number, minimum: 0, maximum: 180000 }
-        bytes: { type: number, minimum: 0, maximum: 20971520 }
+        bytes: { type: integer, minimum: 0, maximum: 20971520 }
         bytesPerSecond: { type: number, minimum: 0, maximum: 1000000000000 }
-        httpStatus: { type: integer, minimum: 0, maximum: 599 }
+        httpStatus: { type: integer, minimum: 100, maximum: 599 }
         retryAfterSeconds: { type: integer, minimum: 0, maximum: 86400, description: Only for unknown/rate_limited HTTP 429; never a successful measurement. }
         region: { type: string, pattern: '^[A-Z]{2}$' }
+    FormatCheck:
+      allOf:
+        - { $ref: '#/components/schemas/Check' }
+        - oneOf:
+            - {properties: {status: {const: passed}, code: {const: ok}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: invalid_format}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_protocol}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_transport}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+    TCPCheck:
+      allOf:
+        - { $ref: '#/components/schemas/Check' }
+        - oneOf:
+            - {properties: {status: {const: failed}, code: {const: invalid_format}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: dns_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: connect_failed}, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: blocked}, code: {const: unsafe_target}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_protocol}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_transport}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: skipped}, code: {const: prerequisite_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: passed}, code: {const: ok}, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: timeout}, code: {const: deadline}, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: cancelled}, code: {const: cancelled}, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+    ProxyCheck:
+      allOf:
+        - { $ref: '#/components/schemas/Check' }
+        - oneOf:
+            - {properties: {status: {const: failed}, code: {const: invalid_format}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: dns_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: request_failed}, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: http_error}, bytes: false, bytesPerSecond: false, retryAfterSeconds: false, region: false, httpStatus: {not: {const: 429}}}}
+            - {properties: {status: {const: blocked}, code: {const: unsafe_target}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_protocol}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_transport}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: kernel_missing}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: kernel_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: cancelled}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: skipped}, code: {const: prerequisite_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: passed}, code: {const: ok}, bytes: false, bytesPerSecond: false, retryAfterSeconds: false, region: false, httpStatus: {const: 204}}}
+            - {properties: {status: {const: timeout}, code: {const: deadline}, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: cancelled}, code: {const: cancelled}, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unknown}, code: {const: rate_limited}, latencyMs: false, bytes: false, bytesPerSecond: false, region: false, httpStatus: {const: 429}}, required: [httpStatus]}
+    SpeedCheck:
+      allOf:
+        - { $ref: '#/components/schemas/Check' }
+        - oneOf:
+            - {properties: {status: {const: failed}, code: {const: invalid_format}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: dns_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: request_failed}, retryAfterSeconds: false, region: false, httpStatus: {const: 200}}}
+            - {properties: {status: {const: failed}, code: {const: http_error}, latencyMs: false, bytes: false, bytesPerSecond: false, retryAfterSeconds: false, region: false, httpStatus: {not: {const: 429}}}}
+            - {properties: {status: {const: blocked}, code: {const: unsafe_target}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_protocol}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_transport}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: kernel_missing}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: kernel_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: cancelled}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: skipped}, code: {const: prerequisite_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: passed}, code: {const: ok}, retryAfterSeconds: false, region: false, httpStatus: {const: 200}, bytes: {minimum: 65536}}}
+            - {properties: {status: {const: timeout}, code: {const: deadline}, retryAfterSeconds: false, region: false, httpStatus: {const: 200}}}
+            - {properties: {status: {const: cancelled}, code: {const: cancelled}, retryAfterSeconds: false, region: false, httpStatus: {const: 200}}}
+            - {properties: {status: {const: unknown}, code: {const: probe_inconclusive}, retryAfterSeconds: false, region: false, httpStatus: {const: 200}, bytes: {maximum: 65535}}}
+            - {properties: {status: {const: unknown}, code: {const: rate_limited}, latencyMs: false, bytes: false, bytesPerSecond: false, region: false, httpStatus: {const: 429}}, required: [httpStatus]}
+    UnlockCheck:
+      allOf:
+        - { $ref: '#/components/schemas/Check' }
+        - oneOf:
+            - {properties: {status: {const: failed}, code: {const: invalid_format}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: failed}, code: {const: dns_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: blocked}, code: {const: unsafe_target}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_protocol}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: unsupported_transport}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: kernel_missing}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: kernel_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: cancelled}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: skipped}, code: {const: prerequisite_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unknown}, code: {const: probe_inconclusive}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: cancelled}, code: {const: cancelled}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+    ServiceCheck:
+      allOf:
+        - { $ref: '#/components/schemas/Check' }
+        - oneOf:
+            - {properties: {status: {const: unknown}, code: {const: probe_inconclusive}, latencyMs: false, bytes: false, bytesPerSecond: false, retryAfterSeconds: false, region: false, httpStatus: {not: {const: 429}}}}
+            - {properties: {status: {const: unknown}, code: {const: service_reachable}, latencyMs: false, bytes: false, bytesPerSecond: false, retryAfterSeconds: false, region: false, httpStatus: {anyOf: [{minimum: 200, maximum: 299}, {const: 401}]}}, allOf: [{if: {required: [httpStatus], properties: {httpStatus: {const: 401}}}, then: {properties: {service: {const: openai}}}}]}
+            - {properties: {status: {const: unknown}, code: {const: rate_limited}, latencyMs: false, bytes: false, bytesPerSecond: false, region: false, httpStatus: {const: 429}}, required: [httpStatus]}
+            - {properties: {status: {const: blocked}, code: {const: region_blocked}, latencyMs: false, bytes: false, bytesPerSecond: false, retryAfterSeconds: false, region: false, httpStatus: {not: {const: 429}}}}
+            - {properties: {status: {const: failed}, code: {const: request_failed}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: timeout}, code: {const: deadline}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: cancelled}, code: {const: cancelled}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
+            - {properties: {status: {const: unsupported}, code: {const: probe_inconclusive}, latencyMs: false, bytes: false, bytesPerSecond: false, httpStatus: false, retryAfterSeconds: false, region: false}}
     Checks:
       type: object
       additionalProperties: false
       properties:
-        format: { $ref: '#/components/schemas/Check' }
-        tcp: { $ref: '#/components/schemas/Check' }
-        proxy: { $ref: '#/components/schemas/Check' }
-        speed: { $ref: '#/components/schemas/Check' }
+        format: { $ref: '#/components/schemas/FormatCheck' }
+        tcp: { $ref: '#/components/schemas/TCPCheck' }
+        proxy: { $ref: '#/components/schemas/ProxyCheck' }
+        speed: { $ref: '#/components/schemas/SpeedCheck' }
         observations:
           allOf:
             - { $ref: '#/components/schemas/Check' }
@@ -848,14 +1118,16 @@ components:
                 report: { $ref: '#/components/schemas/ObservationReport' }
         unlock:
           allOf:
-            - { $ref: '#/components/schemas/Check' }
+            - { $ref: '#/components/schemas/UnlockCheck' }
+            - if: { properties: { status: { const: unknown } } }
+              then: { required: [services] }
             - properties:
                 services:
                   type: array
                   maxItems: 8
                   items:
                     allOf:
-                      - { $ref: '#/components/schemas/Check' }
+                      - { $ref: '#/components/schemas/ServiceCheck' }
                       - required: [service]
                         properties:
                           service: { $ref: '#/components/schemas/Service' }

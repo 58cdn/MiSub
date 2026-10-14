@@ -1,9 +1,15 @@
+import { normalizeGroupsPageSize } from '../../shared/pagination.js';
 /**
  * API处理模块
  * 处理各种API请求
  */
 
-import { StorageFactory, SettingsCache, STORAGE_TYPES } from '../storage-adapter.js';
+import {
+    StorageFactory,
+    SettingsCache,
+    STORAGE_TYPES,
+    validateStoredCollection,
+} from '../storage-adapter.js';
 import {
     getCookieSecret,
     getAdminPassword,
@@ -25,6 +31,13 @@ import { sendTgNotification, checkAndNotify } from './notifications.js';
 import { clearAllNodeCaches } from '../services/node-cache-service.js';
 import { buildSubscriptionNodeCacheKey } from '../services/subscription-service.js';
 import { maybeRunScheduledTasks } from './scheduled-task-runner.js';
+import {
+    isAtomicSubscriptionStorage,
+    isAtomicSubscriptionRequested,
+    getProtocolError,
+    protocolError,
+    requireMutationMetadata,
+} from '../services/subscription-protocol/index.js';
 
 import {
     KV_KEY_SUBS,
@@ -83,9 +96,136 @@ function isStorageUnavailableError(error) {
  * @param {Object} env - Cloudflare环境对象
  * @returns {Promise<Object>} 存储适配器实例
  */
-async function getStorageAdapter(env) {
+async function getStorageAdapter(env, { requireBinding = false } = {}) {
     const storageType = await StorageFactory.getStorageType(env);
+    if (requireBinding) assertStorageBinding(env, storageType);
     return StorageFactory.createAdapter(env, storageType);
+}
+
+function assertStorageBinding(env, storageType) {
+    const available =
+        storageType === STORAGE_TYPES.D1
+            ? Boolean(env?.MISUB_DB)
+            : storageType === STORAGE_TYPES.KV && Boolean(StorageFactory.resolveKV(env));
+    if (!available) {
+        const error = new Error('STORAGE_UNAVAILABLE');
+        error.code = 'STORAGE_UNAVAILABLE';
+        throw error;
+    }
+}
+
+async function readAuthoritativeCollection(storageAdapter, method, key) {
+    const items =
+        typeof storageAdapter[method] === 'function'
+            ? await storageAdapter[method]({ authoritative: true })
+            : ((await storageAdapter.get(key)) ?? []);
+    return validateStoredCollection(items);
+}
+
+function storageReadFailureResponse(error) {
+    if (error?.code !== 'STORAGE_COLLECTION_READ_FAILED' && error?.code !== 'STORAGE_UNAVAILABLE') {
+        return null;
+    }
+    return createJsonResponse(
+        {
+            success: false,
+            code: error.code,
+            message: '无法读取完整订阅数据，请检查存储状态后重试',
+        },
+        503
+    );
+}
+
+function subscriptionProtocolFailure(error) {
+    const failure = getProtocolError(error);
+    return createJsonResponse(
+        { success: false, code: failure.code, message: failure.message },
+        failure.status
+    );
+}
+
+async function saveAtomicSubscriptions(storageAdapter, request, payload, env) {
+    const metadata = requireMutationMetadata(payload, request);
+    if (!Array.isArray(payload?.operations)) throw protocolError('legacy_write_blocked');
+    if ('misubs' in payload || 'profiles' in payload || 'diff' in payload)
+        throw protocolError('invalid_operation');
+    const result = await storageAdapter.commitSubscriptionOperations({
+        ...metadata,
+        operations: payload.operations,
+    });
+    if (!result.replayed) {
+        try {
+            await clearAllNodeCaches(storageAdapter);
+            const settings = (await storageAdapter.get(KV_KEY_SETTINGS)) || defaultSettings;
+            await Promise.allSettled(
+                result.snapshot.subscriptions
+                    .filter((sub) => sub?.enabled && /^https?:\/\//i.test(sub.url || ''))
+                    .map((sub) => checkAndNotify(structuredClone(sub), settings, env))
+            );
+        } catch {
+            console.warn('[API /misubs] Post-commit effects unavailable');
+        }
+    }
+    return createJsonResponse({
+        success: true,
+        data: {
+            misubs: result.snapshot.subscriptions,
+            profiles: result.snapshot.profiles,
+            version: result.snapshot.version,
+        },
+        receipt: result.receipt,
+        replayed: result.replayed,
+    });
+}
+
+function invalidSubscriptionDataResponse() {
+    return createJsonResponse(
+        {
+            success: false,
+            code: 'INVALID_SUBSCRIPTION_DATA',
+            message: '订阅与订阅组数据格式错误，每个集合必须包含有效且互不重复的字符串 ID',
+        },
+        400
+    );
+}
+
+function validateSavedCollection(items) {
+    validateStoredCollection(items);
+    if (new Set(items.map((item) => item.id)).size !== items.length) {
+        throw new Error('duplicate_item_id');
+    }
+}
+
+function validateSubscriptionSaveRequest(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data))
+        throw new Error('invalid_request');
+    if (!data.diff) {
+        validateSavedCollection(data.misubs);
+        validateSavedCollection(data.profiles);
+        return;
+    }
+
+    const assertPatchObject = (patch) => {
+        // Empty array patches remain compatible with existing no-op clients.
+        if (typeof patch !== 'object' || (Array.isArray(patch) && patch.length > 0)) {
+            throw new Error('invalid_patch');
+        }
+    };
+    assertPatchObject(data.diff);
+    for (const patch of [data.diff.subscriptions, data.diff.profiles]) {
+        if (patch == null) continue;
+        assertPatchObject(patch);
+        for (const operation of ['added', 'updated']) {
+            if (patch[operation] !== undefined) validateSavedCollection(patch[operation]);
+        }
+        if (
+            patch.removed !== undefined &&
+            (!Array.isArray(patch.removed) ||
+                patch.removed.some((id) => typeof id !== 'string' || !id.trim()))
+        ) {
+            throw new Error('invalid_removed_ids');
+        }
+    }
 }
 
 function isSimpleArrayDiff(diff) {
@@ -124,11 +264,8 @@ async function applyRowLevelDiff(storageAdapter, type, diff) {
     return true;
 }
 
-async function syncCollectionRowLevel(storageAdapter, type, finalItems) {
+async function syncCollectionRowLevel(storageAdapter, type, finalItems, currentItems) {
     const isProfile = type === 'profiles';
-    const getAll = isProfile
-        ? storageAdapter.getAllProfiles?.bind(storageAdapter)
-        : storageAdapter.getAllSubscriptions?.bind(storageAdapter);
     const putItem = isProfile
         ? storageAdapter.putProfile?.bind(storageAdapter)
         : storageAdapter.putSubscription?.bind(storageAdapter);
@@ -136,7 +273,7 @@ async function syncCollectionRowLevel(storageAdapter, type, finalItems) {
         ? storageAdapter.deleteProfileById?.bind(storageAdapter)
         : storageAdapter.deleteSubscriptionById?.bind(storageAdapter);
 
-    if (!getAll || !putItem || !deleteItem || !Array.isArray(finalItems)) {
+    if (!putItem || !deleteItem || !Array.isArray(finalItems)) {
         return false;
     }
 
@@ -145,7 +282,6 @@ async function syncCollectionRowLevel(storageAdapter, type, finalItems) {
         return false;
     }
 
-    const currentItems = await getAll();
     const currentMap = new Map(currentItems.map((item) => [item.id, item]));
     const finalMap = new Map(finalItems.map((item) => [item.id, item]));
 
@@ -176,36 +312,38 @@ async function syncCollectionRowLevel(storageAdapter, type, finalItems) {
  */
 export async function handleDataRequest(env, context = null) {
     let storageType = 'unknown';
+    let atomic = false;
     try {
         storageType = await StorageFactory.getStorageType(env);
-        if (storageType === 'd1' && !env.MISUB_DB) {
-            console.error('[API Error /data] D1 binding missing while storageType=d1');
-        }
-        if (storageType === 'kv' && !StorageFactory.resolveKV(env)) {
-            console.error('[API Error /data] KV binding missing while storageType=kv');
-        }
+        assertStorageBinding(env, storageType);
         const storageAdapter = StorageFactory.createAdapter(env, storageType);
-        const cachedSettings = await SettingsCache.get(env);
+        atomic = isAtomicSubscriptionStorage(storageAdapter);
+        const snapshot = atomic ? await storageAdapter.readDomainSnapshot() : null;
+        const cachedSettings = atomic ? snapshot.settings : await SettingsCache.get(env);
         const [misubs, rawProfiles, settings, ruleTemplates] = await Promise.all([
-            typeof storageAdapter.getAllSubscriptions === 'function'
-                ? storageAdapter.getAllSubscriptions()
-                : storageAdapter.get(KV_KEY_SUBS).then((res) => res || []),
-            typeof storageAdapter.getAllProfiles === 'function'
-                ? storageAdapter.getAllProfiles()
-                : storageAdapter.get(KV_KEY_PROFILES).then((res) => res || []),
+            atomic
+                ? snapshot.subscriptions
+                : readAuthoritativeCollection(storageAdapter, 'getAllSubscriptions', KV_KEY_SUBS),
+            atomic
+                ? snapshot.profiles
+                : readAuthoritativeCollection(storageAdapter, 'getAllProfiles', KV_KEY_PROFILES),
             Promise.resolve(cachedSettings || {}).then((res) => res || {}),
-            listRuleTemplates(storageAdapter).catch((error) => {
-                console.warn(
-                    '[API /data] Failed to load custom rule templates:',
-                    error?.message || error
-                );
-                return [];
-            }),
+            atomic
+                ? snapshot.ruleTemplates
+                : listRuleTemplates(storageAdapter).catch((error) => {
+                      console.warn(
+                          '[API /data] Failed to load custom rule templates:',
+                          error?.message || error
+                      );
+                      return [];
+                  }),
         ]);
-        const profiles = await attachProfileDownloadCounts(storageAdapter, rawProfiles);
+        const profiles = atomic
+            ? rawProfiles
+            : await attachProfileDownloadCounts(storageAdapter, rawProfiles);
 
         // 自动迁移旧版 profile ID（去除 'profile_' 前缀）
-        if (migrateProfileIds(profiles)) {
+        if (!atomic && migrateProfileIds(profiles)) {
             storageAdapter
                 .put(KV_KEY_PROFILES, profiles)
                 .catch((err) =>
@@ -214,32 +352,42 @@ export async function handleDataRequest(env, context = null) {
         }
         const config = {
             ...defaultSettings,
-            ...settings,
+            ...(atomic ? redactSettingsForResponse(settings) : settings),
+            ...(atomic ? { storageType: STORAGE_TYPES.D1 } : {}),
             isDefaultPassword: await isUsingDefaultPassword(env),
         };
         try {
             const taskContext = context || { env };
             const runPromise = maybeRunScheduledTasks(taskContext, { source: 'admin-api' });
-            if (typeof taskContext.waitUntil !== 'function') {
-                runPromise.catch((error) =>
-                    console.warn('[ScheduledTasks] lazy check failed:', error?.message || error)
-                );
-            }
-        } catch (taskError) {
-            console.warn(
-                '[ScheduledTasks] lazy check init failed:',
-                taskError?.message || taskError
+            const tracked = runPromise.catch(() =>
+                console.warn('[ScheduledTasks] lazy check failed')
             );
+            if (typeof taskContext.waitUntil === 'function') taskContext.waitUntil(tracked);
+        } catch (taskError) {
+            console.warn('[ScheduledTasks] lazy check init failed');
         }
-        return createJsonResponse({ misubs, profiles, ruleTemplates, config });
+        return createJsonResponse({
+            misubs,
+            profiles,
+            ruleTemplates,
+            config,
+            ...(atomic
+                ? {
+                      version: snapshot.version,
+                      subscriptionProtocol: storageAdapter.subscriptionProtocol,
+                  }
+                : {}),
+        });
     } catch (e) {
+        if (atomic || isAtomicSubscriptionRequested(env)) return subscriptionProtocolFailure(e);
+        const failure = storageReadFailureResponse(e);
+        if (failure) return failure;
         console.error('[API Error /data] Failed to read from storage', {
-            error: e?.message,
             storageType,
             hasKv: !!StorageFactory.resolveKV(env),
             hasD1: !!env?.MISUB_DB,
         });
-        return createErrorResponse(e, 500);
+        return createErrorResponse('读取数据失败，请稍后重试', 500);
     }
 }
 
@@ -260,12 +408,15 @@ import { applyPatch } from './patch-utils.js';
  * @returns {Promise<Response>} HTTP响应
  */
 export async function handleMisubsSave(request, env) {
+    let atomic = false;
     try {
         // 步骤1: 解析请求体
         let requestData;
         try {
             requestData = await readJsonWithLimit(request, JSON_BODY_LIMITS.large);
         } catch (parseError) {
+            if (isAtomicSubscriptionRequested(env))
+                return subscriptionProtocolFailure(protocolError('invalid_data'));
             console.error('[API Error /misubs] JSON解析失败:', parseError);
             return createJsonResponse(
                 {
@@ -279,25 +430,30 @@ export async function handleMisubsSave(request, env) {
             );
         }
 
+        const storageAdapter = await getStorageAdapter(env, { requireBinding: true });
+        atomic = isAtomicSubscriptionStorage(storageAdapter);
+        if (atomic) return await saveAtomicSubscriptions(storageAdapter, request, requestData, env);
+
+        try {
+            validateSubscriptionSaveRequest(requestData);
+        } catch {
+            return invalidSubscriptionDataResponse();
+        }
+
         const { misubs, profiles, diff } = requestData;
-        const storageAdapter = await getStorageAdapter(env);
 
         let finalMisubs = misubs;
         let finalProfiles = profiles;
 
+        // Complete both authoritative reads before notifications or business writes.
+        const [currentMisubs, currentProfiles] = await Promise.all([
+            readAuthoritativeCollection(storageAdapter, 'getAllSubscriptions', KV_KEY_SUBS),
+            readAuthoritativeCollection(storageAdapter, 'getAllProfiles', KV_KEY_PROFILES),
+        ]);
+
         // 步骤1.5: 检查是否为 Diff 模式
         if (diff) {
             console.info('[API] Processing Diff Patch...');
-            // 获取当前数据
-            const [currentMisubs, currentProfiles] = await Promise.all([
-                typeof storageAdapter.getAllSubscriptions === 'function'
-                    ? storageAdapter.getAllSubscriptions()
-                    : storageAdapter.get(KV_KEY_SUBS).then((res) => res || []),
-                typeof storageAdapter.getAllProfiles === 'function'
-                    ? storageAdapter.getAllProfiles()
-                    : storageAdapter.get(KV_KEY_PROFILES).then((res) => res || []),
-            ]);
-
             // 应用补丁
             if (diff.subscriptions) {
                 finalMisubs = applyPatch(currentMisubs, diff.subscriptions);
@@ -309,38 +465,6 @@ export async function handleMisubsSave(request, env) {
                 finalProfiles = applyPatch(currentProfiles, diff.profiles);
             } else {
                 finalProfiles = currentProfiles; // 无变动
-            }
-
-            if (!Array.isArray(finalMisubs) || !Array.isArray(finalProfiles)) {
-                return createJsonResponse(
-                    {
-                        success: false,
-                        message: '增量更新结果格式错误，请检查补丁数据',
-                    },
-                    400
-                );
-            }
-        } else {
-            // 步骤2: 验证必需字段 (仅在非Diff模式下)
-            if (typeof misubs === 'undefined' || typeof profiles === 'undefined') {
-                return createJsonResponse(
-                    {
-                        success: false,
-                        message: '请求体中缺少 misubs 或 profiles 字段',
-                    },
-                    400
-                );
-            }
-
-            // 步骤3: 验证数据类型
-            if (!Array.isArray(misubs) || !Array.isArray(profiles)) {
-                return createJsonResponse(
-                    {
-                        success: false,
-                        message: 'misubs 和 profiles 必须是数组格式',
-                    },
-                    400
-                );
             }
         }
 
@@ -386,6 +510,13 @@ export async function handleMisubsSave(request, env) {
                         sortIndex: subMap.get(s.id)?.sortIndex,
                     }));
             }
+        }
+
+        try {
+            validateSavedCollection(finalMisubs);
+            validateSavedCollection(finalProfiles);
+        } catch {
+            return invalidSubscriptionDataResponse();
         }
 
         // 步骤4: 获取设置（带错误处理）
@@ -442,8 +573,18 @@ export async function handleMisubsSave(request, env) {
                 }
             } else {
                 const [subsHandled, profilesHandled] = await Promise.all([
-                    syncCollectionRowLevel(storageAdapter, 'subscriptions', finalMisubs),
-                    syncCollectionRowLevel(storageAdapter, 'profiles', finalProfiles),
+                    syncCollectionRowLevel(
+                        storageAdapter,
+                        'subscriptions',
+                        finalMisubs,
+                        currentMisubs
+                    ),
+                    syncCollectionRowLevel(
+                        storageAdapter,
+                        'profiles',
+                        finalProfiles,
+                        currentProfiles
+                    ),
                 ]);
 
                 const saveTasks = [];
@@ -455,11 +596,11 @@ export async function handleMisubsSave(request, env) {
                 }
             }
         } catch (storageError) {
-            console.error('[API Error /misubs] Storage put failed:', storageError);
+            console.error('[API Error /misubs] Storage put failed');
             return createJsonResponse(
                 {
                     success: false,
-                    message: `数据保存失败: ${storageError.message || '存储服务暂时不可用，请稍后重试'}`,
+                    message: '数据保存失败，存储服务暂时不可用，请稍后重试',
                 },
                 500
             );
@@ -489,11 +630,14 @@ export async function handleMisubsSave(request, env) {
             },
         });
     } catch (e) {
-        console.error('[API Error /misubs] Uncaught error:', e);
+        if (atomic || isAtomicSubscriptionRequested(env)) return subscriptionProtocolFailure(e);
+        const failure = storageReadFailureResponse(e);
+        if (failure) return failure;
+        console.error('[API Error /misubs] Save failed');
         return createJsonResponse(
             {
                 success: false,
-                message: `保存失败: ${e.message || '服务器内部错误，请稍后重试'}`,
+                message: '保存失败，服务器内部错误，请稍后重试',
             },
             500
         );
@@ -506,19 +650,44 @@ export async function handleMisubsSave(request, env) {
  * @returns {Promise<Response>} HTTP响应
  */
 function redactSettingsForResponse(settings = {}) {
-    return {
+    const redacted = {
         ...settings,
         webdavBackup: settings.webdavBackup
             ? { ...settings.webdavBackup, password: '' }
             : settings.webdavBackup,
     };
+    for (const key of [
+        'adminPassword',
+        'ADMIN_PASSWORD',
+        'password',
+        'cookieSecret',
+        'COOKIE_SECRET',
+        'sessionSecret',
+    ])
+        delete redacted[key];
+    return redacted;
 }
 
 export async function handleSettingsGet(env) {
     try {
+        if (isAtomicSubscriptionRequested(env)) {
+            const storage = await getStorageAdapter(env);
+            const snapshot = await storage.readDomainSnapshot();
+            return createJsonResponse({
+                success: true,
+                data: redactSettingsForResponse({
+                    ...defaultSettings,
+                    ...snapshot.settings,
+                    storageType: STORAGE_TYPES.D1,
+                }),
+                version: snapshot.version,
+                subscriptionProtocol: storage.subscriptionProtocol,
+            });
+        }
         const settings = (await SettingsCache.get(env)) || {};
         return createJsonResponse(redactSettingsForResponse({ ...defaultSettings, ...settings }));
     } catch (e) {
+        if (isAtomicSubscriptionRequested(env)) return subscriptionProtocolFailure(e);
         if (isStorageUnavailableError(e)) {
             return createJsonResponse({
                 ...defaultSettings,
@@ -538,7 +707,23 @@ export async function handleSettingsGet(env) {
  */
 export async function handleSettingsSave(request, env) {
     try {
-        const newSettings = await readJsonWithLimit(request, JSON_BODY_LIMITS.large);
+        const payload = await readJsonWithLimit(request, JSON_BODY_LIMITS.large);
+        const metadata = isAtomicSubscriptionRequested(env)
+            ? requireMutationMetadata(payload, request)
+            : null;
+        const newSettings = metadata ? payload.settings : payload;
+        if (
+            metadata &&
+            (!newSettings || typeof newSettings !== 'object' || Array.isArray(newSettings))
+        )
+            throw protocolError('invalid_data');
+        if (
+            isAtomicSubscriptionRequested(env) &&
+            newSettings.storageType !== undefined &&
+            newSettings.storageType !== STORAGE_TYPES.D1
+        ) {
+            return subscriptionProtocolFailure(protocolError('legacy_write_blocked'));
+        }
 
         const reservedPathRoots = new Set([
             'settings',
@@ -611,7 +796,16 @@ export async function handleSettingsSave(request, env) {
         }
 
         const storageAdapter = await getStorageAdapter(env);
-        const oldSettings = (await storageAdapter.get(KV_KEY_SETTINGS)) || {};
+        const snapshot = metadata ? await storageAdapter.readDomainSnapshot() : null;
+        if (snapshot) {
+            if (snapshot.version.epoch !== metadata.baseVersion.epoch)
+                throw protocolError('epoch_conflict');
+            if (snapshot.version.revision !== metadata.baseVersion.revision)
+                throw protocolError('revision_conflict');
+        }
+        const oldSettings = snapshot
+            ? snapshot.settings
+            : (await storageAdapter.get(KV_KEY_SETTINGS)) || {};
         if (newSettings.webdavBackup && oldSettings.webdavBackup) {
             const incomingPassword = newSettings.webdavBackup.password;
             if (incomingPassword === '' || incomingPassword == null) {
@@ -621,12 +815,21 @@ export async function handleSettingsSave(request, env) {
                 };
             }
         }
-        const finalSettings = { ...oldSettings, ...newSettings };
+        let finalSettings = { ...oldSettings, ...newSettings };
+        finalSettings.groupsPageSize = normalizeGroupsPageSize(finalSettings.groupsPageSize);
+        let domainResult;
 
         // 使用存储适配器保存设置
         try {
-            await storageAdapter.put(KV_KEY_SETTINGS, finalSettings);
+            if (metadata) {
+                domainResult = await storageAdapter.commitDomainOperations({
+                    ...metadata,
+                    domains: { settings: finalSettings },
+                });
+                finalSettings = domainResult.snapshot.settings;
+            } else await storageAdapter.put(KV_KEY_SETTINGS, finalSettings);
         } catch (storageError) {
+            if (isAtomicSubscriptionRequested(env)) throw storageError;
             if (isStorageUnavailableError(storageError)) {
                 return createJsonResponse(
                     {
@@ -640,18 +843,26 @@ export async function handleSettingsSave(request, env) {
             throw storageError;
         }
 
-        // 双存储同步：尽量保持 KV / D1 一致
-        try {
-            const d1Adapter = StorageFactory.createAdapter(env, STORAGE_TYPES.D1);
-            await d1Adapter.put(KV_KEY_SETTINGS, finalSettings);
-        } catch (syncError) {
-            console.warn('[API] Failed to sync settings to D1:', syncError?.message || syncError);
-        }
-        try {
-            const kvAdapter = StorageFactory.createAdapter(env, STORAGE_TYPES.KV);
-            await kvAdapter.put(KV_KEY_SETTINGS, finalSettings);
-        } catch (syncError) {
-            console.warn('[API] Failed to sync settings to KV:', syncError?.message || syncError);
+        if (!isAtomicSubscriptionStorage(storageAdapter)) {
+            // 双存储同步：尽量保持 KV / D1 一致
+            try {
+                const d1Adapter = StorageFactory.createAdapter(env, STORAGE_TYPES.D1);
+                await d1Adapter.put(KV_KEY_SETTINGS, finalSettings);
+            } catch (syncError) {
+                console.warn(
+                    '[API] Failed to sync settings to D1:',
+                    syncError?.message || syncError
+                );
+            }
+            try {
+                const kvAdapter = StorageFactory.createAdapter(env, STORAGE_TYPES.KV);
+                await kvAdapter.put(KV_KEY_SETTINGS, finalSettings);
+            } catch (syncError) {
+                console.warn(
+                    '[API] Failed to sync settings to KV:',
+                    syncError?.message || syncError
+                );
+            }
         }
         SettingsCache.clear();
 
@@ -674,15 +885,37 @@ export async function handleSettingsSave(request, env) {
             }
 
             const message = `⚙️ *MiSub 设置更新* ⚙️\n\n您的 MiSub 应用设置已成功更新。`;
-            await sendTgNotification(finalSettings, message);
+            if (metadata) {
+                try {
+                    await sendTgNotification(finalSettings, message);
+                } catch {
+                    console.warn('[API /settings] Post-commit notification unavailable');
+                }
+            } else await sendTgNotification(finalSettings, message);
         }
 
         return createJsonResponse({
             success: true,
             message: '设置已保存',
             data: redactSettingsForResponse(finalSettings),
+            ...(domainResult
+                ? {
+                      version: domainResult.snapshot.version,
+                      receipt: domainResult.receipt,
+                      replayed: domainResult.replayed,
+                      subscriptionProtocol: storageAdapter.subscriptionProtocol,
+                  }
+                : {}),
         });
     } catch (e) {
+        if (isAtomicSubscriptionRequested(env))
+            return subscriptionProtocolFailure(
+                e instanceof SyntaxError
+                    ? protocolError('invalid_data')
+                    : e?.status === 413
+                      ? protocolError('capacity_exceeded')
+                      : e
+            );
         return createErrorResponse('保存设置失败', 500);
     }
 }
@@ -692,8 +925,30 @@ export async function handleSettingsSave(request, env) {
  * @param {Object} env - Cloudflare环境对象
  * @returns {Promise<Response>} HTTP响应
  */
-export async function handleSettingsReset(env) {
+export async function handleSettingsReset(env, request = null) {
     try {
+        if (isAtomicSubscriptionRequested(env)) {
+            const payload = request ? await readJsonWithLimit(request, JSON_BODY_LIMITS.small) : {};
+            const metadata = requireMutationMetadata(payload, request);
+            const storage = await getStorageAdapter(env);
+            const result = await storage.commitDomainOperations({
+                ...metadata,
+                domains: { settings: { storageType: STORAGE_TYPES.D1 } },
+            });
+            SettingsCache.clear();
+            return createJsonResponse({
+                success: true,
+                data: redactSettingsForResponse({
+                    ...defaultSettings,
+                    ...result.snapshot.settings,
+                    storageType: STORAGE_TYPES.D1,
+                }),
+                version: result.snapshot.version,
+                receipt: result.receipt,
+                replayed: result.replayed,
+                subscriptionProtocol: storage.subscriptionProtocol,
+            });
+        }
         const storageAdapter = await getStorageAdapter(env);
 
         // 使用存储适配器删除设置（会自动处理 KV 和 D1 映射）
@@ -721,6 +976,14 @@ export async function handleSettingsReset(env) {
             data: defaultSettings,
         });
     } catch (e) {
+        if (isAtomicSubscriptionRequested(env))
+            return subscriptionProtocolFailure(
+                e instanceof SyntaxError
+                    ? protocolError('invalid_data')
+                    : e?.status === 413
+                      ? protocolError('capacity_exceeded')
+                      : e
+            );
         console.error('[API Error /settings/reset]', e);
         return createErrorResponse('重置设置失败', 500);
     }

@@ -294,7 +294,7 @@ describe('security hardening', () => {
         expect(checkResponse.status).toBe(404);
     });
 
-    it('allows auth debug endpoints only when explicitly enabled for diagnostics', async () => {
+    it('allows auth debug endpoints only for authenticated administrators with diagnostics enabled', async () => {
         const env = {
             MISUB_KV: createKv(),
             COOKIE_SECRET: 'stable-cookie-secret',
@@ -302,8 +302,13 @@ describe('security hardening', () => {
             ENABLE_AUTH_DIAGNOSTICS: 'true',
         };
 
+        const token = await createSignedToken(env.COOKIE_SECRET, String(Date.now()));
         const response = await handleApiRequest(
-            new Request('https://example.com/api/auth_debug'),
+            {
+                url: 'https://example.com/api/auth_debug',
+                method: 'GET',
+                headers: new Headers({ Cookie: `auth_session=${token}` }),
+            },
             env
         );
         const body = await response.json();
@@ -317,7 +322,7 @@ describe('security hardening', () => {
         const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
         const env = {
             ASSETS: createAssets(),
-            MISUB_DB: createD1({ cronSecret: 'cron-secret' }),
+            MISUB_DB: createD1({ cronSecret: 'cron-secret', storageType: 'd1' }),
         };
         const next = vi.fn(async () => new Response('next'));
 
@@ -343,7 +348,7 @@ describe('security hardening', () => {
             expect(queryResponse.status).not.toBe(401);
             expect(bearerResponse.status).not.toBe(401);
             expect(wrongQueryResponse.status).toBe(401);
-            expect(warnSpy).toHaveBeenCalledWith(
+            expect(warnSpy).not.toHaveBeenCalledWith(
                 '[Storage] No KV binding found, using noop adapter'
             );
             expect(infoSpy).toHaveBeenCalledWith(

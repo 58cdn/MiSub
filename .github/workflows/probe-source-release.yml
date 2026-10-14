@@ -1,0 +1,148 @@
+name: Probe source release
+on:
+  pull_request:
+    paths: ['detector/**', '.github/workflows/probe-source-release.yml']
+  push:
+    branches: [main]
+    paths: ['detector/**', '.github/workflows/probe-source-release.yml']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: New immutable Probe version (existing tags are rejected)
+        type: string
+        default: '0.3.0'
+        required: true
+      publish:
+        description: Publish a new release only after native, material and provenance gates pass
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  # A new CI push must never cancel an explicitly requested release mid-upload.
+  group: probe-source-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  fixtures:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Reject publication outside the canonical main branch
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && (github.ref != 'refs/heads/main' || github.repository != '58cdn/MiSub') }}
+        run: |
+          echo 'Publication requires an explicit dispatch on 58cdn/MiSub main.'
+          exit 1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Verify offline build, archive and release-gate fixtures
+        run: python3 -B -m unittest discover -s detector/scripts -p 'test_*.py' -v
+  native:
+    needs: fixtures
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux-amd64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+          - runner: macos-15-intel
+            target: darwin-amd64
+          - runner: macos-15
+            target: darwin-arm64
+          - runner: windows-2022
+            target: windows-amd64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      RELEASE_VERSION: ${{ inputs.version || '0.3.0' }}
+      RELEASE_COMMIT: ${{ github.sha }}
+      RELEASE_TARGET: ${{ matrix.target }}
+      MISUB_PUBLISH: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish && 'true' || 'false' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Verify available Windows race compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $compiler = (Get-Command gcc -ErrorAction Stop).Source
+          & $compiler --version
+          if ($LASTEXITCODE -ne 0) { throw 'C compiler unavailable' }
+          $runtimeLibrary = & $compiler --print-file-name libsynchronization.a
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $runtimeLibrary)) { throw 'MinGW race runtime unavailable' }
+          "CC=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Build exact source and run native tests (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          args=()
+          if [ "$MISUB_PUBLISH" = true ]; then args+=(--require-materials); fi
+          python3 -B detector/scripts/release_gate.py native \
+            --target "$RELEASE_TARGET" --version "$RELEASE_VERSION" \
+            --commit "$RELEASE_COMMIT" --work-dir "$RUNNER_TEMP/probe-source-build" "${args[@]}"
+      - name: Build exact source and run native tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $arguments = @('-B', 'detector/scripts/release_gate.py', 'native',
+            '--target', $env:RELEASE_TARGET, '--version', $env:RELEASE_VERSION,
+            '--commit', $env:RELEASE_COMMIT, '--work-dir', (Join-Path $env:RUNNER_TEMP 'probe-source-build'))
+          if ($env:MISUB_PUBLISH -eq 'true') { $arguments += '--require-materials' }
+          & python @arguments
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Transfer material-verified candidates within this manual run
+        if: ${{ github.event_name == 'workflow_dispatch' && github.repository == '58cdn/MiSub' && github.ref == 'refs/heads/main' && inputs.publish }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: source-candidate-${{ matrix.target }}
+          path: ${{ runner.temp }}/probe-source-build/candidate/*
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+  publish:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == '58cdn/MiSub' && github.ref == 'refs/heads/main' && inputs.publish }}
+    needs: [fixtures, native]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_COMMIT: ${{ github.sha }}
+      MISUB_PUBLISH: 'true'
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: source-candidate-*
+          path: ${{ runner.temp }}/candidates
+          merge-multiple: false
+      - name: Recheck all source, license, executable and bootstrap identities
+        shell: bash
+        run: |
+          python3 -B detector/scripts/release_gate.py assemble \
+            --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" \
+            --inputs-dir "$RUNNER_TEMP/candidates" --output-dir "$RUNNER_TEMP/release"
+      - name: Attest all release bytes using this workflow's short-lived OIDC identity
+        id: provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: ${{ runner.temp }}/release/*
+      - name: Verify authenticated provenance and publish a new immutable version
+        shell: bash
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          python3 -B detector/scripts/release_gate.py publish \
+            --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" \
+            --output-dir "$RUNNER_TEMP/release" --bundle "$ATTESTATION_BUNDLE" \
+            --logs-dir "$RUNNER_TEMP/release-verification"

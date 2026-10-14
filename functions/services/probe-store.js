@@ -1,5 +1,7 @@
 import { digest, originTokenHash, randomToken, probeError, requireValue, publicAgent, sanitizeResult, MAX_ATTEMPTS, LEASE_MS } from './probe-contract.js';
 import { agentManagementFilters } from './probe-agent-management.js';
+import { sanitizeExecutionMetadata, encodeExecutionResult, decodeExecutionResult, executionResultView } from './probe-execution-metadata.js';
+import { normalizeClaimCapabilities, agentRuntimeView } from './probe-agent-runtime.js';
 
 export const PROBE_SCHEMA = [
     `CREATE TABLE IF NOT EXISTS probe_agents (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, last_seen INTEGER NOT NULL DEFAULT 0, revoked_at INTEGER, version TEXT NOT NULL DEFAULT '', platform TEXT NOT NULL DEFAULT '')`,
@@ -21,7 +23,7 @@ const AGENT_SUMMARY_COLUMNS = `a.id,a.name,a.created_at,a.last_seen,a.revoked_at
     SUM(CASE WHEN t.state='running' THEN 1 ELSE 0 END) AS running,
     SUM(CASE WHEN t.state='done' THEN 1 ELSE 0 END) AS done,
     SUM(CASE WHEN t.state IN ('expired','cancelled') THEN 1 ELSE 0 END) AS stopped`;
-function agentSummary(row, checkedAt) {
+function agentSummary(row, checkedAt, runtime = { lastHeartbeatAt: null, capabilities: null }) {
     const age = checkedAt - row.last_seen;
     const status = row.revoked_at !== null ? 'revoked'
         : !Number.isSafeInteger(row.last_seen) || row.last_seen <= 0 || age < 0 ? 'unknown'
@@ -29,7 +31,7 @@ function agentSummary(row, checkedAt) {
     return {
         ...publicAgent(row), status, lastTaskAt: row.last_task_at, lastResultAt: row.last_result_at,
         archivedAt: row.archived_at ?? null, hidden: row.archived_at != null && row.restored_at == null,
-        lastHeartbeatAt: null, capabilities: null,
+        ...runtime,
         taskCounts: { queued: row.queued, running: row.running, done: row.done, stopped: row.stopped }
     };
 }
@@ -38,7 +40,22 @@ function validateManagementPage(offset, limit) {
     requireValue(Number.isSafeInteger(limit) && limit >= 1 && limit <= 50, 'invalid_limit');
 }
 export class ProbeStore {
-    constructor(db, now = Date.now) { this.db = db; this.now = now; }
+    constructor(db, now = Date.now, { runtimeMode = 'off' } = {}) { this.db = db; this.now = now; this.runtimeMode = runtimeMode; }
+    runtimeEnabled() {
+        requireValue(['off', 'record', 'read'].includes(this.runtimeMode), 'probe_runtime_mode_invalid', 503);
+        return this.runtimeMode !== 'off';
+    }
+    async runtimeViews(agents, checkedAt) {
+        this.runtimeEnabled();
+        if (this.runtimeMode !== 'read') return new Map();
+        let rows;
+        try {
+            rows = await this.q(`SELECT agent_id,claim_received_at,last_heartbeat_at,declaration_state,observations_version,capabilities_json
+                FROM probe_agent_runtime_v1 WHERE agent_id IN (SELECT value FROM json_each(?))`, JSON.stringify(agents.map(agent => agent.id))).all();
+        } catch { throw probeError('probe_runtime_unavailable', 503); }
+        const records = new Map(rows.results.map(row => [row.agent_id, row]));
+        return new Map(agents.map(agent => [agent.id, agentRuntimeView(records.get(agent.id), checkedAt, agent.revoked_at)]));
+    }
     async init() {
         requireValue(this.db, 'probe_storage_not_configured', 503);
         if (!initialized.has(this.db)) initialized.set(this.db, this.db.batch(PROBE_SCHEMA.map(s => this.db.prepare(s))).catch(e => { initialized.delete(this.db); throw e; }));
@@ -52,6 +69,7 @@ export class ProbeStore {
         return rows.results.map(publicAgent);
     }
     async agentsOverview(offset = 0, limit = 20, input = {}) {
+        this.runtimeEnabled();
         validateManagementPage(offset, limit);
         const filters = agentManagementFilters(input);
         await this.sweep();
@@ -73,13 +91,15 @@ export class ProbeStore {
         const rows = await this.q(`${selected} SELECT ${AGENT_SUMMARY_COLUMNS},a.archived_at,a.restored_at FROM selected_agents a
             LEFT JOIN probe_tasks t ON t.agent_id=a.id LEFT JOIN probe_jobs j ON j.id=t.job_id
             GROUP BY a.id ORDER BY ${sortColumn} ${filters.direction.toUpperCase()} NULLS LAST,a.id LIMIT ? OFFSET ?`, ...params, limit, offset).all();
+        const runtime = await this.runtimeViews(rows.results, checkedAt);
         return {
-            agents: rows.results.map(row => agentSummary(row, checkedAt)), total,
+            agents: rows.results.map(row => agentSummary(row, checkedAt, runtime.get(row.id))), total,
             nextOffset: offset + rows.results.length < total ? offset + rows.results.length : null,
             checkedAt, onlineWindowMs: PROBE_AGENT_ONLINE_WINDOW_MS, retentionDays: PROBE_RETENTION_DAYS
         };
     }
     async agentHistory(id, offset = 0, limit = 20, state = null) {
+        this.runtimeEnabled();
         validateManagementPage(offset, limit);
         requireValue(state === null || PROBE_HISTORY_STATES.includes(state), 'invalid_state');
         await this.sweep();
@@ -97,10 +117,11 @@ export class ProbeStore {
         const records = rows.results.map(task => ({
             id: task.id, jobId: task.job_id, nodeId: task.node_id, nodeName: task.node_name,
             state: task.state, attempt: task.attempt, createdAt: task.created_at, completedAt: task.completed_at,
-            checks: task.result_json ? JSON.parse(task.result_json) : null
+            ...executionResultView(task.result_json)
         }));
+        const runtime = await this.runtimeViews([row], checkedAt);
         return {
-            agent: agentSummary(row, checkedAt), records, total,
+            agent: agentSummary(row, checkedAt, runtime.get(row.id)), records, total,
             nextOffset: offset + records.length < total ? offset + records.length : null,
             checkedAt, retentionDays: PROBE_RETENTION_DAYS
         };
@@ -194,37 +215,76 @@ export class ProbeStore {
         return { id, replay: false };
     }
     async claim(agent, info = {}) {
+        const recordRuntime = this.runtimeEnabled();
+        const declaration = normalizeClaimCapabilities(info);
         await this.sweep();
         const now = this.now();
         const version = typeof info.version === 'string' && /^[\w.+-]{1,50}$/.test(info.version) ? info.version : '';
         const platform = typeof info.platform === 'string' && /^[a-z0-9_-]{1,30}$/.test(info.platform) ? info.platform : '';
-        await this.q('UPDATE probe_agents SET last_seen=?,version=?,platform=? WHERE id=? AND revoked_at IS NULL', now, version, platform, agent.id).run();
+        const touchAgent = this.q('UPDATE probe_agents SET last_seen=?,version=?,platform=? WHERE id=? AND revoked_at IS NULL', now, version, platform, agent.id);
         const leaseToken = randomToken();
         // Single-statement compare-and-set. At most one live lease per detector identity.
-        const row = await this.q(`UPDATE probe_tasks SET state='running',attempt=attempt+1,lease_hash=?,lease_until=? WHERE id=(
+        const lease = this.q(`UPDATE probe_tasks SET state='running',attempt=attempt+1,lease_hash=?,lease_until=? WHERE id=(
             SELECT t.id FROM probe_tasks t JOIN probe_jobs j ON j.id=t.job_id JOIN probe_agents a ON a.id=t.agent_id
             WHERE t.agent_id=? AND a.revoked_at IS NULL AND j.cancelled_at IS NULL AND j.expires_at>?
             AND (json_extract(j.options_json,'$.observationsVersion') IS NULL OR (json_extract(j.options_json,'$.observationsVersion')=1 AND ?=1))
             AND (t.state='queued' OR (t.state='running' AND t.lease_until<=?)) AND t.attempt<?
             AND NOT EXISTS(SELECT 1 FROM probe_tasks busy WHERE busy.agent_id=? AND busy.state='running' AND busy.lease_until>?)
             ORDER BY j.created_at,t.id LIMIT 1) RETURNING id,job_id,node_payload,attempt`,
-            await digest(leaseToken), now + LEASE_MS, agent.id, now, info.observationsVersion === 1 ? 1 : 0, now, MAX_ATTEMPTS, agent.id, now).first();
+            await digest(leaseToken), now + LEASE_MS, agent.id, now, declaration.observationsVersion === 1 ? 1 : 0, now, MAX_ATTEMPTS, agent.id, now);
+        let row;
+        if (recordRuntime) {
+            try {
+                const result = await this.db.batch([
+                    touchAgent,
+                    this.q(`INSERT INTO probe_agent_runtime_v1(agent_id,claim_received_at,declaration_state,observations_version,capabilities_json)
+                        SELECT id,?,?,?,? FROM probe_agents WHERE id=? AND revoked_at IS NULL
+                        ON CONFLICT(agent_id) DO UPDATE SET claim_received_at=excluded.claim_received_at,
+                            declaration_state=excluded.declaration_state,observations_version=excluded.observations_version,capabilities_json=excluded.capabilities_json`,
+                        now, declaration.state, declaration.observationsVersion,
+                        declaration.capabilities === null ? null : JSON.stringify(declaration.capabilities), agent.id),
+                    lease
+                ]);
+                row = result[2].results[0];
+            } catch { throw probeError('probe_runtime_unavailable', 503); }
+        } else {
+            await touchAgent.run();
+            row = await lease.first();
+        }
         if (!row) return null;
         const job = await this.q('SELECT types_json,options_json FROM probe_jobs WHERE id=?', row.job_id).first();
         return { id: row.id, jobId: row.job_id, node: JSON.parse(row.node_payload), types: JSON.parse(job.types_json), options: JSON.parse(job.options_json), attempt: row.attempt, leaseToken, leaseMs: LEASE_MS };
     }
     async heartbeat(agent, id, leaseToken) {
+        const recordRuntime = this.runtimeEnabled();
         requireValue(typeof leaseToken === 'string' && /^[0-9a-f]{64}$/.test(leaseToken), 'invalid_lease');
         const now = this.now();
-        const row = await this.q(`UPDATE probe_tasks SET lease_until=? WHERE id=? AND agent_id=? AND state='running' AND lease_hash=? AND lease_until>?
+        const renew = this.q(`UPDATE probe_tasks SET lease_until=? WHERE id=? AND agent_id=? AND state='running' AND lease_hash=? AND lease_until>?
             AND job_id IN (SELECT id FROM probe_jobs WHERE cancelled_at IS NULL AND expires_at>?)
             AND EXISTS(SELECT 1 FROM probe_agents WHERE id=? AND revoked_at IS NULL) RETURNING id`,
-            now + LEASE_MS, id, agent.id, await digest(leaseToken), now, now, agent.id).first();
+            now + LEASE_MS, id, agent.id, await digest(leaseToken), now, now, agent.id);
+        let row;
+        if (recordRuntime) {
+            try {
+                // changes() couples each write to the immediately preceding successful
+                // renewal inside the same D1 transaction, including same-millisecond calls.
+                const result = await this.db.batch([
+                    renew,
+                    this.q(`INSERT INTO probe_agent_runtime_v1(agent_id,last_heartbeat_at,declaration_state)
+                        SELECT id,?,'missing' FROM probe_agents WHERE id=? AND revoked_at IS NULL AND changes()=1
+                        ON CONFLICT(agent_id) DO UPDATE SET last_heartbeat_at=excluded.last_heartbeat_at`, now, agent.id),
+                    this.q('UPDATE probe_agents SET last_seen=? WHERE id=? AND revoked_at IS NULL AND changes()=1', now, agent.id)
+                ]);
+                row = result[0].results[0];
+            } catch { throw probeError('probe_runtime_unavailable', 503); }
+        } else {
+            row = await renew.first();
+        }
         requireValue(row, 'lease_lost', 409);
-        await this.q('UPDATE probe_agents SET last_seen=? WHERE id=?', now, agent.id).run();
+        if (!recordRuntime) await this.q('UPDATE probe_agents SET last_seen=? WHERE id=?', now, agent.id).run();
         return { leaseMs: LEASE_MS };
     }
-    async finish(agent, id, leaseToken, input) {
+    async finish(agent, id, leaseToken, input, executionMetadata) {
         requireValue(typeof leaseToken === 'string' && /^[0-9a-f]{64}$/.test(leaseToken), 'invalid_lease');
         const row = await this.q('SELECT t.*,j.types_json,j.options_json,j.created_at AS job_created_at FROM probe_tasks t JOIN probe_jobs j ON j.id=t.job_id WHERE t.id=? AND t.agent_id=?', id, agent.id).first();
         requireValue(row, 'task_not_found', 404);
@@ -234,10 +294,16 @@ export class ProbeStore {
         // lost ACK, instead of changing the hash/freshness on every delivery.
         const result = sanitizeResult(input, JSON.parse(row.types_json), options.services, options, { taskId: id, startedAt: row.job_created_at, now: row.completed_at ?? now });
         if (result.speed?.bytes !== undefined) requireValue(result.speed.bytes <= options.downloadBytes, 'invalid_result_metric');
-        const encoded = JSON.stringify(result);
-        const resultHash = await digest(encoded);
+        const metadata = sanitizeExecutionMetadata(executionMetadata);
+        const resultHash = await digest(JSON.stringify(result));
         const leaseHash = await digest(leaseToken);
-        if (row.state === 'done' && row.lease_hash === leaseHash && row.result_hash === resultHash) return { accepted: true, replay: true };
+        if (row.state === 'done' && row.lease_hash === leaseHash && row.result_hash === resultHash) {
+            const stored = decodeExecutionResult(row.result_json);
+            requireValue(stored.metadataState !== 'invalid'
+                && (stored.metadataState === 'legacy' || JSON.stringify(stored.executionMetadata) === JSON.stringify(metadata)), 'execution_metadata_conflict', 409);
+            return { accepted: true, replay: true };
+        }
+        const encoded = encodeExecutionResult(result, metadata);
         const updated = await this.q(`UPDATE probe_tasks SET state='done',node_payload=NULL,result_json=?,result_hash=?,completed_at=?
             WHERE id=? AND agent_id=? AND state='running' AND lease_hash=? AND lease_until>?
             AND job_id IN (SELECT id FROM probe_jobs WHERE cancelled_at IS NULL AND expires_at>?)
@@ -267,6 +333,6 @@ export class ProbeStore {
         requireValue(job, 'job_not_found', 404);
         const rows = await this.q(`SELECT t.id,t.node_id,t.node_name,t.agent_id,a.name AS agent_name,t.state,t.attempt,t.completed_at,t.result_json
             FROM probe_tasks t JOIN probe_agents a ON a.id=t.agent_id WHERE t.job_id=? ORDER BY t.id LIMIT 200 OFFSET ?`, id, offset).all();
-        return { job, nodes: rows.results.map(({ result_json, ...r }) => ({ ...r, checks: result_json ? JSON.parse(result_json) : null })), nextOffset: offset + rows.results.length < job.total ? offset + rows.results.length : null };
+        return { job, nodes: rows.results.map(({ result_json, ...r }) => ({ ...r, ...executionResultView(result_json) })), nextOffset: offset + rows.results.length < job.total ? offset + rows.results.length : null };
     }
 }

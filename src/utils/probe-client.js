@@ -18,6 +18,7 @@ export const PROBE_SOURCES = [
     { id: 'ippure', label: 'IPPure', experimental: true },
 ];
 export const DEFAULT_PROBE_SOURCES = ['ipify', 'ip_sb', 'ifconfig', 'icanhazip'];
+export const DEFAULT_PROBE_SERVICES = ['openai', 'claude'];
 const MAX_BATCH_BYTES = 768 * 1024;
 export function selectedProbeNodes(nodes, selectedIds, scope) {
     const selected = selectedIds instanceof Set ? selectedIds : new Set(selectedIds || []);

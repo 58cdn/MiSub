@@ -13,7 +13,8 @@ const getStorageType = vi.fn();
 const settingsCacheGet = vi.fn();
 const clearAllNodeCaches = vi.fn();
 
-vi.mock('../../functions/storage-adapter.js', () => ({
+vi.mock('../../functions/storage-adapter.js', async (importOriginal) => ({
+    ...(await importOriginal()),
     StorageFactory: {
         createAdapter: (...args) => createAdapter(...args),
         getStorageType: (...args) => getStorageType(...args),
@@ -71,6 +72,8 @@ describe('api-handler storage helper usage', () => {
 
         getAllSubscriptions.mockReset();
         getAllProfiles.mockReset();
+        getAllSubscriptions.mockResolvedValue([]);
+        getAllProfiles.mockResolvedValue([]);
         get.mockReset();
         put.mockReset();
         putSubscription.mockReset();

@@ -2,7 +2,7 @@
 
 MiSub opens a five-minute installation window from Settings → Data & integrations →
 Add / manage detectors. The window ID is a public correlation value, not a credential.
-An installed detector starts a device request using the HTTPS site and window ID.
+The installation command downloads and verifies a compatible detector, which starts a device request using the HTTPS site and window ID.
 Its private device secret remains on that client; the client displays a short code.
 An authenticated administrator enters the short code, reviews the site and declared
 device information, then explicitly approves the request. Approval is required before
@@ -42,17 +42,12 @@ the exchange alone does not prove connectivity or a successful node check.
 
 ## Installation and release boundaries
 
-The wizard can show the HTTPS site, public installation-window ID and an inspectable
-command for an already installed detector. Package availability is explicit. Current
-binary distribution remains paused; an old release is not presented as the new
-pairing-capable client. Linux/macOS user installation, Windows support and distribution
-auditing are separate PRs. No system service, autostart, public listener, system proxy,
-TUN, elevation, linger configuration, signing credential or production enrollment is
-created during repository acceptance.
+The wizard uses the verified [MiSub Probe 0.2.0 release](https://github.com/58cdn/MiSub/releases/tag/probe-v0.2.0), built from MiSub commit `9ccee76c3cab149f34dca96c304310c9574c0d29`. Its inspectable command downloads fixed release assets, checks their size, SHA256 and client capabilities, then requests pairing approval before private configuration, user installation and explicit startup. Linux/macOS use the verified Bash bootstrap; Windows downloads the raw EXE and invokes native `--setup`. It does not require a pre-existing executable. Unknown, failed or unavailable release metadata keeps the installation entry disabled.
+
+The older `probe-v0.1.0` lacks these pairing and installation commands. Direct `--pair` still only saves the private configuration and exits; direct `--install` only installs, and `--start` explicitly starts an installed client. Resume uses an existing private configuration without another pairing request or expired window. No system service, login startup, public listener, system proxy, TUN, elevation, linger configuration or execution-policy change is part of this flow.
 
 ## Acceptance
 
 Use SQLite fixtures for atomic exchange, identity-limit races, cancellation/expiry,
 replay, origin binding and persistent budgets. Use HTTP/TLS fixtures for the CLI and
-browser fixtures for the wizard. Live pairing, service installation and release
-publication require separate operational authorization.
+browser fixtures for the wizard. Live pairing, persistent identity creation, service startup and actual-node/provider checks require separate explicit user action or authorization. Release availability and Pages deployment do not establish this acceptance.

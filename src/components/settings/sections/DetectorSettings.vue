@@ -10,8 +10,11 @@
     } from 'vue';
     import Modal from '@/components/forms/Modal.vue';
     import NodeObservationReport from '@/components/nodes/NodeObservationReport.vue';
+    import ProbeExecutionMetadata from '@/components/nodes/ProbeExecutionMetadata.vue';
     import DetectorPairingWizard from './DetectorPairingWizard.vue';
     import DetectorTable from './DetectorTable.vue';
+    import DetectorRuntimeDeclaration from './DetectorRuntimeDeclaration.vue';
+    import { validRuntimeTimestamp } from '@/utils/detector-runtime-view.js';
     import {
         DETECTOR_COLUMNS,
         readDetectorView,
@@ -146,10 +149,14 @@
         { key: 'lastTaskAt', label: L('最近任务创建', 'Latest task created'), sortable: true },
         { key: 'lastResultAt', label: L('最近结果回传', 'Latest result received'), sortable: true },
         { key: 'version', label: L('版本 / 平台', 'Version / platform'), sortable: true },
-        { key: 'capabilities', label: L('上报能力', 'Reported capabilities'), sortable: false },
+        {
+            key: 'capabilities',
+            label: L('最近记录的领单声明', 'Most recently recorded claim declaration'),
+            sortable: false,
+        },
         {
             key: 'lastHeartbeatAt',
-            label: L('独立心跳时间', 'Separate heartbeat time'),
+            label: L('最近成功续租', 'Latest successful lease renewal'),
             sortable: false,
         },
     ]);
@@ -751,10 +758,14 @@
             }}
         </div>
         <DetectorPairingWizard
+            :installation="capabilities?.installation"
+            :installation-loading="initializing"
+            :installation-error="!!initializationError"
             :enabled="
                 storageReady && !mutationBusy && !showEnrollment && !showArchive && !showRevoke
             "
             @agents-changed="reloadAfterMutation"
+            @refresh-installation="initialize"
         />
         <details class="detector-card">
             <summary
@@ -1118,6 +1129,7 @@
                 :agent-stale="agentStale"
                 :date="date"
                 :iso="iso"
+                :checked-at="overview.checkedAt"
                 @sort="changeSort"
                 @history="openHistory"
                 @revoke="requestRevoke"
@@ -1196,8 +1208,46 @@
                             </dd>
                         </div>
                         <div>
-                            <dt>{{ L('上报能力', 'Reported capabilities') }}</dt>
-                            <dd>{{ L('未知（尚未上报）', 'Unknown (not reported)') }}</dd>
+                            <dt>{{ L('最近成功续租', 'Latest successful lease renewal') }}</dt>
+                            <dd>
+                                <time
+                                    v-if="
+                                        validRuntimeTimestamp(
+                                            agent.lastHeartbeatAt,
+                                            overview.checkedAt
+                                        )
+                                    "
+                                    :datetime="iso(agent.lastHeartbeatAt)"
+                                    data-testid="detector-lease-renewal"
+                                    >{{ date(agent.lastHeartbeatAt) }}</time
+                                >
+                                <span v-else>{{
+                                    L('未知（无可用记录）', 'Unknown (no usable record)')
+                                }}</span>
+                                <span class="block text-gray-600 dark:text-gray-400">{{
+                                    L(
+                                        '仅记录任务成功续租，不表示空闲时有独立心跳。',
+                                        'Records successful task lease renewal; it does not indicate an independent idle heartbeat.'
+                                    )
+                                }}</span>
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>
+                                {{
+                                    L(
+                                        '最近记录的领单声明',
+                                        'Most recently recorded claim declaration'
+                                    )
+                                }}
+                            </dt>
+                            <dd>
+                                <DetectorRuntimeDeclaration
+                                    :capabilities="agent.capabilities"
+                                    :checked-at="overview.checkedAt"
+                                    :revoked="!!agent.revokedAt || agent.status === 'revoked'"
+                                />
+                            </dd>
                         </div>
                     </dl>
                     <p
@@ -1393,6 +1443,10 @@
                             date(record.completedAt)
                         }}</time>
                     </p>
+                    <ProbeExecutionMetadata
+                        :metadata="record.executionMetadata"
+                        :state="record.state"
+                    />
                     <div
                         v-for="[type, check] in checks(record)"
                         :key="type"

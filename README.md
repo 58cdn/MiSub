@@ -35,6 +35,7 @@ It is designed for personal and small-team usage: simple operations, clear clien
 
 ## Features
 
+- **Optional node diagnostics**: use a separate MiSub Probe to measure proxy requests and collect exit-IP, country and provider evidence from selected nodes, with explicit credential-sharing consent.
 - **Profiles**: combine upstream subscriptions and manual nodes into scenario-specific subscription profiles.
 - **Subscription and node management**: manage airport subscriptions, manual nodes, groups, ordering, remarks, traffic, and expiry data.
 - **Operator Chain**: process nodes with filter, regex rename, script/DSL execution, sorting, and smart deduplication steps.
@@ -160,6 +161,10 @@ npm run preview
 5. Copy the generated client link or QR code.
 6. Import the link into your preferred proxy client.
 
+For optional node diagnostics, open **Settings → Data & integrations → Add / manage detectors → Install and connect a detector**. Select the device's terminal, open an installation window, and copy the complete command to that device. It downloads and verifies the client; review the short code, site and session fingerprint in MiSub before approving installation and startup. Confirm the first server communication, then select nodes and approve credential sharing for a diagnostic task. See the [installation guide](docs/detector-one-command-install.md) and [node diagnostics guide](docs/node-probes.md).
+
+[MiSub Probe 0.2.0](https://github.com/58cdn/MiSub/releases/tag/probe-v0.2.0) is versioned independently of the MiSub web application. The older `probe-v0.1.0` does not support the pairing and installation commands used by this guide.
+
 ## Operator Chain
 
 Profiles can inherit a global default operator chain or define their own processing flow. Available operators include:
@@ -183,6 +188,10 @@ See [Operator Chain Guide](docs/OPERATOR_CHAIN_GUIDE.md) for details.
 
 ## Documentation
 
+- [Node Diagnostics Guide](docs/node-probes.md)
+- [One-command Detector Installation](docs/detector-one-command-install.md)
+- [Detector Platforms and Advanced CLI](detector/README.md)
+- [Detector Source Builds and Release Verification](docs/detector-source-release.md)
 - [Chinese README](README-zh.md)
 - [External API Usage Guide](docs/external-management-api-usage.md)
 - [External API Reference](docs/external-management-api.md)

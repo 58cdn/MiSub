@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+    </head>
+    <body class="bg-gray-50 p-3 dark:bg-gray-950">
+        <div id="app"></div>
+        <script type="module">
+            import { createApp, h } from 'vue';
+            import { createPinia } from 'pinia';
+            import { useDataStore } from '/src/stores/useDataStore.js';
+            import { useManualNodes } from '/src/composables/useManualNodes.js';
+            import Panel from '/src/components/nodes/ManualNodePanel.vue';
+            import { createI18n } from '/src/i18n/index.js';
+            import '/src/assets/main.css';
+            const query = new URLSearchParams(location.search);
+            const ids = ['reachable', 'restricted', 'udp', 'dns', 'refused', 'timeout'];
+            createApp({
+                setup() {
+                    const store = useDataStore();
+                    store.hydrateFromData({
+                        misubs: ids.map((id) => ({
+                            id,
+                            name: `${id} · fixture`,
+                            url: 'trojan://fixture-only@example.invalid:443',
+                            enabled: true,
+                        })),
+                        profiles: [],
+                        ruleTemplates: [],
+                        config: {},
+                    });
+                    store.subscriptions.push({
+                        id: 'unsaved',
+                        name: 'unsaved · fixture',
+                        url: 'trojan://fixture-only@example.invalid:443',
+                        enabled: true,
+                    });
+                    const state = useManualNodes(() => {});
+                    return () =>
+                        h(Panel, {
+                            manualNodes: state.manualNodes.value,
+                            paginatedManualNodes: state.manualNodes.value,
+                            currentPage: 1,
+                            totalPages: 1,
+                            searchTerm: '',
+                            viewMode: query.get('view') || 'card',
+                            groups: [],
+                            pingResults: state.pingResults.value,
+                            pingingNodes: state.pingingNodes.value,
+                            onPing: state.pingNodeId,
+                            onPingAll: state.pingAllNodes,
+                        });
+                },
+            })
+                .use(createPinia())
+                .use(createI18n({ initialLocale: query.get('locale') || 'en-US' }))
+                .mount('#app');
+        </script>
+    </body>
+</html>

@@ -6,6 +6,7 @@
         PROBE_SERVICES,
         PROBE_SOURCES,
         DEFAULT_PROBE_SOURCES,
+        DEFAULT_PROBE_SERVICES,
         selectedProbeNodes,
         makeProbePlan,
         probeRequest,
@@ -13,6 +14,7 @@
     } from '@/utils/probe-client.js';
 
     import NodeObservationReport from './NodeObservationReport.vue';
+    import ProbeExecutionMetadata from './ProbeExecutionMetadata.vue';
 
     const props = defineProps({
         nodes: { type: Array, default: () => [] },
@@ -37,7 +39,7 @@
         jobs = ref([]),
         agentIds = ref([]);
     const types = ref(['format', 'tcp', 'proxy']),
-        services = ref(['netflix', 'youtube', 'openai']);
+        services = ref([...DEFAULT_PROBE_SERVICES]);
     const sources = ref([...DEFAULT_PROBE_SOURCES]),
         now = ref(Date.now());
     const observationsAvailable = computed(() => capabilities.value?.observationsVersion === 1);
@@ -525,9 +527,12 @@
                         <template v-if="types.includes('unlock')">
                             <div class="probe-options">
                                 <label v-for="service in PROBE_SERVICES" :key="service"
-                                    ><input v-model="services" type="checkbox" :value="service" />{{
-                                        service
-                                    }}</label
+                                    ><input
+                                        v-model="services"
+                                        type="checkbox"
+                                        :value="service"
+                                        :data-testid="`probe-service-${service}`"
+                                    />{{ service }}</label
                                 >
                             </div>
                             <p class="probe-warning">
@@ -707,83 +712,99 @@
                             </tr>
                         </thead>
                         <tbody>
-                            <tr v-for="(row, index) in rows" :key="row.id || index">
-                                <th scope="row">
-                                    {{ row.node_name || row.name
-                                    }}<small>{{ row.agent_name || 'MiSub' }}</small>
-                                </th>
-                                <td>
-                                    {{ statusLabel(row.state)
-                                    }}<small>{{ date(row.completed_at) }}</small>
-                                </td>
-                                <td v-for="type in PROBE_TYPES" :key="type">
-                                    <span
-                                        :class="[
-                                            'probe-state',
-                                            `probe-state-${row.checks?.[type]?.status || 'unknown'}`,
-                                        ]"
-                                        :title="row.checks?.[type]?.code"
-                                        >{{ checkLabel(row.checks?.[type]) }}</span
-                                    >
-                                    <small v-if="row.checks?.[type]?.latencyMs != null"
-                                        >{{ row.checks[type].latencyMs }} ms</small
-                                    >
-                                    <small v-if="row.checks?.[type]?.bytesPerSecond != null"
-                                        >{{ probeBytes(row.checks[type].bytesPerSecond) }}/s ·
-                                        {{ probeBytes(row.checks[type].bytes) }}</small
-                                    >
-                                    <small v-if="row.checks?.[type]?.httpStatus != null"
-                                        >HTTP {{ row.checks[type].httpStatus }}</small
-                                    >
-                                    <small v-if="row.checks?.[type]?.retryAfterSeconds != null"
-                                        >{{ L('稍后重试', 'Retry after') }}
-                                        {{ row.checks[type].retryAfterSeconds }} s</small
-                                    >
-                                    <details v-if="row.checks?.[type]?.services?.length">
-                                        <summary>{{ L('服务明细', 'Services') }}</summary>
-                                        <div
-                                            v-for="s in row.checks[type].services"
-                                            :key="s.service"
+                            <template v-for="(row, index) in rows" :key="row.id || index">
+                                <tr>
+                                    <th scope="row">
+                                        {{ row.node_name || row.name
+                                        }}<small>{{ row.agent_name || 'MiSub' }}</small>
+                                    </th>
+                                    <td>
+                                        {{ statusLabel(row.state)
+                                        }}<small>{{ date(row.completed_at) }}</small>
+                                    </td>
+                                    <td v-for="type in PROBE_TYPES" :key="type">
+                                        <span
+                                            :class="[
+                                                'probe-state',
+                                                `probe-state-${row.checks?.[type]?.status || 'unknown'}`,
+                                            ]"
+                                            :title="row.checks?.[type]?.code"
+                                            >{{ checkLabel(row.checks?.[type]) }}</span
                                         >
-                                            {{ s.service }}: {{ checkLabel(s)
-                                            }}<small
-                                                >{{ s.code
-                                                }}<span v-if="s.httpStatus != null">
-                                                    · HTTP {{ s.httpStatus }}</span
-                                                ><span v-if="s.retryAfterSeconds != null">
-                                                    · {{ L('稍后重试', 'Retry after') }}
-                                                    {{ s.retryAfterSeconds }} s</span
-                                                ></small
+                                        <small v-if="row.checks?.[type]?.latencyMs != null"
+                                            >{{ row.checks[type].latencyMs }} ms</small
+                                        >
+                                        <small v-if="row.checks?.[type]?.bytesPerSecond != null"
+                                            >{{ probeBytes(row.checks[type].bytesPerSecond) }}/s ·
+                                            {{ probeBytes(row.checks[type].bytes) }}</small
+                                        >
+                                        <small v-if="row.checks?.[type]?.httpStatus != null"
+                                            >HTTP {{ row.checks[type].httpStatus }}</small
+                                        >
+                                        <small v-if="row.checks?.[type]?.retryAfterSeconds != null"
+                                            >{{ L('稍后重试', 'Retry after') }}
+                                            {{ row.checks[type].retryAfterSeconds }} s</small
+                                        >
+                                        <details v-if="row.checks?.[type]?.services?.length">
+                                            <summary>{{ L('服务明细', 'Services') }}</summary>
+                                            <div
+                                                v-for="s in row.checks[type].services"
+                                                :key="s.service"
                                             >
-                                            <small v-if="s.checkedAt"
-                                                ><time :datetime="s.checkedAt">{{
-                                                    date(s.checkedAt)
-                                                }}</time></small
-                                            >
-                                            <small v-else>{{
-                                                L('来源时间未提供', 'Provider time unavailable')
-                                            }}</small>
-                                        </div>
-                                    </details>
-                                    <details
-                                        v-if="row.checks?.[type]?.report"
-                                        data-testid="probe-observation-details"
+                                                {{ s.service }}: {{ checkLabel(s)
+                                                }}<small
+                                                    >{{ s.code
+                                                    }}<span v-if="s.httpStatus != null">
+                                                        · HTTP {{ s.httpStatus }}</span
+                                                    ><span v-if="s.retryAfterSeconds != null">
+                                                        · {{ L('稍后重试', 'Retry after') }}
+                                                        {{ s.retryAfterSeconds }} s</span
+                                                    ></small
+                                                >
+                                                <small v-if="s.checkedAt"
+                                                    ><time :datetime="s.checkedAt">{{
+                                                        date(s.checkedAt)
+                                                    }}</time></small
+                                                >
+                                                <small v-else>{{
+                                                    L('来源时间未提供', 'Provider time unavailable')
+                                                }}</small>
+                                            </div>
+                                        </details>
+                                        <details
+                                            v-if="row.checks?.[type]?.report"
+                                            data-testid="probe-observation-details"
+                                        >
+                                            <summary>
+                                                {{ L('来源明细', 'Sources')
+                                                }}<span
+                                                    v-if="row.checks[type].report.conflicts?.length"
+                                                >
+                                                    ·
+                                                    {{
+                                                        L('存在冲突', 'Conflicting evidence')
+                                                    }}</span
+                                                >
+                                            </summary>
+                                            <NodeObservationReport
+                                                :report="row.checks[type].report"
+                                                :now="now"
+                                            />
+                                        </details>
+                                    </td>
+                                </tr>
+                                <tr v-if="viewedJob">
+                                    <td
+                                        :colspan="PROBE_TYPES.length + 2"
+                                        class="probe-execution-cell"
                                     >
-                                        <summary>
-                                            {{ L('来源明细', 'Sources')
-                                            }}<span
-                                                v-if="row.checks[type].report.conflicts?.length"
-                                            >
-                                                · {{ L('存在冲突', 'Conflicting evidence') }}</span
-                                            >
-                                        </summary>
-                                        <NodeObservationReport
-                                            :report="row.checks[type].report"
-                                            :now="now"
+                                        <ProbeExecutionMetadata
+                                            :metadata="row.executionMetadata"
+                                            :state="row.state"
                                         />
-                                    </details>
-                                </td>
-                            </tr>
+                                    </td>
+                                </tr>
+                            </template>
                         </tbody>
                     </table>
                 </div>
@@ -1002,6 +1023,9 @@
     }
     .probe-table-scroll {
         overflow: auto;
+    }
+    .probe-execution-cell .execution-metadata {
+        max-width: min(42rem, calc(100vw - 6rem));
     }
     .probe-panel table {
         border-collapse: collapse;

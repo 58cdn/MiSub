@@ -387,7 +387,9 @@ export async function onRequest(context) {
         // Sliding session renewal: refresh active sessions after seven days.
         // Login and logout manage the cookie themselves and must not be renewed here.
         const isAuthCookieManagementRoute =
-            url.pathname === '/api/login' || url.pathname === '/api/logout';
+            url.pathname === '/api/login' ||
+            url.pathname === '/api/logout' ||
+            url.pathname.startsWith('/api/session/');
         if (isAuthCookieManagementRoute || request.method === 'OPTIONS') {
             return response;
         }
@@ -398,9 +400,9 @@ export async function onRequest(context) {
         return createJsonResponse(
             {
                 error: 'Internal Server Error',
-                message: error.message,
+                message: error.status === 503 ? 'Session service unavailable' : error.message,
             },
-            500
+            error.status === 503 ? 503 : 500
         );
     }
 }
