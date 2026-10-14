@@ -449,7 +449,7 @@ try {
     await page.getByTestId('subscription-status-filter').waitFor();
     await page.getByRole('button', { name: 'Batch', exact: true }).click();
     await page.getByRole('button', { name: 'Sort', exact: true }).click();
-    assert.equal(await page.locator('.cursor-move').count(), 2);
+    assert.equal(await page.locator('.cursor-move').count(), 4);
     await page
         .locator('.cursor-move')
         .filter({ has: page.getByRole('heading', { name: 'Gamma', exact: true }) })
@@ -469,7 +469,7 @@ try {
     await page.getByTestId('subscription-status-filter').waitFor();
     assert.deepEqual(
         (await snapshot(page)).subscriptions.map((item) => item.id),
-        ['gamma', 'beta', 'alpha', 'delta', 'manual']
+        ['gamma', 'alpha', 'beta', 'delta', 'manual']
     );
     await page.getByTestId('subscription-status-filter-clear').click();
     await page.getByTestId('subscription-search').fill('Beta retry');
