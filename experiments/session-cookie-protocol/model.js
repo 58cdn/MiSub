@@ -111,7 +111,7 @@ export class SessionCookieModel {
     validCandidates(cookie) {
         return this.provenCandidates(cookie).filter((candidate) => candidate.active === 1);
     }
-    revocationTargets(ids, cookie, tickets = []) {
+    revocationTargets(ids, cookie, tickets = [], limits) {
         if (
             !Array.isArray(ids) ||
             ids.length > 8 ||
@@ -120,7 +120,7 @@ export class SessionCookieModel {
         )
             throw fail(400, 'invalid_targets');
         const proven = new Set([
-            ...this.provenCandidates(cookie).map((item) => item.id),
+            ...this.provenCandidates(cookie, limits).map((item) => item.id),
             ...tickets.map((item) => item.sid),
         ]);
         return ids.filter((id) => {
@@ -254,15 +254,16 @@ export class SessionCookieModel {
     }
     captureRecovery(cookie = '', known = {}) {
         return this.transaction(() => {
-            const presented = this.provenCandidates(cookie, {
+            const limits = {
                 maxBytes: 16384,
                 maxCandidates: 32,
-            }).map((item) => item.id);
+            };
+            const presented = this.provenCandidates(cookie, limits).map((item) => item.id);
             if (!Array.isArray(known.tickets || []) || (known.tickets || []).length > 16)
                 throw fail(400, 'target_limit');
             const knownTickets = (known.tickets || []).map((proof) => this.ticket(proof));
             // Explicit browser metadata remains part of the scope even when its Cookie was evicted.
-            const explicit = this.revocationTargets(known.ids || [], cookie, knownTickets);
+            const explicit = this.revocationTargets(known.ids || [], cookie, knownTickets, limits);
             const ids = [...new Set([...presented, ...explicit])];
             const tickets = this.operationCookies(cookie).flatMap((proof) => {
                 const row = this.sql.prepare('SELECT * FROM tickets WHERE id=?').get(proof.id);

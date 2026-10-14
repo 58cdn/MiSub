@@ -123,6 +123,24 @@ export function createPendingLoginRegistry(indexedDB, name = 'misub-session-prot
                 return true;
             }),
         retryRecovery: (id) => transact((state) => structuredClone(state.recoveries[id])),
+        resumeLoginAfterUnconfirmedRecovery: (id) =>
+            transact((state) => {
+                const recovery = state.recoveries[id];
+                if (
+                    !recovery ||
+                    recovery.snapshot ||
+                    recovery.knownIds.length ||
+                    recovery.tickets.length ||
+                    state.known.length ||
+                    Object.values(state.intents).some((item) => item.ticket)
+                )
+                    throw new Error('recovery_evidence_must_be_preserved');
+                // Explicitly abandon only unbound local intents, never claim logout.
+                // Late ticket callbacks cannot bind or confirm a deleted random intent.
+                for (const intentId of recovery.intentIds) delete state.intents[intentId];
+                delete state.recoveries[id];
+                return { logoutConfirmed: false, freshLoginRequired: true };
+            }),
         completeRecovery: (id) =>
             transact((state) => {
                 const recovery = state.recoveries[id];

@@ -182,4 +182,16 @@ describe('server recovery and activation boundary', () => {
             model.login({ ticket: session.ticket, password: 'synthetic-password' })
         ).toMatchObject({ committed: true, active: false, setCookie: null });
     });
+    it('recovers nine live SID cookies above the ordinary authentication admission limit', () => {
+        const sessions = Array.from({ length: 9 }, () => pending());
+        for (const session of sessions) model.acknowledge(session.ticket, session.cookie);
+        const cookies = sessions.map((session) => session.cookie).join('; ');
+        expect(model.maintenance(cookies).staleIds).toHaveLength(0);
+        expect(() => model.authenticate(cookies)).toThrow('cookie_limit');
+        const snapshot = model.captureRecovery(cookies, { ids: [sessions[0].login.id] });
+        expect(snapshot.ids).toHaveLength(9);
+        expect(model.logoutRecovered(snapshot).success).toBe(true);
+        for (const session of sessions)
+            expect(model.authenticate(session.cookie).authenticated).toBe(false);
+    });
 });

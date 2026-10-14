@@ -222,13 +222,19 @@ async function resetRegistry(page) {
 }
 async function recoveryLogout(page) {
     const operation = await registry(page, 'beginRecovery');
-    const response = await rpc(page, '/capture-recovery', {
-        ids: operation.knownIds,
-        tickets: operation.tickets,
-    });
-    if (response.status !== 200) return { operation, response };
-    const snapshot = response.body;
-    assert.equal(await registry(page, 'bindRecovery', [operation.id, snapshot]), true);
+    let snapshot = operation.snapshot;
+    if (!snapshot) {
+        const response = await rpc(page, '/capture-recovery', {
+            ids: operation.knownIds,
+            tickets: operation.tickets,
+        });
+        if (response.status !== 200) return { operation, response };
+        await registry(page, 'bindRecovery', [operation.id, response.body]);
+        // A concurrent tab may have bound the same recovery first. Always use
+        // that persisted snapshot instead of expanding an already captured scope.
+        snapshot = (await registry(page, 'retryRecovery', [operation.id]))?.snapshot;
+        if (!snapshot) return { operation, response: { status: 409 } };
+    }
     const logout = await rpc(page, '/logout-recovered', snapshot);
     if (logout.status === 200) await registry(page, 'completeRecovery', [operation.id]);
     return { operation, snapshot, response: logout };
@@ -569,8 +575,16 @@ try {
         await page.waitForFunction(() => window.ready);
         const saved = await registry(page, 'retryRecovery', [recovered.operation.id]);
         assert.deepEqual(saved.snapshot, recovered.snapshot);
-        assert.equal((await rpc(page, '/logout-recovered', saved.snapshot)).status, 200);
-        await registry(page, 'completeRecovery', [saved.id]);
+        const captures = report.requests.filter(
+            (request) => request.path === '/capture-recovery'
+        ).length;
+        const retried = await recoveryLogout(page);
+        assert.equal(retried.response.status, 200);
+        assert.deepEqual(retried.snapshot, saved.snapshot);
+        assert.equal(
+            report.requests.filter((request) => request.path === '/capture-recovery').length,
+            captures
+        );
         const current = await login(other);
         assert.equal((await rpc(page, '/logout-recovered', saved.snapshot)).status, 200);
         assert.deepEqual((await rpc(other, '/protected')).body.ids, [current.response.body.id]);
@@ -613,6 +627,65 @@ try {
         assert.ok((await registry(page, 'begin')).id);
         report.checks.push(
             'Unbound ticket responses count toward the 16-operation admission budget; recovery cancels their Cookie-backed server operations and releases the budget.'
+        );
+    }
+    for (const lateTicket of [false, true]) {
+        const page = await fixture();
+        let delayed, held, oldIntent;
+        for (let i = 0; i < 16; i++) {
+            const intent = await registry(page, 'begin');
+            if (lateTicket && i === 0) {
+                oldIntent = intent;
+                held = gate('/ticket', 'before');
+                delayed = rpc(page, '/ticket');
+                await held.reached;
+            } else {
+                const failed = gate('/ticket', 'unavailable');
+                assert.equal((await rpc(page, '/ticket')).status, 503);
+                await failed.finished;
+            }
+        }
+        await assert.rejects(registry(page, 'begin'), /pending_login_limit/);
+        const unconfirmed = await logout(page);
+        assert.equal(unconfirmed.response.status, 409);
+        const resumed = await registry(page, 'resumeLoginAfterUnconfirmedRecovery', [
+            unconfirmed.operation.id,
+        ]);
+        assert.deepEqual(resumed, { logoutConfirmed: false, freshLoginRequired: true });
+        if (lateTicket) {
+            held.release();
+            const late = await delayed;
+            assert.equal(await registry(page, 'bind', [oldIntent.id, late.body]), false);
+            assert.equal(await registry(page, 'canConfirm', [oldIntent.id]), false);
+        }
+        assert.equal((await rpc(page, '/protected')).status, 401);
+        await login(page);
+        assert.equal((await rpc(page, '/protected')).status, 200);
+        assert.equal((await logout(page)).response.status, 200);
+        assert.equal((await rpc(page, '/protected')).status, 401);
+        report.checks.push(
+            `16 unbound issuance failures (${lateTicket ? 'one late ticket' : 'no ticket'}): explicit fresh-login recovery releases local admission without claiming logout or authorizing a late callback.`
+        );
+    }
+    {
+        const page = await fixture();
+        const prepared = await prepare(page);
+        const recovery = await registry(page, 'beginRecovery');
+        await assert.rejects(
+            registry(page, 'resumeLoginAfterUnconfirmedRecovery', [recovery.id]),
+            /recovery_evidence_must_be_preserved/
+        );
+        assert.equal((await logout(page)).response.status, 200);
+        assert.equal((await rpc(page, '/login', prepared.request)).status, 409);
+        await login(page);
+        const active = await registry(page, 'beginRecovery');
+        await assert.rejects(
+            registry(page, 'resumeLoginAfterUnconfirmedRecovery', [active.id]),
+            /recovery_evidence_must_be_preserved/
+        );
+        assert.equal((await logout(page)).response.status, 200);
+        report.checks.push(
+            'Explicit fresh-login recovery cannot discard a known active SID or a persisted cancellation capability.'
         );
     }
     assert.deepEqual(report.external, []);
