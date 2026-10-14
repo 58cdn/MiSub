@@ -498,10 +498,10 @@ try {
     await page.getByTestId('subscription-search').waitFor();
     assert.deepEqual(
         (await snapshot(page)).subscriptions.map((item) => item.id),
-        ['delta', 'gamma', 'beta', 'alpha', 'manual']
+        ['delta', 'gamma', 'alpha', 'beta', 'manual']
     );
     report.checks.push(
-        'Actual status-filtered drag reorders only visible positions; search-to-sort intentionally shows all four sources, preserves the manual node/profile references, and reload confirms order.'
+        'Entering sort from status or search filters shows all four sources; real drag/save/reload confirms complete order while preserving the manual node and profile references.'
     );
 
     await page.goto(`${origin}/dashboard/subscriptions`);
