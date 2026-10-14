@@ -326,6 +326,8 @@ paths:
         The creation timestamp is the job's enqueue time, not a probe execution start time.
         Completion is the server's accepted result or stop time, not an inferred provider observation time.
         checks contains only sanitized persisted evidence; no node URI, configuration, token or lease.
+        executionMetadata is the immutable detector declaration accepted with that task's completion,
+        or null when absent or invalid. It is not the detector's current identity or kernel attestation.
         An optional state filters records, total and nextOffset. The agent summary retains all task states.
       parameters:
         - { $ref: '#/components/parameters/ManagementOffset' }
@@ -459,7 +461,9 @@ paths:
         '200':
           description: |
             data.job has public job metadata; data.nodes has at most 200 records:
-            id, node_id, node_name, agent_id, agent_name, state, attempt, completed_at, checks.
+            id, node_id, node_name, agent_id, agent_name, state, attempt, completed_at, checks, executionMetadata.
+            executionMetadata follows ExecutionMetadata or is null for absent/invalid snapshots.
+            It describes the accepted completion, not the detector's current build or proven execution.
             nextOffset is null at the end. No node URI, proxy configuration, token or lease.
           content:
             application/json:
@@ -537,6 +541,11 @@ paths:
         Unknown/passed unlock results require one entry for every requested service.
         Missing measurements are not zero. Never send raw errors, bodies or credentials.
         Observation tasks require one versioned report with every selected source, bound to the task ID.
+        Optional executionMetadata is a sibling of checks, never a field in an input check.
+        The first accepted completion stores its sanitized declaration atomically with checks.
+        Replays of a snapshot require the same canonical metadata; missing or changed metadata
+        returns 409 execution_metadata_conflict. Legacy completions may ACK without backfilling metadata.
+        Invalid metadata returns 400 invalid_execution_metadata. See probe-execution-metadata.md.
       requestBody:
         required: true
         content:
@@ -548,6 +557,10 @@ paths:
                   required: [checks]
                   properties:
                     checks: { $ref: '#/components/schemas/Checks' }
+                    executionMetadata:
+                      oneOf:
+                        - { $ref: '#/components/schemas/ExecutionMetadataInput' }
+                        - { type: 'null' }
       responses:
         '200':
           description: data.accepted=true, data.replay boolean. Private task payload is removed.
@@ -877,10 +890,33 @@ components:
         attempt: { type: integer, minimum: 0, maximum: 3 }
         createdAt: { type: integer, description: Job creation time in Unix milliseconds. }
         completedAt: { type: [integer, 'null'], description: Server result receipt or stop time in Unix milliseconds; null while unfinished. }
+        executionMetadata:
+          oneOf:
+            - { $ref: '#/components/schemas/ExecutionMetadata' }
+            - { type: 'null' }
         checks:
           oneOf:
             - { $ref: '#/components/schemas/Checks' }
             - { type: 'null' }
+    ExecutionMetadataInput:
+      type: object
+      description: Bounded detector declaration. Unknown fields are discarded. This is not capability negotiation or proof of actual kernel execution.
+      required: [schemaVersion, wrapperVersion, wrapperRevision, platform, ruleSetVersion]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        wrapperVersion: { type: string, maxLength: 64, pattern: '^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$(?![\s\S])' }
+        wrapperRevision: { type: string, pattern: '^(?:[a-f0-9]{40}|source)$(?![\s\S])', description: Build revision or source for a local source build. }
+        platform: { type: string, enum: [linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64] }
+        kernelLockVersion: { type: string, maxLength: 64, pattern: '^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$(?![\s\S])', description: Optional embedded lock declaration; absent means unknown. }
+        ruleSetVersion: { type: integer, minimum: 1, maximum: 65535, description: Explicit classification rule-set baseline, independent of the observations wire schema. }
+    ExecutionMetadata:
+      description: Immutable declaration accepted with the successful task completion. The server fixes source to detector_reported; it is not an attestation. Legacy and incomplete snapshots are returned as null.
+      allOf:
+        - { $ref: '#/components/schemas/ExecutionMetadataInput' }
+        - type: object
+          required: [source]
+          properties:
+            source: { type: string, const: detector_reported, readOnly: true }
     Lease:
       type: object
       required: [leaseToken]

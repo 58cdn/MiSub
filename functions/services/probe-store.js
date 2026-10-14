@@ -1,5 +1,6 @@
 import { digest, originTokenHash, randomToken, probeError, requireValue, publicAgent, sanitizeResult, MAX_ATTEMPTS, LEASE_MS } from './probe-contract.js';
 import { agentManagementFilters } from './probe-agent-management.js';
+import { sanitizeExecutionMetadata, encodeExecutionResult, decodeExecutionResult, executionResultView } from './probe-execution-metadata.js';
 
 export const PROBE_SCHEMA = [
     `CREATE TABLE IF NOT EXISTS probe_agents (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, last_seen INTEGER NOT NULL DEFAULT 0, revoked_at INTEGER, version TEXT NOT NULL DEFAULT '', platform TEXT NOT NULL DEFAULT '')`,
@@ -97,7 +98,7 @@ export class ProbeStore {
         const records = rows.results.map(task => ({
             id: task.id, jobId: task.job_id, nodeId: task.node_id, nodeName: task.node_name,
             state: task.state, attempt: task.attempt, createdAt: task.created_at, completedAt: task.completed_at,
-            checks: task.result_json ? JSON.parse(task.result_json) : null
+            ...executionResultView(task.result_json)
         }));
         return {
             agent: agentSummary(row, checkedAt), records, total,
@@ -224,7 +225,7 @@ export class ProbeStore {
         await this.q('UPDATE probe_agents SET last_seen=? WHERE id=?', now, agent.id).run();
         return { leaseMs: LEASE_MS };
     }
-    async finish(agent, id, leaseToken, input) {
+    async finish(agent, id, leaseToken, input, executionMetadata) {
         requireValue(typeof leaseToken === 'string' && /^[0-9a-f]{64}$/.test(leaseToken), 'invalid_lease');
         const row = await this.q('SELECT t.*,j.types_json,j.options_json,j.created_at AS job_created_at FROM probe_tasks t JOIN probe_jobs j ON j.id=t.job_id WHERE t.id=? AND t.agent_id=?', id, agent.id).first();
         requireValue(row, 'task_not_found', 404);
@@ -234,10 +235,16 @@ export class ProbeStore {
         // lost ACK, instead of changing the hash/freshness on every delivery.
         const result = sanitizeResult(input, JSON.parse(row.types_json), options.services, options, { taskId: id, startedAt: row.job_created_at, now: row.completed_at ?? now });
         if (result.speed?.bytes !== undefined) requireValue(result.speed.bytes <= options.downloadBytes, 'invalid_result_metric');
-        const encoded = JSON.stringify(result);
-        const resultHash = await digest(encoded);
+        const metadata = sanitizeExecutionMetadata(executionMetadata);
+        const resultHash = await digest(JSON.stringify(result));
         const leaseHash = await digest(leaseToken);
-        if (row.state === 'done' && row.lease_hash === leaseHash && row.result_hash === resultHash) return { accepted: true, replay: true };
+        if (row.state === 'done' && row.lease_hash === leaseHash && row.result_hash === resultHash) {
+            const stored = decodeExecutionResult(row.result_json);
+            requireValue(stored.metadataState !== 'invalid'
+                && (stored.metadataState === 'legacy' || JSON.stringify(stored.executionMetadata) === JSON.stringify(metadata)), 'execution_metadata_conflict', 409);
+            return { accepted: true, replay: true };
+        }
+        const encoded = encodeExecutionResult(result, metadata);
         const updated = await this.q(`UPDATE probe_tasks SET state='done',node_payload=NULL,result_json=?,result_hash=?,completed_at=?
             WHERE id=? AND agent_id=? AND state='running' AND lease_hash=? AND lease_until>?
             AND job_id IN (SELECT id FROM probe_jobs WHERE cancelled_at IS NULL AND expires_at>?)
@@ -267,6 +274,6 @@ export class ProbeStore {
         requireValue(job, 'job_not_found', 404);
         const rows = await this.q(`SELECT t.id,t.node_id,t.node_name,t.agent_id,a.name AS agent_name,t.state,t.attempt,t.completed_at,t.result_json
             FROM probe_tasks t JOIN probe_agents a ON a.id=t.agent_id WHERE t.job_id=? ORDER BY t.id LIMIT 200 OFFSET ?`, id, offset).all();
-        return { job, nodes: rows.results.map(({ result_json, ...r }) => ({ ...r, checks: result_json ? JSON.parse(result_json) : null })), nextOffset: offset + rows.results.length < job.total ? offset + rows.results.length : null };
+        return { job, nodes: rows.results.map(({ result_json, ...r }) => ({ ...r, ...executionResultView(result_json) })), nextOffset: offset + rows.results.length < job.total ? offset + rows.results.length : null };
     }
 }

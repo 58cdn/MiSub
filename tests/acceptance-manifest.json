@@ -4,6 +4,7 @@
         "tests/probes/agent-management.check.mjs",
         "tests/probes/client.check.mjs",
         "tests/probes/contract.check.mjs",
+        "tests/probes/execution-metadata.check.mjs",
         "tests/probes/http.check.mjs",
         "tests/probes/observations.check.mjs",
         "tests/probes/pairing.check.mjs",
