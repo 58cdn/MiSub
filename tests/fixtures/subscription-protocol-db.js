@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import { readFileSync } from 'node:fs';
 import { planOfflineSubscriptionMigration } from '../../experiments/subscription-transactions/migration.js';
 import { StorageFactory } from '../../functions/storage-adapter.js';
 
@@ -14,18 +15,8 @@ export async function createProtocolFixture({
     // Align SQLite's admission clock with controlled fixture clocks, including vi.setSystemTime.
     sql.function('julianday', (_value) => 2440587.5 + (now ? now() : Date.now()) / 86400000);
     sql.exec('PRAGMA foreign_keys=ON');
-    for (const name of ['subscriptions', 'profiles'])
-        sql.exec(
-            `CREATE TABLE ${name}(id TEXT PRIMARY KEY,data TEXT NOT NULL,created_at TEXT,updated_at TEXT)`
-        );
-    sql.exec('CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT,updated_at TEXT)');
+    sql.exec(readFileSync(new URL('../../schema.sql', import.meta.url), 'utf8'));
     const toRows = (items) => items.map((item) => ({ id: item.id, data: JSON.stringify(item) }));
-    const migration = await planOfflineSubscriptionMigration({
-        subscriptions: toRows(subscriptions),
-        profiles: toRows(profiles),
-        authority: 'fixture-authority',
-        epoch: 'fixture-epoch',
-    });
     const state = { failAt: -1, batches: 0, plans: [] };
     function prepare(text, args = []) {
         return {
@@ -71,6 +62,16 @@ export async function createProtocolFixture({
     const legacy = StorageFactory.createAdapter({ MISUB_DB: db }, 'd1');
     if (settings !== undefined) await legacy.put('worker_settings_v1', settings);
     if (ruleTemplates !== undefined) await legacy.put('misub_rule_templates_v1', ruleTemplates);
+    for (const [table, items] of Object.entries({ subscriptions, profiles }))
+        for (const row of toRows(items))
+            sql.prepare(`INSERT INTO ${table}(id,data) VALUES(?,?)`).run(row.id, row.data);
+    const migration = await planOfflineSubscriptionMigration({
+        subscriptions: sql.prepare('SELECT * FROM subscriptions').all(),
+        profiles: sql.prepare('SELECT * FROM profiles').all(),
+        settings: sql.prepare('SELECT * FROM settings').all(),
+        authority: 'fixture-authority',
+        epoch: 'fixture-epoch',
+    });
     await db.batch(migration.statements.map(({ sql: text, args }) => prepare(text, args)));
     state.batches = 0;
     state.plans = [];

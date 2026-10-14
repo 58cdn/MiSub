@@ -163,6 +163,7 @@ describe('shared domain transaction boundaries', () => {
             epoch: 'other',
             subscriptions: [],
             profiles: [],
+            settings: [],
         });
         await expect(
             f.db.batch(plan.statements.map(({ sql, args }) => f.db.prepare(sql).bind(...args)))

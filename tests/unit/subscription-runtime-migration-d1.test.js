@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it } from 'vitest';
 import { Miniflare } from 'miniflare';
+import { readFileSync } from 'node:fs';
 import { planOfflineSubscriptionMigration } from '../../experiments/subscription-transactions/migration.js';
 import { StorageFactory } from '../../functions/storage-adapter.js';
 import {
@@ -24,11 +25,16 @@ const migration = (overrides = {}) =>
     planOfflineSubscriptionMigration({
         subscriptions: rows([item]),
         profiles: rows([group]),
+        settings: [],
         authority: 'fixture-authority',
         epoch: 'fixture-epoch',
         ...overrides,
     });
-async function create() {
+async function create({
+    subscriptions = rows([item]),
+    profiles = rows([group]),
+    settings = [],
+} = {}) {
     const fixture = { outbound: [] };
     fixture.runtime = new Miniflare({
         modules: true,
@@ -46,15 +52,21 @@ async function create() {
     runtimes.push(fixture);
     const db = await fixture.runtime.getD1Database('DB');
     expect(await db.prepare('PRAGMA foreign_keys').first('foreign_keys')).toBe(1);
-    for (const table of ['subscriptions', 'profiles'])
+    for (const sql of readFileSync(new URL('../../schema.sql', import.meta.url), 'utf8')
+        .split(';')
+        .filter((text) => text.trim()))
+        await db.prepare(sql).run();
+    for (const [table, values] of Object.entries({ subscriptions, profiles }))
+        for (const row of values)
+            await db
+                .prepare(`INSERT INTO ${table}(id,data,created_at,updated_at) VALUES(?,?,?,?)`)
+                .bind(row.id, row.data, row.created_at ?? null, row.updated_at ?? null)
+                .run();
+    for (const row of settings)
         await db
-            .prepare(
-                `CREATE TABLE ${table}(id TEXT PRIMARY KEY,data TEXT NOT NULL,created_at TEXT,updated_at TEXT)`
-            )
+            .prepare('INSERT INTO settings(key,value,created_at,updated_at) VALUES(?,?,?,?)')
+            .bind(row.key, row.value, row.created_at ?? null, row.updated_at ?? null)
             .run();
-    await db
-        .prepare('CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT,updated_at TEXT)')
-        .run();
     return {
         db,
         env: {
@@ -113,6 +125,105 @@ describe('offline physical-row migration planner', () => {
 });
 
 describe('actual local D1 runtime and migration batches', () => {
+    it('guards all source domains in one D1 batch and admits only one concurrent migration', async () => {
+        const settings = [
+            {
+                key: 'main',
+                value: ' { "storageType":"kv", "unknown":"retain" } ',
+                created_at: '2001-01-01 00:00:00',
+                updated_at: '2002-01-01 00:00:00',
+            },
+            {
+                key: 'misub_rule_templates_v1',
+                value: '[{"id":"r","unknown":true}]',
+                created_at: '2003-01-01 00:00:00',
+                updated_at: '2004-01-01 00:00:00',
+            },
+            {
+                key: 'other',
+                value: 'opaque',
+                created_at: '2005-01-01 00:00:00',
+                updated_at: '2006-01-01 00:00:00',
+            },
+        ];
+        const { db, env } = await create({ settings });
+        const plan = await migration({ settings });
+        await db.prepare("UPDATE settings SET value='changed' WHERE key='other'").run();
+        await expect(execute(db, plan.statements)).rejects.toThrow('migration_source_mismatch');
+        expect(
+            await db
+                .prepare(
+                    "SELECT count(*) n FROM sqlite_master WHERE name LIKE 'subscription_protocol_%'"
+                )
+                .first('n')
+        ).toBe(0);
+        expect(
+            await db.prepare("SELECT value FROM settings WHERE key='other'").first('value')
+        ).toBe('changed');
+        await db.prepare("UPDATE settings SET value='opaque' WHERE key='other'").run();
+        const concurrent = await Promise.allSettled([
+            execute(db, plan.statements),
+            execute(db, plan.statements),
+        ]);
+        expect(concurrent.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+        expect(concurrent.filter((r) => r.status === 'rejected')).toHaveLength(1);
+        expect((await db.prepare('SELECT * FROM settings ORDER BY key').all()).results).toEqual(
+            plan.targetRows.settings
+        );
+        const storage = StorageFactory.createAdapter(env, 'd1');
+        expect((await storage.readDomainSnapshot()).settings).toMatchObject({
+            storageType: 'd1',
+            unknown: 'retain',
+        });
+        await expect(
+            db.prepare("UPDATE settings SET value='{}' WHERE key='main'").run()
+        ).rejects.toThrow('subscription_legacy_write_blocked');
+        await storage.commitSubscriptionOperations({
+            baseVersion: { epoch: 'fixture-epoch', revision: 0 },
+            operationId: 'after-migration',
+            operations: [
+                {
+                    type: 'update',
+                    collection: 'subscriptions',
+                    id: 'a',
+                    fields: { name: 'newly committed' },
+                },
+            ],
+        });
+        await expect(execute(db, plan.statements)).rejects.toThrow();
+        expect((await storage.readSubscriptionSnapshot()).version.revision).toBe(1);
+        expect((await storage.readSubscriptionSnapshot()).subscriptions[0].name).toBe(
+            'newly committed'
+        );
+    });
+
+    it('serializes a real D1 legacy writer against the migration boundary', async () => {
+        const { db, env } = await create();
+        const plan = await migration();
+        const results = await Promise.allSettled([
+            execute(db, plan.statements),
+            db
+                .prepare("UPDATE subscriptions SET data=? WHERE id='a'")
+                .bind(JSON.stringify({ ...item, name: 'legacy winner' }))
+                .run(),
+        ]);
+        expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+        if (results[0].status === 'fulfilled') {
+            expect(results[1].reason.message).toContain('subscription_legacy_write_blocked');
+            expect(
+                (await StorageFactory.createAdapter(env, 'd1').readSubscriptionSnapshot())
+                    .subscriptions[0].name
+            ).toBe('fixture');
+        } else {
+            expect(results[0].reason.message).toContain('migration_source_mismatch');
+            expect(
+                JSON.parse(
+                    await db.prepare("SELECT data FROM subscriptions WHERE id='a'").first('data')
+                ).name
+            ).toBe('legacy winner');
+        }
+    });
+
     it('checks Telegram preview expiry using the real D1 transaction clock', async () => {
         const { db, env } = await create();
         await execute(db, (await migration()).statements);
@@ -186,16 +297,8 @@ describe('actual local D1 runtime and migration batches', () => {
     });
 
     it('rolls back every migration boundary including schema changes, then verifies authority', async () => {
-        const { db, env } = await create();
         const source = [{ id: 'main', data: JSON.stringify([item]) }];
-        await db
-            .prepare('INSERT INTO subscriptions(id,data) VALUES(?,?)')
-            .bind('main', source[0].data)
-            .run();
-        await db
-            .prepare('INSERT INTO profiles(id,data) VALUES(?,?)')
-            .bind('g', JSON.stringify(group))
-            .run();
+        const { db, env } = await create({ subscriptions: source });
         const plan = await migration({ subscriptions: source });
         for (let index = 0; index < plan.statements.length; index++) {
             const statements = [...plan.statements];
