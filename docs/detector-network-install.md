@@ -36,6 +36,14 @@ Unix 使用终端的 curl 代理环境，忽略 `.curlrc`，要求 HTTPS 和证�
 
 示例保留全部验证步骤，不提供省略校验的快捷形式。
 
+## 原生离线验收
+
+`Probe installer offline` 工作流在 Linux x64/arm64、macOS x64/arm64 和 Windows x64 运行。Unix 使用 `/bin/bash`，macOS 验证系统 Bash 3.2 与 `shasum` 路径；Windows 分别验证 PowerShell 5.1 和 7。每个任务记录实际平台和运行时版本，平台不符即失败；Unix 矩阵最多同时运行两个任务，测试 worker 限制为一至两个。
+
+短 loader 测试使用合成脚本和下载传输，校验后仅输出调用参数；用户目录指向临时位置，并检查已有合成配置未改动。发行安装器另用隔离配置、合成下载和 fake client 验证安装/恢复边界。Linux x64 同时执行完整应用测试、构建及部署脚本的离线边界测试。Windows 专属测试在 Unix 上跳过，Unix 测试不计入 Windows 专属步骤的通过数。
+
+PR 事件与 `ci/probe-installer-*` 组合验证分支只运行这些检查，权限为 `contents: read`，不引用生产密钥。原生离线结果不能替代真实 GitHub/CDN/TLS 下载、组织代理与策略、用户安装和明确批准配对后的通信验收。普通 `main` 合并仍会触发现有 Pages 部署流程，须遵守上线冻结。
+
 ## 新版本切换计划
 
 本入口使用已公开的 0.2.0 字节，不能通过修改仓库模板改变这些资产。Windows 权限提示工作由 [#34](https://github.com/58cdn/MiSub/issues/34) / [#36](https://github.com/58cdn/MiSub/pull/36) 独立处理；其新脚本提示只有进入新 Probe 发行后才会出现在短入口中。

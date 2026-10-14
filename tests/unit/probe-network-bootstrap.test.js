@@ -1,6 +1,15 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+    chmodSync,
+    existsSync,
+    mkdirSync,
+    mkdtempSync,
+    readFileSync,
+    readdirSync,
+    rmSync,
+    writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -10,6 +19,34 @@ import { syntheticProbeReleaseCatalog } from '../fixtures/probe-release.js';
 
 const directory = mkdtempSync(join(tmpdir(), 'misub-network-fixture-'));
 afterAll(() => rmSync(directory, { recursive: true, force: true }));
+const home = join(directory, 'home');
+mkdirSync(home);
+const configDirectory = join(home, '.misub-probe');
+mkdirSync(configDirectory);
+const configuration = 'synthetic existing configuration\n';
+writeFileSync(join(configDirectory, 'probe.json'), configuration);
+const fixtureEnvironment = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    APPDATA: home,
+    LOCALAPPDATA: home,
+    XDG_CONFIG_HOME: home,
+    XDG_DATA_HOME: home,
+    XDG_STATE_HOME: home,
+    BASH_ENV: '',
+    ENV: '',
+};
+function expectConfigurationPreserved() {
+    expect(readdirSync(configDirectory)).toEqual(['probe.json']);
+    expect(readFileSync(join(configDirectory, 'probe.json'), 'utf8')).toBe(configuration);
+}
+if (
+    process.env.MISUB_INSTALLER_NATIVE_TARGET &&
+    process.env.MISUB_INSTALLER_NATIVE_TARGET !== `${process.platform}-${process.arch}`
+) {
+    throw new Error('Installer fixture requires the selected native OS and architecture');
+}
 const bash =
     process.platform === 'win32'
         ? ['D:\\Program Files\\Git\\bin\\bash.exe', 'C:\\Program Files\\Git\\bin\\bash.exe'].find(
@@ -18,7 +55,8 @@ const bash =
         : '/bin/bash';
 const powershell =
     process.platform === 'win32'
-        ? 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+        ? process.env.MISUB_TEST_POWERSHELL ||
+          'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
         : null;
 const bashPath = (path) =>
     path.replaceAll('\\', '/').replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`);
@@ -96,7 +134,8 @@ function runUnix({
         encoding: 'utf8',
         timeout: 10000,
         env: {
-            ...process.env,
+            ...fixtureEnvironment,
+            HOME: bashPath(home),
             FIXTURE_BIN: bashPath(directory),
             FIXTURE_MODE: mode,
             FIXTURE_BODY: bashPath(file),
@@ -104,6 +143,7 @@ function runUnix({
             FIXTURE_LOCATION: location,
         },
     });
+    expectConfigurationPreserved();
     return { ...result, calls: readFileSync(calls, 'utf8').trim().split('\n').filter(Boolean) };
 }
 
@@ -187,17 +227,22 @@ function runWindows({
     policyScope = 'MachinePolicy',
     localPolicy = 'RemoteSigned',
 } = {}) {
-    const command = commandFor('windows', script, resume).replace(
-        '[Net.Http.HttpClient]::new($handler)',
+    const generated = commandFor('windows', script, resume);
+    const transport = '[Net.Http.HttpClient]::new($handler)';
+    expect(generated.split(transport)).toHaveLength(2);
+    const command = generated.replace(
+        transport,
         '[Net.Http.HttpClient]::new([OfflineInstallerHandler]::new())'
     );
     const test = `Add-Type -AssemblyName System.Net.Http
-Add-Type -ReferencedAssemblies System.Net.Http -TypeDefinition @'
+$compilerOptions = @{}
+if ($PSVersionTable.PSVersion.Major -lt 6) { $compilerOptions.ReferencedAssemblies = @('System.Net.Http', 'System') }
+Add-Type @compilerOptions -TypeDefinition @'
 ${handlerSource}
 '@
 function Get-ExecutionPolicy { param($Scope) if ($Scope -eq '${policyScope}') { return '${policy}' }; if ($Scope) { return 'Undefined' }; return '${localPolicy}' }
 try { ${command} } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 } finally { [Console]::Error.WriteLine('fixture_calls=' + [OfflineInstallerHandler]::Calls) }`;
-    return spawnSync(
+    const result = spawnSync(
         powershell,
         [
             '-NoProfile',
@@ -210,13 +255,15 @@ try { ${command} } catch { [Console]::Error.WriteLine($_.Exception.Message); exi
             encoding: 'utf8',
             timeout: 15000,
             env: {
-                ...process.env,
+                ...fixtureEnvironment,
                 FIXTURE_MODE: mode,
                 FIXTURE_BODY: Buffer.from(body).toString('base64'),
                 FIXTURE_LOCATION: location,
             },
         }
     );
+    expectConfigurationPreserved();
+    return result;
 }
 describe.skipIf(!powershell)('Windows short installer with an offline HttpMessageHandler', () => {
     it('verifies a two-hop download and passes discrete arguments', () => {
