@@ -250,3 +250,37 @@ test('automatic release refuses probe provisioning and a new explicit binding', 
         assert.match(result.output, /cannot provision or add a probe database binding/);
     }
 });
+
+test('malformed production binding metadata fails before any writes', (t) => {
+    for (const broken of [
+        { r2_buckets: 'unexpected' }, { services: [] }, { env_vars: false },
+        { d1_databases: 'unexpected' }, { kv_namespaces: [] },
+        { d1_databases: { MISUB_DB: {} } }, { d1_databases: { MISUB_PROBE_DB: null } },
+        { d1_databases: { MISUB_DB: { id: '-'.repeat(36) } } },
+        { kv_namespaces: { MISUB_KV: null } },
+        { env_vars: { ADMIN_PASSWORD: 'unexpected' } },
+    ]) {
+        const result = runScript(t, [project({ ...existingProduction(), ...broken })], automatic);
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.deepEqual(result.remaining, []);
+        assert.equal(result.config, '');
+        assert.match(result.output, /binding metadata is invalid/);
+    }
+});
+
+test('automatic release refuses all additional production binding categories', (t) => {
+    for (const extra of [
+        { env_vars: { ADMIN_PASSWORD: { type: 'secret_text' }, EXTRA: { type: 'plain_text' } } },
+        { kv_namespaces: { MISUB_KV: { namespace_id: kvId }, OTHER: { namespace_id: kvId } } },
+        { d1_databases: { OTHER: { id: d1Id } } },
+        ...['r2_buckets', 'durable_object_namespaces', 'services', 'queue_producers', 'hyperdrive_bindings', 'analytics_engine_datasets', 'vectorize_bindings', 'ai_bindings', 'browsers', 'mtls_certificates'].map(key => ({ [key]: { OTHER: {} } })),
+    ]) {
+        const result = runScript(t, [project({ ...existingProduction(), ...extra })], automatic);
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.deepEqual(result.remaining, []);
+        assert.equal(result.config, '');
+        assert.match(result.output, /other KV\/D1 bindings|additional production settings/);
+    }
+});

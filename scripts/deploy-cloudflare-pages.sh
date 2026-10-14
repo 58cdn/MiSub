@@ -56,6 +56,22 @@ case "$status" in
     ;;
 esac
 
+if ! jq -e '
+  .result.deployment_configs.production as $p |
+  ($p | type) == "object" and
+  all(["env_vars", "kv_namespaces", "d1_databases", "r2_buckets", "durable_object_namespaces", "services", "queue_producers", "hyperdrive_bindings", "analytics_engine_datasets", "vectorize_bindings", "ai_bindings", "browsers", "mtls_certificates"][];
+    . as $key | $p[$key] == null or ($p[$key] | type) == "object") and
+  all(($p.kv_namespaces // {} | .[]);
+    type == "object" and (.namespace_id | type) == "string" and (.namespace_id | test("^[a-fA-F0-9]{32}$"))) and
+  all(($p.d1_databases // {} | .[]);
+    type == "object" and (.id | type) == "string" and (.id | test("^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$"))) and
+  all(($p.env_vars // {} | .[]);
+    type == "object" and (.type == "secret_text" or .type == "plain_text"))
+' "$project_json" >/dev/null; then
+  echo '::error::Existing Pages production binding metadata is invalid. Refusing to replace configuration.'
+  exit 1
+fi
+
 if [[ "$existing_only" == true ]]; then
   if ! jq -e '.result.production_branch == "main"' "$project_json" >/dev/null; then
     echo '::error::Automatic release requires the existing Pages production branch to be main.'
@@ -72,17 +88,17 @@ if [[ "$existing_only" == true ]]; then
 fi
 
 # A Wrangler config is authoritative. Refuse to silently remove other KV/D1 bindings.
-if jq -e '[
+if ! jq -e '[
   (.result.deployment_configs.production.kv_namespaces // {} | keys[] | select(. != "MISUB_KV")),
   (.result.deployment_configs.production.d1_databases // {} | keys[] | select(. != "MISUB_DB" and . != "MISUB_PROBE_DB"))
-] | length > 0' "$project_json" >/dev/null; then
+] | length == 0' "$project_json" >/dev/null; then
   echo "::error::Existing Pages project has other KV/D1 bindings. Review them before replacing its Wrangler configuration."
   exit 1
 fi
 
 # Extra production variables or resource bindings may be removed by a new Wrangler
 # configuration. Fail closed instead of silently changing an existing deployment.
-if jq -e '
+if ! jq -e '
   (.result.deployment_configs.production // {}) as $p |
   (
     [($p.env_vars // {} | keys[] | select(. != "ADMIN_PASSWORD" and . != "COOKIE_SECRET"))] +
@@ -96,7 +112,7 @@ if jq -e '
     [($p.ai_bindings // {} | keys[])] +
     [($p.browsers // {} | keys[])] +
     [($p.mtls_certificates // {} | keys[])]
-  ) | length > 0
+  ) | length == 0
 ' "$project_json" >/dev/null; then
   echo "::error::Existing Pages project has additional production settings. Back up and migrate them before using this Wrangler-managed deployment."
   exit 1
@@ -149,7 +165,7 @@ if [[ -n "$existing_d1" && -n "${CLOUDFLARE_D1_DATABASE_ID:-}" && "$existing_d1"
   echo "::error::MISUB_DB already points at another D1 database. Refusing to switch storage."
   exit 1
 fi
-if [[ -n "$d1_id" && ! "$d1_id" =~ ^[a-fA-F0-9-]{36}$ ]]; then
+if [[ -n "$d1_id" && ! "$d1_id" =~ ^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$ ]]; then
   echo "::error::Invalid D1 database ID."
   exit 1
 fi
