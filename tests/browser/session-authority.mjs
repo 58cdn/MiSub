@@ -320,6 +320,35 @@ try {
         assert.equal((await check(b)).authenticated, true);
         assert.equal(await b.evaluate(() => store.sessionState), 'loggedIn');
     });
+    await test('an event waiting for IndexedDB open cannot cancel a later user login', async () => {
+        const a = await fresh();
+        await a.evaluate(() => store.login('synthetic-password'));
+        const b = await newPage();
+        await b.evaluate(() => {
+            const open = indexedDB.open.bind(indexedDB);
+            indexedDB.open = (...args) => {
+                const pending = {};
+                window.releaseOpen = () => {
+                    const actual = open(...args);
+                    for (const name of ['success', 'error', 'blocked', 'upgradeneeded'])
+                        actual['on' + name] = () => {
+                            pending.result = actual.result;
+                            pending['on' + name]?.();
+                        };
+                };
+                return pending;
+            };
+        });
+        await a.evaluate(() => store.logout());
+        await b.waitForFunction(() => window.releaseOpen);
+        await b.evaluate(() => {
+            window.signingIn = store.login('synthetic-password');
+        });
+        await b.evaluate(() => releaseOpen());
+        await b.evaluate(() => signingIn);
+        assert.equal((await check(b)).authenticated, true);
+        assert.equal(await b.evaluate(() => store.sessionState), 'loggedIn');
+    });
     await test('cleared localStorage cannot reuse a delayed login generation', async () => {
         const a = await fresh(),
             b = await newPage();
