@@ -1,0 +1,134 @@
+# 订阅事务协议：全部 writer 源码审计
+
+审计基线：`58cdn/MiSub`，PR #42 固定提交 `ed662e26e4f077f9b302aa5696cb9ef90acc3a0a`。以下路径与行号均相对此提交。本清单说明源码中的业务写入路径及其事务接入要求，配套实现范围见[离线 SQL 模型](subscription-atomic-model.md)。
+
+结论：已有严格集合读取及前端本地编辑保护不是跨请求版本协议。必须把下列全部可写入口改为统一操作提交，并处理旧部署与存储切换；仅 getter、仅 `/api/misubs`、仅当前源码中的适配器锁或写前重读均不够。
+
+## 1. 当前存储原语与事务缺口
+
+| 文件/位置                                                | 当前方法与行为                                                                                                                                                                   | 新协议需要的语义                                                                                                                                                    |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema.sql:2–27`；`functions/storage-adapter.js:82–104` | `subscriptions` / `profiles` 仅有 `id TEXT PRIMARY KEY, data TEXT NOT NULL, created_at, updated_at`；settings 为 key/value。没有 epoch、revision、操作收据、外键或写入准入约束。 | 在获准迁移前只设计/本地模拟。新版本元数据与操作收据应和业务数据在同一原子提交边界；当前时间戳不能当版本。                                                           |
+| `functions/storage-adapter.js:159–177,212–271`           | KV `put/delete` 无条件写；单项 put/delete/update 先读取整个集合再整键覆盖；putAll 为整集合替换。                                                                                 | KV 当前代码不能提供全局 CAS 或双集合事务。禁止以 KV read-before-write 或 isolate 内锁宣称分布式串行化；KV-only 需明确能力缺失，选择权威 D1/其他协调器涉及专项授权。 |
+| `functions/storage-adapter.js:309–359,629–634`           | D1 通用 `put(collectionKey)` 写物理 `id='main'` 整数组；通用 delete 也只删除 main。                                                                                              | 严格模式下所有 collection key 的旧写方法必须拒绝旁路；迁移工具应独立且不由普通 GET 自动启动。                                                                       |
+| `functions/storage-adapter.js:511–568`                   | `updateSubscriptionById` 读单行再 `INSERT OR REPLACE`；putSubscription/putProfile 为无条件 UPSERT；deleteById 单 SQL 无条件删除。                                                | 更新使用匹配版本/身份的 UPDATE，不得在并发删除后 UPSERT 复活；删除与组引用变更必须同事务。所有变更都必须推进同一权威版本。                                          |
+| `functions/storage-adapter.js:613–623`                   | D1 putAll 只是 Promise.all 逐项 UPSERT，不删除集合缺项，也不提供事务。                                                                                                           | 明确区分 create/update/remove/reorder，不能在转换时把 putAll 机械等同 replace-all；历史调用中“删掉缺项”的意图必须转为显式删除。                                     |
+| `functions/storage-adapter.js:428–508,571–611`           | getById/getByIds 仍可从 main 回退；单项读异常返回 null。getAll 可混合 legacy 数组与行并按 JSON 业务 ID Map 去重，未按物理 id 取证。                                              | 事务读取取得同一快照的两集合和版本；严格模式不混读旧 main，不将单项故障当不存在。迁移盘点必须原始读取物理 `id,data`，不能拿已去重 getter 结果当无损源。             |
+| `functions/storage-adapter.js:449–476`                   | authoritative 只绕过当前 binding 的本地集合缓存；管理端 Promise.all 双集合查询不等于同一数据库快照。                                                                             | 权威数据与 revision 用同一已验证只读原子快照；缓存可作展示，不能授予新版基线。                                                                                      |
+
+## 2. 管理保存、网页与隐式读取写入
+
+| 文件/函数/位置                                                                                                 | 触发与实际写方法                                                                                                                                     | 需转换语义                                                                                                                                                                                                      |
+| -------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `functions/modules/api-handler.js:340–552` `handleMisubsSave`；路由 `api-router.js:425`                        | `/api/misubs` full/diff；先读两集合，再通知，D1 调用 applyRowLevelDiff / syncCollectionRowLevel，KV 或 fallback 对两个 key 分别 put。                | 明确 operationId/baseVersion/create/update/remove/reorder。旧 full 无版本请求返回 428；不能把旧快照里没有的记录推断为删除，不能替旧请求补服务端当前版本。版本检查和全部业务写在一个原子边界，提交后才发副作用。 |
+| `api-handler.js:188–255,481–519` `applyRowLevelDiff` / `syncCollectionRowLevel`                                | raw added/updated 直接 putItem，removed 直接 deleteItem，行间与集合间 Promise.all；full 按当前/目标 ID 集合删除缺项；未处理的一侧可落通用 put/main。 | 用同一规范化操作计划生成持久化及确认结果；拒绝跨操作 ID 歧义、未知更新/删除、碰撞与不完整 reorder。不能把 Promise.all 视作原子提交，也不能保留 diff 某侧未处理时写 main 的 fallback。                           |
+| `api-handler.js:454–473`；`notifications.js:61–108` `checkAndNotify`                                           | 保存提交前非阻塞通知；通知成功直接修改传入对象 lastNotifiedExpire/Traffic，可能与序列化/落库交错。                                                   | 提交前不得通知。通知标记采用受限运行时操作/受控 outbox；数据库原子性不等于第三方消息 exactly-once，不在重试中重复宣称发送成功。                                                                                 |
+| `src/stores/useDataStore.js:170–254`；`src/App.vue:235`；`src/components/features/Dashboard/Dashboard.vue:321` | 主 UI saveData 发 full misubs/profiles；本地 lifecycle/editVersion 防浏览器过期响应，但没有服务器基线版本。                                          | 保存带已获权威版本及显式操作；409 保留本地编辑并展示冲突，200 只确认提交时编辑。既有本地保护继续保留。                                                                                                          |
+| `src/composables/useSubscriptions.js:204,225,306–325,345–406`                                                  | 单项刷新成功/非缓存失败会自动 saveData；批量导入调用单项刷新也会触发保存；批量刷新先 `/batch_update_nodes`，再 fetchNodeCount，最后 markDirty。      | 刷新单独提交 runtime 字段，不发送整份旧编辑器集合，不顺带提交未保存用户配置。批量导入按明确 create 操作确认；区分网络观测结果与本地未提交新条目。                                                               |
+| `src/lib/api.js:122–133`；`src/components/features/Dashboard/DashboardContainer.vue:143–158`                   | 另一保留的 saveMisubs/full 发送点；DashboardContainer 在组件导出/懒加载表中注册，未找到主页面直接挂载证据。                                          | 仍作为旧客户端兼容调用点处理，不能因为主 UI 已换协议就留一个被未来复用的无版本保存实现。                                                                                                                        |
+| `src/composables/useBulkImportLogic.js:92–99`；`useSubscriptions.js:306–343`                                   | 批量文本/文件导入最终增加本地集合；远程订阅随后刷新可能自动保存。                                                                                    | 普通导入使用 create 操作；恢复备份走独立 restore 路径。不要把两者都实现为缺项即删除。                                                                                                                           |
+| `functions/modules/api-handler.js:263–290` `handleDataRequest`                                                 | GET `/api/data` 成功读集合后 migrateProfileIds，未 await 的 `put(KV_KEY_PROFILES, profiles)`。                                                       | 从正常读取删除自动存储迁移；受控 rename-ID 迁移必须处理碰撞及关联引用，并经过版本/迁移门槛。                                                                                                                    |
+| `functions/modules/subscription/main-handler.js:536–564` `handleMisubRequest`；`utils.js:732–741`              | 公开/订阅下载入口读取后去掉 profile_ 前缀，并异步整集合 put；D1 会重新写 main。此步骤早于该函数内后续 token/profile 校验分支。                       | 读取不写配置；这是旧 main 再生的旁路，不能只把管理 GET 修掉。ID 变化不能只改数组中的 id 而不验证 settings 绑定、customId、计数键等引用语义。                                                                    |
+
+## 3. Cron、刷新与下载运行信息
+
+| 文件/函数/位置                                                                                                                                | 触发与实际写方法                                                                                                                                                                                                | 需转换语义                                                                                                                                                                                                            |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `functions/modules/notifications.js:114–268` `handleCronTrigger` / `persistSubscriptionsForCron:49–55`；`functions/[[path]].js:189–214`       | 经 cronSecret 校验的 `/cron`；先读取全部订阅，网络请求并发 6、超时 15 秒；修改副本后 putAllSubscriptions/fallback put。节点数、流量和通知标记混在整份快照。                                                     | 网络在事务外；每条运行结果带读时 ID、URL/请求配置身份、观测时间与必要版本。事务内重新检查存在与身份，仅写白名单 runtime 字段；删除/URL 变更则拒绝旧结果，不能恢复原对象。有限冲突重试重新计算，不能重复提交旧整集合。 |
+| `functions/modules/handlers/node-handler.js:85,417–466` `handleNodeCountRequest`；`api-router.js:452–453`                                     | `/api/node_count` 获取 count>0 后按 URL 找记录，updateSubscriptionById/fallback whole put。D1 查找此处先用 generic get，仅 main 数据可被发现；转换成行级不能沿用该查找。                                        | 将 inspection 与 persistence 分离。请求明确目标 ID/请求身份；只写运行字段；匹配到相同 URL 不能替代请求开始时的身份检查，重复 URL 时不能猜目标。                                                                       |
+| `functions/services/subscription-service.js:386–449,726–736,848–864` `writeSubscriptionRuntimeInfo` / `scheduleSubscriptionRuntimeInfoUpdate` | `main-handler.js:550,990` 下载生成节点时提供 context.storage；成功或未启缓存的空结果调度 updateSubscriptionById/fallback whole put；支持 waitUntil 或未等待 Promise。                                           | 纳入同一 runtime 操作协议与在途任务排空范围。旧下载结果不得在删除/改 URL 后覆盖。运行信息包括 nodeCount/userInfo/lastGoodNodeCount/detectedName/lastError/lastUpdate，应和配置字段分开定义。                          |
+| `functions/modules/handlers/node-handler.js:498–654` `handleBatchUpdateNodesRequest`                                                          | `/api/batch_update_nodes` 本身只查询、网络抓取并返回结果，无订阅写；网页随后 node_count/保存形成实际写链。                                                                                                      | 不把它误记为已原子写入。设计须明确返回纯观测还是由新统一 runtime 提交；避免前后端各自写两次。                                                                                                                         |
+| `functions/_schedule.js:6–19,33–61,95–115,178–201`；`api-router.js:556–560,889–915`                                                           | 条件性遗留入口：`/_schedule` 与 `/api/cron/trigger` 调用 performSubscriptionSync，绕过适配器用 env.KV_STORAGE 的 subscriptions / subscription_<id> 及 env.DB UPDATE subscriptions(nodes,node_count,last_sync)。 | 这不是当前 MISUB_* schema 的同一可靠路径：所需 auto_sync 等列不在 schema.sql，解析器还依赖未导入的 jsyaml。仍需关闭或改接新协议；不得因正常部署可能无这些绑定就从旁路清单删掉。未验证生产是否配置/可执行。            |
+| `functions/modules/subscription/main-handler.js:709–725`                                                                                      | profile 下载次数另写独立计数 key，KV RMW 或 D1 settings 行，并非订阅组业务行写入。                                                                                                                              | 明确版本域：通常独立计数原子增量，不随配置恢复旧值，不冒称全站所有状态一起事务。GET /data 会将计数附加到 profile，配置操作必须剥离此派生字段。                                                                        |
+
+## 4. 外部管理 API
+
+以下均由 `functions/modules/external-api-router.js:8–101` 的 `/api/ext/v1` 鉴权路由进入。当前调用 storageAdapter，无客户端版本门槛。
+
+| 文件/函数/位置                                                                                                        | 触发与实际写方法                                                                                                                      | 需转换语义                                                                                                                 |
+| --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `external-subscriptions-handler.js:299–319,322–379` `handleExternalSubscriptionsRequest`                              | subscriptions POST create、PATCH 合并旧对象后 putSubscription、DELETE 先 deleteSubscriptionById 再 removeSubscriptionIdFromProfiles。 | 客户端显式 baseVersion/operationId；创建重试不重复生成对象；PATCH 只操作允许字段并原子校验；删除与所有组引用移除一起提交。 |
+| 同文件 `removeSubscriptionIdFromProfiles:44–55`                                                                       | 全量读 profiles 后逐组 putProfile。                                                                                                   | 必须并入删除事务，读失败不得留下已删除订阅和旧引用；组更新不得用早先完整对象覆盖并发编辑。                                 |
+| `external-manual-nodes-handler.js:154–222` `handleExternalManualNodesRequest`；`removeManualNodeIdFromProfiles:43–54` | manual-nodes POST/PATCH putSubscription、DELETE deleteSubscriptionById 后逐组 putProfile。手动节点和远程订阅共用 subscriptions。      | 同一业务集合、同一版本；节点删除级联处理 manualNodes 引用，不能只保护 remote subscriptions API。                           |
+| `external-profiles-handler.js:194–265` `handleExternalProfilesRequest`                                                | profiles POST/PATCH putProfile；DELETE deleteProfileById；参考 validateProfileReferences:36–80 单独先读 subscriptions。               | 引用验证与落库共用一个事务快照；避免“引用验证后目标被删”的 TOCTOU。                                                        |
+| 同文件 `:269–291`                                                                                                     | profiles/:id/subscriptions 或 manual-nodes POST/DELETE 读数组后 putProfile。                                                          | 显式 link/unlink 集合操作，附版本且事务内验证目标存在；避免成员并发覆盖。                                                  |
+| `external-subscriptions-handler.js:77–105,148–181` `inspectRemoteSubscription` 与 validate                            | subscriptions/validate 调用 handleNodeCountRequest，后者可写匹配现有 URL 的条目，因此 validate 并非纯读取。                           | 抽出真正无存储副作用的 inspection，validate 不能偷偷生成一次 runtime 提交。                                                |
+| 同文件 `persistSubscriptionRefresh:134–144,184–245`                                                                   | 单项 refresh、batch-refresh 先 inspection（可能已写一次），随后按旧 current 展开并 putSubscription。                                  | 合并为一次受限 runtime 提交；禁止网络期间旧配置完整回写；批量操作明确一个事务还是逐项收据，不能模糊宣称全部原子。          |
+| `external-profiles-handler.js:87–109` `refreshProfileSubscriptions`                                                   | profiles/:id/refresh 按组引用逐个 inspection + 旧对象 putSubscription。                                                               | 同 runtime 身份检查；组成员在网络期间改变时明确结果适用范围，不能复活已删除订阅。                                          |
+
+## 5. Telegram 全部分支
+
+文件均为 `functions/modules/handlers/telegram-webhook-handler.js`，入口 `handleTelegramWebhook:3547` 经命令分发 `handleCommand:2515`、callback `handleCallbackQuery:2676`、普通文本/文件输入进入。请求级缓存 `getCachedSubscriptions:65` / `getCachedProfiles:72` 没有跨请求版本约束。
+
+| 函数/精确写点                                                            | 触发与写方法                                                                                                          | 需转换语义                                                                                                                                    |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `applyGroupOperation:569`，`:607,610`                                    | `/grename` 及 group callback；分组 rename/clear/delete 后 putAllSubscriptions。                                       | 分组操作捕获明确 ID 集合和版本；delete 是显式 remove，不能以 D1 putAll 缺项表达。删除清理两类 profile 引用同事务。                            |
+| `handleDeleteCommand:1232`，`:1297,1326`                                 | `/delete,/del,/rm`、delete all、node delete callback；先 putAllSubscriptions 删项，再另读/写 putAllProfiles 清引用。  | 一次明确删除与引用清理事务；D1 当前 putAll 不会实际删除缺项，不能把既有“成功”文案当删除结果。                                                 |
+| `handleToggleCommand:1368`，`:1418`                                      | `/enable,/on,/disable,/off` 及对应批量 callback；putAllSubscriptions。                                                | 白名单 enabled 更新，附明确目标 ID、读时状态及版本。                                                                                          |
+| `handleRenameCommand:1629`，`:1671`                                      | `/rename`；putAllSubscriptions。                                                                                      | name 字段 update；不回写其余配置及 runtime。                                                                                                  |
+| `handleImportCommand:1896`，`:1984`                                      | `/import`；直接 `put(KV_KEY_SUBS, allSubscriptions)`，D1 写 main。                                                    | 显式 create 集合；以稳定 operationId 做消息重试幂等，不能沿用整集合/legacy main。                                                             |
+| `handleSortCommand:2002`，`:2071`                                        | `/sort` 按 name/protocol/time/status 重排数组后 putAllSubscriptions。                                                 | 显式完整且无歧义的 ID 顺序，事务内统一 sortIndex；D1 只 upsert 原 sortIndex 不能保证所见重排。                                                |
+| `handleDupCommand:2088`，`:2132`                                         | `/dup,/dedup clean`、cmd_dup_clean；删除重复项后 putAllSubscriptions。                                                | 按确认过的重复计划显式 remove，并处理引用；不得将运行时重读结果直接认作用户确认的删除集合。                                                   |
+| `handleNodeInput:2289`，`:2388,2436`；`handleFileInput:291–328`          | 文本节点/订阅、文件导入：putAllSubscriptions 后可追加用户绑定 profile 并 putAllProfiles；中间 read-your-writes 验证。 | create + link 同事务；去重与 ID 分配可重放，重复 webhook 不能重复导入。读回找到新增条目不能证明其它并发数据未丢失，也不能证明两集合事务成功。 |
+| `handleCallbackQuery` `link_node_:3102/:3123`，`unlink_node_:3141/:3162` | 全 profiles putAllProfiles。                                                                                          | 显式 link/unlink manualNodes，事务内验证。                                                                                                    |
+| 同函数 `link_sub_:3178/:3199`，`unlink_sub_:3216/:3237`                  | 全 profiles putAllProfiles。                                                                                          | 显式 link/unlink subscriptions，事务内验证。                                                                                                  |
+| 同函数 `toggle_sub_:3274/:3307`                                          | 重新读 originalSubs 后 putAllSubscriptions；node toggle 转发 handleToggleCommand。                                    | enabled 精确字段操作；重读也不替代 CAS。                                                                                                      |
+| 同函数 `do_delete_sub_:3377/:3414`                                       | 重新读订阅后 putAllSubscriptions；node delete 转发 handleDeleteCommand。                                              | 显式 remove + 引用清理；所有 delete 分支统一语义，不保留不清引用的例外。                                                                      |
+| `persistCachedSubscriptions:79–82` / `persistCachedProfiles:85–88`       | 通用缓存回写 helper 当前全仓只找到定义，未找到调用。                                                                  | 标为潜在旁路而非当前触发路径；删除或改成只接受已授权操作的统一入口，禁止未来直接复用快照 flush。                                              |
+
+Telegram callback 当前编码数组 index（例如 `:3057–3087,3104,3179,3378–3398`），回调时重新读取列表再解释序号。即使写入时 CAS 正确，旧按钮仍可能选中另一条记录。转换需让交互绑定稳定 ID/视图版本；必须在选定对象时解决身份歧义，不能仅写入时补一个“当前版本”。更新/回调幂等应来自稳定事件标识和确定操作摘要，且保留现有权限检查。
+
+## 6. 导入恢复及所有迁移旁路
+
+| 文件/函数/位置                                                                                          | 触发与实际写方法                                                                                                                     | 需转换语义                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `functions/modules/webdav-backup-handler.js:502–510,565–574`；`src/composables/useBackupLogic.js:59–86` | 本地文件 `/api/backup/restore` 与 `/api/backup/webdav/restore` 都调用 restoreBackupPayload。                                         | 独立恢复操作：只接受校验完整的 payload，生成明确差异与新 epoch，不沿用备份 operation 收据或旧版本。                                           |
+| `webdav-backup-handler.js:145–185` `normalizeBackupPayload`                                             | 统一格式缺失/非法集合被默认 []；旧格式合并 subscriptions/manualNodes。                                                               | 缺失/损坏不能静默等同用户批准清空；校验 ID/唯一性/引用/类型和容量后才进入恢复准入。旧格式转换保持手动节点完整。                               |
+| 同文件 `syncCollection:191–233` / `restoreBackupPayload:248–273`                                        | D1 逐项 put/delete，KV 两键分别 put；先 subscriptions 再 profiles，再规则模板、可选 settings。                                       | 订阅/组必须原子；明确规则/设置是否属于同一恢复域。若不在同一域，不能报告整个恢复事务全成功；恢复 schema/绑定/storageType 必須有单独受控边界。 |
+| 同文件 `createPreRestoreSnapshot:236–244`                                                               | 恢复前另读两集合生成 snapshot key；没有共同版本快照，也没有自动回滚。                                                                | snapshot 绑定确切 epoch/revision/摘要；不能把“有快照”当恢复失败已回滚。需要容量拒绝而不是拆多个业务提交。                                     |
+| `functions/modules/api-router.js:193–225` `/migrate`                                                    | 直接 raw KV 从 misub_data_v1 读，查新 key 不存在后 put 两业务 key，再备份旧 key 并 delete 旧 key；无版本屏障。                       | 严格模式关闭该路由旁路；读不存在不构成 CAS。只有经授权维护迁移执行，源摘要/备份/排空任务先验证。                                              |
+| `api-router.js:107–147`；`functions/storage-adapter.js:930–1004` `migrateKVToD1`                        | `/migrate_to_d1` ensureD1Schema、逐 key copy 到 D1（订阅/组为 main），最后写 settings.storageType=d1；copyKey 捕获单项错误后仍继续。 | 迁移不能用这个普通在线逐键路径启用事务模式。初始化新权威历史、验证源/目标摘要、全部数据就绪后受控切换；源读失败或冲突必须停止。               |
+| `api-router.js:164–188`；`storage-adapter.js:1007–1052` `migrateLegacyD1MainRows`                       | 逐项 upsert main 数组，再独立 delete main；两集合分开 try/catch，并返回 partial errors。                                             | 在隔离副本先做冲突盘点，原子转换或维护窗口受控转换；不得先覆盖独立行再猜旧 main 哪份更新。                                                    |
+| `api-handler.js:285–290`、`subscription/main-handler.js:558–564`                                        | 两个读取入口自动 profile ID 迁移，均可重造 main。                                                                                    | 正常 GET 只读配置；严格模式拒绝 legacy 自动迁移，作为明确一次性受控计划执行。                                                                 |
+
+## 7. 存储选择本身是旁路边界
+
+- `StorageFactory.createAdapter:813–835` 在选择 D1 但绑定缺失时可 fallback KV；`getStorageType:844–853` 读设置失败默认 KV。PR #41 只在管理 data/save 显式检查所选绑定，其余 writer 仍直接调用工厂。
+- `SettingsCache:735–784` 为进程级 settings 缓存，先 D1 再 KV，不能替代协议的稳定存储实例身份，也不能因缓存失效恢复到旧 KV 数据继续写。
+- `api-handler.js:691–723` 设置保存可写 storageType，并双存储同步；`:762–783` 设置重置删除两个 settings，使选择回到默认。
+- `webdav-backup-handler.js:62–75,264–272` 恢复设置未剥离 storageType。即使恢复数据本身原子，随后恢复旧 settings 也可能把正常入口导向另一份旧数据。
+- 严格模式必须把权威存储身份/epoch 与能力选择绑定；任何普通设置保存、重置、恢复都不得默默改变此身份。要切换，走单独批准的维护迁移。缺版本元数据、错误 binding 或能力不足应 fail closed，不降级旧 adapter。
+
+## 8. 旧 main 与旧 writer 的阻断要求
+
+现状无法证明旧 writer 已被阻止。当前表允许所有旧 SQL，当前 KV 允许所有旧 put，新 getter 或元数据表不会阻止旧代码继续写。
+
+1. **旧 main 盘点必须保留物理来源。** 原始查询物理 id/data，分别展开 main 与独立行；相同业务 ID 内容不同即停止，不依赖无 ORDER BY 的行顺序、Map 最后覆盖或 updated_at 猜最新。校验物理 ID 与 JSON.id、重复 ID、非法 JSON、引用、排序及业务 ID 恰为 main 的歧义。摘要报告不泄露 URL/凭据。
+2. **事务模式不继续混合兼容读取。** 成功迁移后新权威读取不再 fallback legacy main；原始备份不参与在线合并。旧 main 重新出现要明确拒绝/报告，而不是继续吞并。代码中的通用 put(collectionKey)、putAll、单项 put/delete/update 都必须被同一协议封口。
+3. **新代码 guard 只约束新部署。** 对仍绑定同一存储的旧 deployment、旧 API、Cron、Telegram、waitUntil 以及在途网络请求无效。必须枚举、冻结或升级全部 writer，再证明在途请求已排空；无法证明则不能切换。
+4. **若设计物理写入防线，需额外论证。** 可评估数据库级拒绝 legacy DML 的受控准入约束，或隔离新权威存储并停止旧存储的全部写入；不能仅在 JS 里设置一个 flag。数据库 gate 必须事务内准入、事务内回收、失败时回滚，覆盖 INSERT/REPLACE/UPDATE/DELETE/main 与所有表，不允许遗留一个全局“已解锁”行给旧 SQL 趁机使用。具体 SQL 留给本地原子模型与后续独立审查，不在本报告声称已实现。
+5. **新表并存也不自动消除旧部署。** 若旧部署仍能返回旧数据或接受旧写请求，即使它暂时碰不到新表，也无法宣布全站只有一个权威入口。需要明确禁旧路由/旧 URL/旧触发及拒绝旧客户端规则，停止双写/混读。
+6. **生产边界。** 新资源、schema/绑定/storageType 变更、真实数据迁移、冻结解除、排空生产任务、切换/回退均需专项授权。目前仅设计与本地 SQLite 合成模型；不能根据本审计执行生产动作。
+
+## 9. 不应误算作业务集合 writer 的路径
+
+- `_cron.js:71–101,125–154` 的同步/流量检查只是读取与记录；`cron-dashboard.js:177–190` 仅返回提交提示，并未真正启动写入。这些路径不能作为“Cron 已接入新协议”证据。
+- `external-preview-handler.js:13–59` 只读并生成 source 列表；`external-manual-nodes-handler` 的 validate 不经 node_count。不要泛化为全部 validate/preview 都会写。
+- `subscription/profile-handler.js`、`single-subscription.js` 的预览链使用 node-fetcher 取节点，没有本次扫描到的业务集合写；下载主链的 generateCombinedNodeList 回写另列在第 3 节。
+- `scheduled-task-runner.js:78–93` 运行 WebDAV 备份、写锁与备份状态；不恢复订阅集合。备份读取一致性仍应升级，但不能误称它已经改业务集合。
+- `conditionalKVPut` 在 `utils.js:125–144` 当前只有定义，无调用；其中“读失败就写”不适合作为将来协议 fallback。
+- 节点缓存、外部节点回调缓存、下载计数、诊断 Probe、日志、安全数据不是本报告的 subscriptions/profiles 配置事务域；恢复或版本设计须明确它们与配置操作的关系，不扩大保证。
+
+## 10. 后续本地原子模型独立审查检查点
+
+本节列出完整应用协议的验收目标。离线 SQL 内核已覆盖的范围及未接入的应用行为见[模型说明](subscription-atomic-model.md)。
+
+- 使用真实 SQLite 事务/约束行为；全部网络在模块导入前拒绝，fixture 合成，不接生产 binding。
+- 同基线两个独立提交仅一方成功；CAS 条件零行必须阻止所有后续 DML，不能只在 JS 事后读 changes。
+- 每一个业务/版本/收据/准入语句注入失败均回滚；重试同 operationId 同摘要返回原收据，不再推进 revision；不同摘要冲突；收据命名空间包含 epoch。
+- 删除、URL 修改、旧运行结果交错时不复活/不污染；更新不得无条件 UPSERT。字段白名单与身份指纹覆盖会影响获取结果的配置。
+- 两集合与版本读取来自同一快照；创建、删除、引用维护、排序校验全在原子边界；容量超过单事务已验证限制就拒绝，不切块假装原子。
+- legacy main/行冲突与旧 DML 在 strict 模式无法旁路；模拟旧 writer 时直接发当前旧 SQL，不能只调用带新 guard 的新方法来证明旧部署安全。
+- 恢复产生新 epoch，旧幂等重试拒绝；schema/绑定/storageType 变化属于部署迁移边界，模型成功不表示生产迁移获准。
+
+本报告不认定生产故障根因，也不认定任何部署已经提供事务能力。后续模型审查应另记录设计版本、代码哈希、执行日志及未覆盖的平台行为。
