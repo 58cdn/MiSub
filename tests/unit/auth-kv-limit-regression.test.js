@@ -54,7 +54,7 @@ describe('auth gracefully handles exhausted KV write quota', () => {
             const body = await response.json();
 
             expect(response.status).toBe(200);
-            expect(body).toEqual({ success: true });
+            expect(body).toEqual({ success: true, loginSecurity: { enabled: false, warning: null } });
             expect(warnSpy).toHaveBeenCalledWith(
                 '[Auth Storage] KV put skipped for SYSTEM_COOKIE_SECRET: KV put() limit exceeded for the day.'
             );

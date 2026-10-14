@@ -33,6 +33,12 @@ export function configureAuthGuard(resolver) {
 
 const routes = [
     {
+        path: '/dashboard/security',
+        name: 'LoginSecurity',
+        component: () => import('../views/LoginSecurityView.vue'),
+        meta: { titleKey: 'notifications.auditTitle', requiresAuth: true },
+    },
+    {
         path: '/', // Root path is HomeView (Smart Wrapper)
         name: 'Home',
         component: HomeView,

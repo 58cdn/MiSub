@@ -48,6 +48,34 @@
             "report": "observations-browser.json",
             "cases": "tests",
             "errors": ["pageErrors", "externalRequestsBlocked"]
+        },
+        {
+            "file": "tests/browser/admin-notifications.mjs",
+            "report": "report.json",
+            "cases": "checks",
+            "errors": ["unexpectedApi", "pageErrors"],
+            "passed": true
+        },
+        {
+            "file": "tests/browser/notification-backend-integration.mjs",
+            "report": "report.json",
+            "cases": "checks",
+            "errors": ["unexpectedApi", "outboundBackendRequests", "mainStoreWrites", "pageErrors"],
+            "passed": true
+        },
+        {
+            "file": "tests/browser/session-authority.mjs",
+            "report": "report.json",
+            "cases": "checks",
+            "errors": ["external", "pageErrors"],
+            "passed": true
+        },
+        {
+            "file": "tests/browser/session-cookie-protocol.mjs",
+            "report": "report.json",
+            "cases": "checks",
+            "errors": ["external", "errors"],
+            "passed": true
         }
     ]
 }

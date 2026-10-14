@@ -6,6 +6,7 @@
     import LoginEntryButton from './LoginEntryButton.vue';
     import ExternalRepoButton from './ExternalRepoButton.vue';
     import LanguageSwitcher from './LanguageSwitcher.vue';
+    import NotificationBell from '../notifications/NotificationBell.vue';
     import { NAV_ICONS } from '../../constants/navigation.js';
     import { useI18n } from '../../i18n/index.js';
 
@@ -89,7 +90,10 @@
 </script>
 
 <template>
-    <div class="flex items-center gap-2">
+    <div
+        class="flex min-w-0 flex-wrap items-center justify-end gap-1 sm:gap-2"
+        :class="{ 'max-[480px]:grid max-[480px]:grid-cols-3': isLoggedIn }"
+    >
         <router-link
             v-if="canShowExplore"
             to="/explore"
@@ -117,6 +121,7 @@
         <div v-if="showDivider" class="h-4 w-px bg-gray-200 dark:bg-white/10 mx-1"></div>
 
         <template v-if="isLoggedIn">
+            <NotificationBell />
             <button
                 v-if="showSettings"
                 @click="emit('openSettings')"

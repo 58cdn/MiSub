@@ -1,5 +1,10 @@
+import { notificationMessages } from './notifications.js';
+import { sessionMessages } from './session.js';
+
 export const messages = {
     'zh-CN': {
+        notifications: notificationMessages['zh-CN'],
+        session: sessionMessages['zh-CN'],
         groupsPagination: {
             navigation: '机场订阅分页',
             range: '显示 {start} 至 {end} 共 {total} 条结果',
@@ -1871,6 +1876,8 @@ export const messages = {
         },
     },
     'en-US': {
+        notifications: notificationMessages['en-US'],
+        session: sessionMessages['en-US'],
         groupsPagination: {
             navigation: 'Airport subscription pagination',
             range: 'Showing {start} to {end} of {total} results',

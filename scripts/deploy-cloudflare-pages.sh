@@ -93,7 +93,7 @@ fi
 # A Wrangler config is authoritative. Refuse to silently remove other KV/D1 bindings.
 if ! jq -e '[
   (.result.deployment_configs.production.kv_namespaces // {} | keys[] | select(. != "MISUB_KV")),
-  (.result.deployment_configs.production.d1_databases // {} | keys[] | select(. != "MISUB_DB" and . != "MISUB_PROBE_DB"))
+  (.result.deployment_configs.production.d1_databases // {} | keys[] | select(. != "MISUB_DB" and . != "MISUB_PROBE_DB" and . != "MISUB_SECURITY_DB" and . != "MISUB_SESSION_DB"))
 ] | length == 0' "$project_json" >/dev/null 2>&1; then
   echo "::error::Existing Pages project has other KV/D1 bindings. Review them before replacing its Wrangler configuration."
   exit 1
@@ -104,7 +104,7 @@ fi
 if ! jq -e '
   (.result.deployment_configs.production // {}) as $p |
   (
-    [($p.env_vars // {} | keys[] | select(. != "ADMIN_PASSWORD" and . != "COOKIE_SECRET"))] +
+    [($p.env_vars // {} | keys[] | select(. != "ADMIN_PASSWORD" and . != "COOKIE_SECRET" and . != "SESSION_AUTH_MODE"))] +
     [($p.r2_buckets // {} | keys[])] +
     [($p.durable_object_namespaces // {} | keys[])] +
     [($p.services // {} | keys[])] +
@@ -120,6 +120,20 @@ if ! jq -e '
   echo "::error::Existing Pages project has additional production settings. Back up and migrate them before using this Wrangler-managed deployment."
   exit 1
 fi
+
+# Preserve an existing, explicit session mode without enabling it from CI inputs.
+if ! jq -e '
+  (.result.deployment_configs.production // {}) as $p |
+  ($p.env_vars // {}) as $vars |
+  (($vars | has("SESSION_AUTH_MODE") | not) or
+    ($vars.SESSION_AUTH_MODE.type == "plain_text" and
+     $vars.SESSION_AUTH_MODE.value == "d1-v1" and
+     $p.d1_databases.MISUB_SESSION_DB.id != null))
+' "$project_json" >/dev/null 2>&1; then
+  echo '::error::Existing session mode requires d1-v1 and its dedicated database binding.'
+  exit 1
+fi
+session_mode="$(jq -r '.result.deployment_configs.production.env_vars.SESSION_AUTH_MODE.value // empty' "$project_json")"
 
 existing_kv="$(jq -r '.result.deployment_configs.production.kv_namespaces.MISUB_KV.namespace_id // empty' "$project_json")"
 if [[ "$existing_only" == true && -z "$existing_kv" ]]; then
@@ -187,6 +201,27 @@ if [[ -n "$probe_d1_id" && "$probe_d1_id" == "$d1_id" ]]; then
   exit 1
 fi
 
+# Preserve only an already approved security binding. This deploy never creates,
+# initializes or enables login security storage.
+security_d1_id="$(jq -r '.result.deployment_configs.production.d1_databases.MISUB_SECURITY_DB.id // empty' "$project_json")"
+if [[ -n "$security_d1_id" ]]; then
+  if [[ ! "$security_d1_id" =~ ^[a-fA-F0-9-]{36}$ || "$security_d1_id" == "$d1_id" || "$security_d1_id" == "$probe_d1_id" ]]; then
+    echo '::error::MISUB_SECURITY_DB must use a valid independent database. Refusing to share business or detector storage.'
+    exit 1
+  fi
+fi
+
+# Session revocation must remain independent of business, detector and audit storage.
+session_d1_id="$(jq -r '.result.deployment_configs.production.d1_databases.MISUB_SESSION_DB.id // empty' "$project_json")"
+if [[ -n "$session_d1_id" ]]; then
+  for other_id in "$d1_id" "$probe_d1_id" "$security_d1_id"; do
+    if [[ "${session_d1_id,,}" == "${other_id,,}" ]]; then
+      echo '::error::MISUB_SESSION_DB must use an independent database.'
+      exit 1
+    fi
+  done
+fi
+
 # Generate at runtime only; never check account-specific resource IDs into Git.
 # Retain the committed compatibility flags and build output directory.
 if [[ -e wrangler.toml ]]; then
@@ -194,6 +229,9 @@ if [[ -e wrangler.toml ]]; then
   exit 1
 fi
 sed -E "s/^name = .*/name = \"${project_name}\"/" wrangler-cf-pages.toml > wrangler.toml
+if [[ -n "$session_mode" ]]; then
+  printf '\n[vars]\nSESSION_AUTH_MODE = "d1-v1"\n' >> wrangler.toml
+fi
 cat >> wrangler.toml <<CFG
 
 [[kv_namespaces]]
@@ -222,6 +260,25 @@ if [[ -n "$probe_d1_id" ]]; then
 binding = "MISUB_PROBE_DB"
 database_name = "${project_name}-probes"
 database_id = "${probe_d1_id}"
+CFG
+fi
+if [[ -n "$security_d1_id" ]]; then
+  cat >> wrangler.toml <<CFG
+
+[[d1_databases]]
+binding = "MISUB_SECURITY_DB"
+database_name = "${project_name}-login-security"
+database_id = "${security_d1_id}"
+CFG
+fi
+
+if [[ -n "$session_d1_id" ]]; then
+  cat >> wrangler.toml <<CFG
+
+[[d1_databases]]
+binding = "MISUB_SESSION_DB"
+database_name = "${project_name}-sessions"
+database_id = "${session_d1_id}"
 CFG
 fi
 

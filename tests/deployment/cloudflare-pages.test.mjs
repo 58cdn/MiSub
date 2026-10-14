@@ -107,6 +107,27 @@ function expectDeployed(result) {
     assert.ok(!result.output.includes('https://misub.pages.dev'));
 }
 
+test('preserves an approved independent security binding without creating or migrating it', (t) => {
+    const securityId = '22222222-2222-4333-8444-555555555555';
+    const result = runScript(t, [project({
+        kv_namespaces: { MISUB_KV: { namespace_id: kvId } },
+        d1_databases: { MISUB_DB: { id: d1Id }, MISUB_SECURITY_DB: { id: securityId } },
+    })]);
+    expectDeployed(result);
+    assert.ok(result.config.includes('binding = "MISUB_SECURITY_DB"'));
+    assert.ok(result.config.includes(`database_id = "${securityId}"`));
+    assert.equal(result.calls.length, 2);
+});
+
+test('refuses a security binding pointing at business storage', (t) => {
+    const result = runScript(t, [project({
+        kv_namespaces: { MISUB_KV: { namespace_id: kvId } },
+        d1_databases: { MISUB_DB: { id: d1Id }, MISUB_SECURITY_DB: { id: d1Id } },
+    })]);
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(result.calls, []);
+});
+
 test('retry reuses the project and KV created before the failed deploy', (t) => {
     const result = runScript(t, [
         project({ env_vars: { ADMIN_PASSWORD: { type: 'secret_text' } } }),
@@ -165,6 +186,61 @@ const automatic = { GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'push', GITHUB_RE
 const existingProduction = () => ({
     kv_namespaces: { MISUB_KV: { namespace_id: kvId } },
     env_vars: { ADMIN_PASSWORD: { type: 'secret_text' } },
+});
+
+test('automatic release preserves an approved session binding and its exact mode', (t) => {
+    const sessionId = 'cccccccc-2222-4333-8444-555555555555';
+    for (const enabled of [false, true]) {
+        const production = existingProduction();
+        production.d1_databases = { MISUB_SESSION_DB: { id: sessionId } };
+        if (enabled) production.env_vars.SESSION_AUTH_MODE = { type: 'plain_text', value: 'd1-v1' };
+        const result = runScript(t, [project(production)], automatic);
+        expectDeployed(result);
+        assert.equal(result.calls.length, 1);
+        assert.ok(result.config.includes(`database_id = "${sessionId}"`));
+        assert.equal(result.config.includes('SESSION_AUTH_MODE = "d1-v1"'), enabled);
+    }
+});
+
+test('CI environment cannot provision or enable session authority', (t) => {
+    const result = runScript(t, [project(existingProduction())], {
+        ...automatic, SESSION_AUTH_MODE: 'd1-v1',
+        CLOUDFLARE_SESSION_D1_DATABASE_ID: 'cccccccc-2222-4333-8444-555555555555',
+    });
+    expectDeployed(result);
+    assert.equal(result.calls.length, 1);
+    assert.ok(!result.config.includes('SESSION_AUTH_MODE'));
+    assert.ok(!result.config.includes('MISUB_SESSION_DB'));
+});
+
+test('refuses invalid session modes or a mode with no existing database', (t) => {
+    for (const mode of [
+        { type: 'secret_text', value: 'd1-v1' },
+        { type: 'plain_text', value: '' },
+        { type: 'plain_text', value: 'legacy' },
+        { type: 'plain_text', value: 'd1-v1\n[bad]' },
+        { type: 'plain_text', value: 'd1-v1' },
+    ]) {
+        const production = existingProduction();
+        production.env_vars.SESSION_AUTH_MODE = mode;
+        const result = runScript(t, [project(production)], automatic);
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.equal(result.config, '');
+    }
+});
+
+test('refuses sharing the session database with every other supported D1 binding', (t) => {
+    for (const binding of ['MISUB_DB', 'MISUB_PROBE_DB', 'MISUB_SECURITY_DB']) {
+        const production = existingProduction();
+        const id = 'abcdefab-2222-4333-8444-555555555555';
+        production.d1_databases = { [binding]: { id }, MISUB_SESSION_DB: { id: id.toUpperCase() } };
+        const result = runScript(t, [project(production)], automatic);
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.equal(result.config, '');
+        assert.match(result.output, /MISUB_SESSION_DB must use an independent database/);
+    }
 });
 
 test('automatic release preserves credentials and all existing resource IDs', (t) => {
