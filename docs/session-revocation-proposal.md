@@ -1,6 +1,6 @@
 # 会话撤销、响应乱序与浏览器状态恢复
 
-状态：2026-10-14，离线候选协议。`experiments/session-cookie-protocol/` 未接入产品鉴权，使用合成凭据。产品 Cookie 复活问题仍未解决；本文不代表 Cloudflare 部署、生产迁移或实网验收通过。
+状态：2026-10-14，保留的离线模型设计。`experiments/session-cookie-protocol/` 使用合成凭据，独立于现已随 #40 合并的[实际产品会话实现](session-authority.md)。本文后续的容量、接口和待办描述属于模型阶段，当前产品行为与[生产启用决定](session-activation-decision.md)以对应文档为准；模型通过不代表生产模式已启用。
 
 ## 后端授权边界
 
