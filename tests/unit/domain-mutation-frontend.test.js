@@ -374,7 +374,7 @@ describe('domain request lifecycle and submitted snapshots', () => {
         }
     );
 
-    it('invalidates a standalone settings save on an accepted new load and retains the new save loading flag', async () => {
+    it('invalidates a standalone settings save across sessions and retains the new save loading flag', async () => {
         const logic = useSettingsLogic();
         get.mockResolvedValueOnce(settingsEnvelope());
         await logic.loadSettings();
@@ -382,6 +382,7 @@ describe('domain request lifecycle and submitted snapshots', () => {
             second = deferred();
         post.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
         const old = logic.handleSave();
+        useDataStore().clearCachedData();
         get.mockResolvedValueOnce(settingsEnvelope(100));
         await logic.loadSettings();
         logic.settings.value.FileName = 'new-session';
@@ -453,6 +454,112 @@ describe('domain request lifecycle and submitted snapshots', () => {
         respond(settingsEnvelope(8));
         await logic.handleSave();
         expect(post.mock.calls[0][1].baseVersion).toEqual(version(5));
+    });
+});
+
+describe('shared settings writer and read generations', () => {
+    it('keeps an acknowledged settings bridge when an older full GET arrives', async () => {
+        const store = loaded(),
+            logic = useSettingsLogic(),
+            oldRead = deferred();
+        get.mockResolvedValueOnce(settingsEnvelope());
+        await logic.loadSettings();
+        get.mockReturnValueOnce(oldRead.promise);
+        const reading = store.fetchData(true);
+        logic.settings.value.groupsPageSize = 50;
+        respond({ ...settingsEnvelope(3), data: { storageType: 'd1', groupsPageSize: 50 } });
+        expect(await logic.handleSave()).toBe(true);
+        oldRead.resolve({ ...data(), config: { groupsPageSize: 20 } });
+        expect(await reading).toBe(false);
+        expect(store.settings.groupsPageSize).toBe(50);
+        expect(JSON.parse(sessionStorage.getItem('misub_data_cache')).config.groupsPageSize).toBe(
+            50
+        );
+        respond(settingsEnvelope(4));
+        await store.saveSettings({ FileName: 'next' });
+        expect(post.mock.calls[1][1].baseVersion).toEqual(version(3));
+    });
+
+    it.each(['store', 'page'])(
+        'serializes settings saves when %s owns the request',
+        async (owner) => {
+            const store = loaded(),
+                logic = useSettingsLogic(),
+                pending = deferred();
+            get.mockResolvedValueOnce(settingsEnvelope());
+            await logic.loadSettings();
+            logic.settings.value.FileName = 'unsaved-editor';
+            post.mockReturnValueOnce(pending.promise);
+            const saving =
+                owner === 'store' ? store.saveSettings({ FileName: 'store' }) : logic.handleSave();
+            if (owner === 'store') expect(await logic.handleSave()).toBe(false);
+            else await expect(store.saveSettings({ FileName: 'store' })).rejects.toThrow();
+            expect(post).toHaveBeenCalledOnce();
+            expect(logic.settings.value.FileName).toBe('unsaved-editor');
+            expect(useEditorStore().isLoading).toBe(true);
+            pending.resolve(ack(settingsEnvelope(3), post.mock.calls[0][1]));
+            expect(await saving).toBe(true);
+            expect(useEditorStore().isLoading).toBe(false);
+            respond(settingsEnvelope(4));
+            await store.saveSettings({ FileName: 'next' });
+            expect(post.mock.calls[1][1].baseVersion).toEqual(version(3));
+        }
+    );
+
+    it.each(['store', 'page'])(
+        'does not let reads during a %s save invalidate its pending ACK',
+        async (owner) => {
+            const store = loaded(),
+                logic = useSettingsLogic(),
+                pending = deferred();
+            get.mockResolvedValueOnce(settingsEnvelope());
+            await logic.loadSettings();
+            post.mockReturnValueOnce(pending.promise);
+            const saving =
+                owner === 'store' ? store.saveSettings({ groupsPageSize: 50 }) : logic.handleSave();
+            expect(await store.fetchData(true)).toBe(false);
+            get.mockResolvedValueOnce(settingsEnvelope(99));
+            expect(await logic.loadSettings()).toBe(false);
+            expect(post).toHaveBeenCalledOnce();
+            expect(useEditorStore().isLoading).toBe(true);
+            pending.resolve(
+                ack(
+                    { ...settingsEnvelope(3), data: { storageType: 'd1', groupsPageSize: 50 } },
+                    post.mock.calls[0][1]
+                )
+            );
+            expect(await saving).toBe(true);
+            expect(store.settings.groupsPageSize).toBe(50);
+            respond(settingsEnvelope(4));
+            await store.saveSettings({ FileName: 'next' });
+            expect(post.mock.calls[1][1].baseVersion).toEqual(version(3));
+        }
+    );
+
+    it('keeps a subscription save and subsequent edits independent of the settings bridge', async () => {
+        const store = loaded(),
+            logic = useSettingsLogic(),
+            pending = deferred();
+        get.mockResolvedValueOnce(settingsEnvelope());
+        await logic.loadSettings();
+        store.subscriptions[0].name = 'Submitted';
+        post.mockReturnValueOnce(pending.promise);
+        const saving = store.saveData();
+        store.subscriptions[0].name = 'Pending edit';
+        respond({ ...settingsEnvelope(3), data: { storageType: 'd1', groupsPageSize: 50 } });
+        expect(await logic.handleSave()).toBe(true);
+        const payload = post.mock.calls[0][1];
+        pending.resolve({
+            success: true,
+            subscriptionProtocol: 'd1-v1',
+            version: version(3),
+            receipt: { operationId: payload.operationId, version: version(3) },
+            data: { misubs: [{ ...node, name: 'Submitted' }], profiles: [], version: version(3) },
+        });
+        expect(await saving).toBe(true);
+        expect(store.subscriptions[0].name).toBe('Pending edit');
+        expect(useEditorStore().isDirty).toBe(true);
+        expect(store.settings.groupsPageSize).toBe(50);
     });
 });
 afterEach(() => {

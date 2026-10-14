@@ -122,6 +122,7 @@ export const useDataStore = defineStore('data', () => {
     let saving = false;
     let snapshotVersion = null;
     let configVersion = null;
+    let configGeneration = 0;
     let rulesVersion = null;
     let rulesProtocol = 'legacy';
     let rulesRequest = 0;
@@ -176,7 +177,7 @@ export const useDataStore = defineStore('data', () => {
 
     async function fetchData(forceRefresh = false) {
         if (fetchDataPromise) return fetchDataPromise;
-        if (saving) {
+        if (saving || domainSaves.has('settings')) {
             showToast(t('store.tooFrequent'), 'warning');
             return false;
         }
@@ -191,12 +192,14 @@ export const useDataStore = defineStore('data', () => {
         const request = (async () => {
             isLoading.value = true;
             const requestLifecycle = lifecycle;
+            const configRead = settingsReadToken();
             const requestEditVersion = editVersion;
             let startingEditorData;
             try {
                 startingEditorData = JSON.stringify(captureEditorData());
                 const data = await api.get('/api/data');
-                if (requestLifecycle !== lifecycle) return false;
+                if (requestLifecycle !== lifecycle || !isSettingsReadCurrent(configRead))
+                    return false;
                 if (!validLoadedData(data)) throw new Error(t('store.invalidDataResponse'));
                 if (editorChangedSince(startingEditorData, requestEditVersion)) {
                     throw new Error(t('store.editedDuringLoad'));
@@ -421,6 +424,7 @@ export const useDataStore = defineStore('data', () => {
 
             if (!validDomainAcknowledgement(result, metadata, isStrictSettingsData))
                 throw new Error(t('store.invalidDataResponse'));
+            configGeneration += 1;
             const confirmed = strict
                 ? cloneData(result.data)
                 : { ...confirmedAtStart, ...submitted };
@@ -570,12 +574,31 @@ export const useDataStore = defineStore('data', () => {
     }
 
     // Keep successful settings edits visible even when navigating before a scheduled reload.
-    function applySavedSettings(newSettings, acknowledgement = null) {
+    function applySavedSettings(request, newSettings, acknowledgement = null) {
+        if (!isSettingsSaveCurrent(request)) return false;
+        configGeneration += 1;
         settingsStore.updateConfig(newSettings);
         if (acknowledgement?.subscriptionProtocol === 'd1-v1')
             configVersion = cloneData(acknowledgement.version);
         syncCachedConfig(settingsStore.config);
+        return true;
     }
+
+    function settingsReadToken() {
+        return { lifecycle, generation: configGeneration };
+    }
+    function isSettingsReadCurrent(token) {
+        return (
+            token.lifecycle === lifecycle &&
+            token.generation === configGeneration &&
+            !domainSaves.has('settings')
+        );
+    }
+    const beginSettingsSave = () => beginDomainSave('settings');
+    const isSettingsSaveCurrent = (request) => currentDomainSave('settings', request);
+    const finishSettingsSave = (request) => {
+        if (request) finishDomainSave('settings', request);
+    };
 
     async function fetchRuleTemplates() {
         const sequence = ++rulesReadSequence;
@@ -665,6 +688,7 @@ export const useDataStore = defineStore('data', () => {
 
     function beginDomainSave(domain) {
         if (domainSaves.has(domain)) throw new Error(t('store.tooFrequent'));
+        if (domain === 'settings') configGeneration += 1;
         const request = { lifecycle };
         domainSaves.set(domain, request);
         editorStore.setLoading(true);
@@ -700,6 +724,7 @@ export const useDataStore = defineStore('data', () => {
 
     function invalidateRequests() {
         lifecycle += 1;
+        configGeneration += 1;
         invalidateDomainRequests();
         fetchDataPromise = null;
         saveSequence += 1;
@@ -907,6 +932,11 @@ export const useDataStore = defineStore('data', () => {
         refreshSubscriptionRuntime,
         saveSettings,
         applySavedSettings,
+        beginSettingsSave,
+        isSettingsSaveCurrent,
+        finishSettingsSave,
+        settingsReadToken,
+        isSettingsReadCurrent,
         fetchRuleTemplates,
         saveRuleTemplates,
         hydrateFromData,

@@ -129,9 +129,14 @@ export function useSettingsLogic() {
     const loadSettings = async () => {
         const sequence = ++loadSequence;
         const requestLifecycle = lifecycle;
+        const dataStore = useDataStore();
+        const configRead = dataStore.settingsReadToken();
         const editorAtStart = editorSnapshot();
         const currentLoad = () =>
-            !disposed && sequence === loadSequence && requestLifecycle === lifecycle;
+            !disposed &&
+            sequence === loadSequence &&
+            requestLifecycle === lifecycle &&
+            dataStore.isSettingsReadCurrent(configRead);
         isLoading.value = true;
         try {
             const result = await fetchSettings();
@@ -202,7 +207,10 @@ export function useSettingsLogic() {
         isSaving.value = true;
         clearReloadTimer();
         restartCountdown.value = null;
+        const dataStore = useDataStore();
+        let domainRequest;
         try {
+            domainRequest = dataStore.beginSettingsSave();
             if (!settings.value.storageType) settings.value.storageType = 'kv';
             settings.value.externalApi = normalizeExternalApiConfig(settings.value.externalApi);
 
@@ -224,7 +232,8 @@ export function useSettingsLogic() {
 
             const metadata = domainMutationMetadata(settingsBaseline);
             const result = await saveSettings(settingsToSave, metadata);
-            if (!currentSave(request)) return false;
+            if (!currentSave(request) || !dataStore.isSettingsSaveCurrent(domainRequest))
+                return false;
             if (validDomainAcknowledgement(result, metadata, isStrictSettingsData)) {
                 loadSequence += 1;
                 isLoading.value = false;
@@ -243,7 +252,11 @@ export function useSettingsLogic() {
                           version: acknowledgedDomainVersion(result, edited),
                       }
                     : { success: true, data: cloneDomainData(confirmed) };
-                useDataStore().applySavedSettings(confirmed, metadata.baseVersion ? result : null);
+                dataStore.applySavedSettings(
+                    domainRequest,
+                    confirmed,
+                    metadata.baseVersion ? result : null
+                );
                 if (edited) return true;
                 showToast(t('settings.savedReloading'), 'success');
                 clearReloadTimer();
@@ -274,6 +287,7 @@ export function useSettingsLogic() {
             showToast(error.message, 'error');
             return false;
         } finally {
+            dataStore.finishSettingsSave(domainRequest);
             if (currentSave(request)) {
                 isSaving.value = false;
                 saveRequest = null;
@@ -321,10 +335,19 @@ export function useSettingsLogic() {
         loadSequence += 1;
         isLoading.value = true;
         isSaving.value = true;
+        const dataStore = useDataStore();
+        let domainRequest;
         try {
+            domainRequest = dataStore.beginSettingsSave();
             const result = await resetSettings(metadata);
-            if (!currentSave(request)) return false;
+            if (!currentSave(request) || !dataStore.isSettingsSaveCurrent(domainRequest))
+                return false;
             if (validDomainAcknowledgement(result, metadata, isStrictSettingsData)) {
+                dataStore.applySavedSettings(
+                    domainRequest,
+                    result.data || DEFAULT_SETTINGS,
+                    metadata.baseVersion ? result : null
+                );
                 loadSequence += 1;
                 showToast(t('settings.resetSuccess'), 'success');
                 const editorAtAck = editorSnapshot();
@@ -343,6 +366,7 @@ export function useSettingsLogic() {
             if (!currentSave(request)) return false;
             showToast(t('settings.resetRequestFailed'), 'error');
         } finally {
+            dataStore.finishSettingsSave(domainRequest);
             if (currentSave(request)) {
                 isLoading.value = false;
                 isSaving.value = false;

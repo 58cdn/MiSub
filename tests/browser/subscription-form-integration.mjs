@@ -110,7 +110,7 @@ const report = {
     externalRequests: [],
     kvWrites: [],
     limits: [
-        'Synthetic identities and subscriptions; two independent in-memory SQLite databases.',
+        'Synthetic identities and subscriptions; independent in-memory business, audit and session SQLite databases.',
         'Production-built UI with real form controls, API handlers and browser cookies on loopback Chromium.',
         'API interception controls responses; no Cloudflare, production bindings, Safari, real nodes or remote subscription fetch.',
         'Read-only Pinia inspection is used for assertions; edits use DOM controls.',
@@ -276,7 +276,7 @@ try {
     report.browserVersion = browser.version();
     context = await browser.newContext({ viewport: { width: 1440, height: 1100 } });
     await context.addInitScript(() => {
-        localStorage.setItem('misub:locale', 'en-US');
+        if (location.protocol === 'https:') localStorage.setItem('misub:locale', 'en-US');
     });
     context.on('page', (page) =>
         page.on('pageerror', (error) => report.errors.push(error.message))
