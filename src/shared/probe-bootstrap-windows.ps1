@@ -53,10 +53,21 @@ namespace MiSub.Bootstrap {
             if (architecture != 9) throw new InvalidOperationException("unsupported_windows_architecture_requires_x64");
             return "windows-amd64";
         }
+        public static string RegularUserError(bool system, bool administratorRoleEnabled, bool builtInAdministrator) {
+            if (!system && !administratorRoleEnabled) return null;
+            const string prefix = "bootstrap_requires_regular_user: ";
+            if (system)
+                return prefix + "SYSTEM is not supported. Sign in to an existing standard Windows user and open PowerShell normally.";
+            if (builtInAdministrator)
+                return prefix + "The built-in Administrator account currently has an enabled administrator role. Use an existing standard Windows user. Reopening a terminal in this session may keep full privileges.";
+            return prefix + "This PowerShell process has an enabled administrator role. Close it and open PowerShell normally from your user desktop Start menu, without Run as administrator. A child terminal may inherit elevation. If it remains administrative, use an existing standard Windows user.";
+        }
         public static void RegularUser() {
             using (var identity = WindowsIdentity.GetCurrent()) {
-                if (new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator) || identity.IsSystem)
-                    throw new InvalidOperationException("bootstrap_requires_regular_user");
+                bool administrator = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+                bool builtIn = administrator && identity.User != null && identity.User.IsWellKnown(WellKnownSidType.AccountAdministratorSid);
+                string error = RegularUserError(identity.IsSystem, administrator, builtIn);
+                if (error != null) throw new InvalidOperationException(error);
             }
         }
         public static string LocalPath(string path) {
@@ -260,11 +271,15 @@ function Invoke-ProbeCommand {
     if ($LASTEXITCODE -ne 0) { throw 'detector_command_failed_check_its_message_before_retrying' }
 }
 
+function Assert-ProbeRegularUser {
+    [MiSub.Bootstrap.Native]::RegularUser()
+}
+
 function Get-ProbeEnvironment {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'unsupported_platform' }
     if ([Environment]::OSVersion.Version.Major -lt 10) { throw 'unsupported_windows_version_requires_10_or_server_2016' }
     Initialize-ProbeNative
-    [MiSub.Bootstrap.Native]::RegularUser()
+    Assert-ProbeRegularUser
     $platform = [MiSub.Bootstrap.Native]::Architecture()
     $base = [MiSub.Bootstrap.Native]::LocalPath([Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData))
     $config = [MiSub.Bootstrap.Native]::LocalPath([IO.Path]::Combine($base, 'MiSubProbe', 'probe.json'))
