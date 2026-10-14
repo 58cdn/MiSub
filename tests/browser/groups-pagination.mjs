@@ -220,25 +220,48 @@ try {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await footer().getByRole('combobox').focus();
     await page.keyboard.press('ArrowUp');
-    await page.keyboard.press('Enter');
     await range('显示 1 至 10 共 45 条结果');
+    await page.keyboard.press('Escape');
     await page.keyboard.press('Tab');
-    const focus = await page.evaluate(() => ({
-        label: document.activeElement.getAttribute('aria-label'),
-        shadow: getComputedStyle(document.activeElement).boxShadow,
-    }));
+    const keyboardFocus = ({ wait }) => {
+        const active = document.activeElement;
+        const shadow = getComputedStyle(active).boxShadow;
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 1;
+        const context = canvas.getContext('2d');
+        const hasVisibleRing = shadow.split(/,(?![^()]*\))/).some((layer) => {
+            const lengths = (layer.match(/-?[\d.]+px/g) || []).map(parseFloat);
+            if (lengths.length !== 4 || lengths[3] < 2) return false;
+            const color = layer.replace(/-?[\d.]+px|\binset\b/g, '').trim();
+            context.clearRect(0, 0, 1, 1);
+            context.fillStyle = color;
+            context.fillRect(0, 0, 1, 1);
+            return context.getImageData(0, 0, 1, 1).data[3] > 0;
+        });
+        const result = {
+            label: active.getAttribute('aria-label'),
+            shadow,
+            visible: active.matches(':focus-visible'),
+            pageInput: active.matches('[data-testid="groups-pagination"] input[type="number"]'),
+            hasVisibleRing,
+        };
+        return wait ? result.pageInput && result.visible && result.hasVisibleRing : result;
+    };
+    await page.waitForFunction(keyboardFocus, { wait: true });
+    const focus = await page.evaluate(keyboardFocus, { wait: false });
     assert.ok(focus.label);
-    assert.notEqual(focus.shadow, 'none');
+    assert.equal(focus.pageInput, true);
+    assert.equal(focus.visible, true);
+    assert.equal(focus.hasVisibleRing, true);
     await writeFile(
         resolve(evidence, 'pagination-accessibility.txt'),
         await footer().ariaSnapshot()
     );
-    await page.evaluate(() => {
-        localStorage.setItem('theme', 'light');
-        document.documentElement.classList.remove('dark');
-    });
+    await page.getByRole('button', { name: '切换到亮色模式', exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector('.dark'));
     await shot('desktop-light.png');
     await auditFooter('light');
+    assert.notDeepEqual(accessibility[0].contrast, accessibility[1].contrast);
 
     await page.goto(`${origin}/dashboard/settings`);
     await page.getByTestId('settings-tab-system').click();
