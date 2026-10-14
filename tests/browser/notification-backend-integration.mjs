@@ -332,6 +332,7 @@ try {
     await page.reload();
     const signedIn = await submit(env.ADMIN_PASSWORD);
     assert.equal(signedIn.status, 200);
+    await page.waitForURL((url) => url.pathname === '/dashboard');
     assert.equal(signedIn.body.loginSecurity.warning.failedAttempts, 10);
     await page.getByText('Login security warning', { exact: true }).waitFor();
     assert.equal(
@@ -440,6 +441,8 @@ try {
         const legacyLogin = await submit(env.ADMIN_PASSWORD);
         assert.equal(legacyLogin.status, 200);
         assert.deepEqual(legacyLogin.body.loginSecurity, { enabled: false, warning: null });
+        // Login finishes hydration and navigation before testing the next user action.
+        await page.waitForURL((url) => url.pathname === '/dashboard');
         await bell().waitFor();
         await bell().click();
         await dialog()
@@ -480,11 +483,13 @@ try {
         );
     }
     await context.clearCookies();
-    const expiredReply = page.waitForResponse(
-        (response) => new URL(response.url()).pathname === '/api/admin/notifications'
-    );
-    await dialog().getByRole('button', { name: 'Refresh', exact: true }).click();
-    assert.equal((await expiredReply).status(), 401);
+    const [expiredReply] = await Promise.all([
+        page.waitForResponse(
+            (response) => new URL(response.url()).pathname === '/api/admin/notifications'
+        ),
+        dialog().getByRole('button', { name: 'Refresh', exact: true }).click(),
+    ]);
+    assert.equal(expiredReply.status(), 401);
     await page.locator('input[autocomplete=current-password]').waitFor();
     assert.equal(await dialog().count(), 0);
     assert.equal(await bell().count(), 0);
@@ -519,6 +524,14 @@ try {
         url: page.url(),
         body: (await page.locator('body').innerText()).slice(0, 6000),
     };
+    console.error(
+        JSON.stringify({
+            failure: report.failure,
+            recentApi: report.api
+                .slice(-6)
+                .map(({ method, path, status }) => ({ method, path, status })),
+        })
+    );
     await page.screenshot({ path: resolve(evidence, 'failure.png') });
     throw error;
 } finally {

@@ -324,6 +324,7 @@ try {
     await page.locator('input[autocomplete=current-password]').fill('fixture-password');
     await page.locator('button[type=submit]').click();
     await page.getByText('Login security warning', { exact: true }).waitFor();
+    await page.waitForURL((url) => url.pathname === '/dashboard');
     await page.getByRole('button', { name: 'View security notifications', exact: true }).click();
     await dialog().getByText('Failed password attempts detected', { exact: true }).waitFor();
     await dialog()
@@ -346,6 +347,13 @@ try {
         url: page.url(),
         body: (await page.locator('body').innerText()).slice(0, 6000),
     };
+    console.error(
+        JSON.stringify({
+            failure: report.failure,
+            unexpectedApi: report.unexpectedApi,
+            pageErrors: report.pageErrors,
+        })
+    );
     await page.screenshot({ path: resolve(evidence, 'failure.png') });
     throw error;
 } finally {
