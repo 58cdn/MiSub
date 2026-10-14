@@ -2,6 +2,8 @@
 
 The native target is `windows-amd64`, using the source-built `v1.19.32-misub-source` core with `GOAMD64=v1` and system certificate authorities. It requires Windows 10 / Windows Server 2016 or later on x64; the default installation command requires PowerShell 5.1 or later. Windows ARM64 and older Windows versions are outside this target. TLS verification remains enabled.
 
+Use a non-elevated PowerShell opened normally from an existing user's desktop. If installation reports `bootstrap_requires_regular_user` or `installation_requires_regular_user`, follow the [Windows permission guide](detector-windows-permissions.md). The current process token determines permission; an `Administrator` username or working directory does not. SYSTEM and full administrator sessions are outside this user-level installation path.
+
 ## Running and pairing
 
 For [MiSub Probe 0.2.0](https://github.com/58cdn/MiSub/releases/tag/probe-v0.2.0), use the [one-command installation guide](detector-one-command-install.md). The default PowerShell command downloads and verifies the raw EXE and calls native `--setup` to pair, save private configuration, install and explicitly start after browser approval. It does not execute a downloaded `.ps1` or change execution policy. A separately downloaded `install.ps1` is an advanced option only where local policy already permits that script.

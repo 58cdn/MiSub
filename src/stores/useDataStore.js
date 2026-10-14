@@ -283,8 +283,7 @@ export const useDataStore = defineStore('data', () => {
                 throw new Error(result.message || t('store.saveSettingsFailed'));
             }
 
-            settingsStore.updateConfig(newSettings);
-            syncCachedConfig(settingsStore.config);
+            applySavedSettings(newSettings);
             if (!silent) showToast(t('store.settingsUpdated'), 'success');
             return true;
         } catch (error) {
@@ -299,6 +298,12 @@ export const useDataStore = defineStore('data', () => {
         } finally {
             editorStore.setLoading(false);
         }
+    }
+
+    // Keep successful settings edits visible even when navigating before a scheduled reload.
+    function applySavedSettings(newSettings) {
+        settingsStore.updateConfig(newSettings);
+        syncCachedConfig(settingsStore.config);
     }
 
     async function fetchRuleTemplates() {
@@ -519,6 +524,7 @@ export const useDataStore = defineStore('data', () => {
         fetchData,
         saveData,
         saveSettings,
+        applySavedSettings,
         fetchRuleTemplates,
         saveRuleTemplates,
         hydrateFromData,

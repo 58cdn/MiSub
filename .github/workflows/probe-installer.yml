@@ -1,0 +1,111 @@
+name: Probe installer offline
+
+on:
+    pull_request:
+        paths:
+            - '.github/workflows/probe-installer.yml'
+            - 'src/shared/probe-*'
+            - 'detector/bootstrap/**'
+            - 'detector/release-catalog.json'
+            - 'tests/unit/probe-*'
+            - 'tests/fixtures/probe-release.js'
+            - 'package*.json'
+            - 'vitest.config.js'
+    push:
+        branches: [main, 'ci/probe-installer-*']
+        paths:
+            - '.github/workflows/probe-installer.yml'
+            - 'src/shared/probe-*'
+            - 'detector/bootstrap/**'
+            - 'detector/release-catalog.json'
+            - 'tests/unit/probe-*'
+            - 'tests/fixtures/probe-release.js'
+            - 'package*.json'
+            - 'vitest.config.js'
+
+permissions:
+    contents: read
+
+concurrency:
+    group: probe-installer-offline-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    unix:
+        name: Offline loader (${{ matrix.target }})
+        strategy:
+            fail-fast: false
+            max-parallel: 2
+            matrix:
+                include:
+                    - runner: ubuntu-24.04
+                      target: linux-x64
+                    - runner: ubuntu-24.04-arm
+                      target: linux-arm64
+                    - runner: macos-15-intel
+                      target: darwin-x64
+                    - runner: macos-15
+                      target: darwin-arm64
+        runs-on: ${{ matrix.runner }}
+        timeout-minutes: 10
+        env:
+            MISUB_INSTALLER_NATIVE_TARGET: ${{ matrix.target }}
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '22'
+                  cache: npm
+            - name: Record native runtime
+              run: |
+                  node -p 'process.platform + "-" + process.arch'
+                  /bin/bash --version
+                  /usr/bin/curl --version
+                  PATH=/usr/bin:/bin /bin/bash -c 'command -v sha256sum || command -v shasum'
+                  test "$(id -u)" -ne 0
+            - run: npm ci --ignore-scripts
+            - name: Verify generated loader with synthetic downloads
+              run: npx --no-install vitest run tests/unit/probe-network-bootstrap.test.js tests/unit/probe-bootstrap-command.test.js tests/unit/probe-release.test.js --maxWorkers=1
+            - name: Verify installer with isolated configuration and fake client
+              run: /bin/bash detector/bootstrap/test_install.sh
+            - name: Verify combined application and deployment boundaries
+              if: matrix.target == 'linux-x64'
+              run: |
+                  node --test tests/deployment/*.test.mjs
+                  node --test tests/probes/*.check.mjs
+                  npm run test:run -- --maxWorkers=2
+                  npm run build
+
+    windows:
+        name: Offline loader (windows-x64, PowerShell 5.1 and 7)
+        runs-on: windows-2022
+        timeout-minutes: 10
+        env:
+            MISUB_INSTALLER_NATIVE_TARGET: win32-x64
+        defaults:
+            run:
+                shell: pwsh
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '22'
+                  cache: npm
+            - name: Record native runtimes
+              run: |
+                  node -p 'process.platform + "-" + process.arch'
+                  powershell.exe -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+                  pwsh -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+            - run: npm ci --ignore-scripts
+            - name: Verify PowerShell 5.1 loader with synthetic downloads
+              run: npx --no-install vitest run tests/unit/probe-network-bootstrap.test.js --maxWorkers=1 -t 'Windows short installer'
+            - name: Verify PowerShell 7 loader with synthetic downloads
+              env:
+                  MISUB_TEST_POWERSHELL: pwsh.exe
+              run: npx --no-install vitest run tests/unit/probe-network-bootstrap.test.js --maxWorkers=1 -t 'Windows short installer'
+            - name: Verify installer fixtures in both supported shells
+              run: |
+                  powershell.exe -NoProfile -File detector/bootstrap/test-install-windows.ps1
+                  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+                  pwsh -NoProfile -File detector/bootstrap/test-install-windows.ps1
+                  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
