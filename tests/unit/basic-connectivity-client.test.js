@@ -97,6 +97,9 @@ describe('saved-node basic connectivity client', () => {
         const store = useDataStore();
         store.hydrateFromData({
             misubs: [{ id: 'saved', url: 'trojan://fixture@example.com:443', enabled: true }],
+            profiles: [],
+            ruleTemplates: [],
+            config: {},
         });
         const scope = effectScope();
         const state = scope.run(() => useManualNodes(vi.fn()));

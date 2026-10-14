@@ -565,6 +565,10 @@ export const messages = {
         },
         store: {
             fetchDataFailed: '获取数据失败: {message}',
+            loadBeforeSave: '尚未完整加载服务器数据，请刷新成功后再保存；当前编辑仍保留。',
+            invalidDataResponse: '服务器返回的数据不完整，已保留当前数据。',
+            editedDuringLoad: '加载期间已有新编辑，已保留当前编辑；如需放弃，请再次刷新。',
+            invalidSaveResponse: '服务器未返回完整的保存结果，当前编辑仍保留，请核对后重试。',
             tooFrequent: '操作过于频繁，请稍候...',
             saveFailed: '保存失败',
             dataSaved: '数据已保存',
@@ -2497,6 +2501,14 @@ export const messages = {
         },
         store: {
             fetchDataFailed: 'Failed to load data: {message}',
+            loadBeforeSave:
+                'Load complete server data before saving. Your current edits are preserved.',
+            invalidDataResponse:
+                'The server returned incomplete data. Your current data is preserved.',
+            editedDuringLoad:
+                'Edits made during loading are preserved. Refresh again to discard them.',
+            invalidSaveResponse:
+                'The server returned an incomplete save result. Your edits are preserved; check before retrying.',
             tooFrequent: 'Too many actions. Wait...',
             saveFailed: 'Save failed',
             dataSaved: 'Data saved',
