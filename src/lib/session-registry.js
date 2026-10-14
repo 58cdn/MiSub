@@ -81,6 +81,9 @@ export function createSessionRegistry(indexedDB, name = 'misub-session-coordinat
                     ticket: null,
                 };
                 state.intents[intent.id] = intent;
+                // Invalidate queued events before any asynchronous login work,
+                // including the interval before the new SID is acknowledged.
+                event(state, 'login-pending');
                 return intent;
             }),
         abandonUnbound: (id) =>

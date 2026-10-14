@@ -294,6 +294,32 @@ try {
             1
         );
     });
+    await test('queued logout broadcast cannot cancel an admitted new login', async () => {
+        const a = await fresh(),
+            b = await newPage();
+        await a.evaluate(() => store.login('synthetic-password'));
+        await b.evaluate(() => store.checkSession());
+        await a.evaluate(() => {
+            const post = BroadcastChannel.prototype.postMessage;
+            BroadcastChannel.prototype.postMessage = function (message) {
+                if (message.type === 'logout-complete')
+                    window.releaseEvent = () => post.call(this, message);
+                else post.call(this, message);
+            };
+        });
+        await a.evaluate(() => store.logout());
+        const held = gate('/api/session/prepare');
+        await b.evaluate(() => {
+            window.signingIn = store.login('synthetic-password');
+        });
+        await held.ready;
+        await a.evaluate(() => releaseEvent());
+        await b.evaluate(() => client.recoveryPending());
+        held.release();
+        await b.evaluate(() => signingIn);
+        assert.equal((await check(b)).authenticated, true);
+        assert.equal(await b.evaluate(() => store.sessionState), 'loggedIn');
+    });
     await test('cleared localStorage cannot reuse a delayed login generation', async () => {
         const a = await fresh(),
             b = await newPage();
