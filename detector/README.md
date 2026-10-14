@@ -6,6 +6,8 @@
 
 ## 启动
 
+未发布源码新增 [`--doctor` 本地只读诊断](../docs/detector-doctor.md)，可输出脱敏 JSON 报告，汇总构建、内核材料、安装记录与配置检查。已发布的 0.2.0 尚不支持此命令。
+
 设置页在兼容发行可用时提供[一次复制的安装入口](../docs/detector-one-command-install.md)，下载、核验后进行网页批准和用户安装。Windows 默认命令直接运行已核验的 EXE；单独下载的 `install.ps1` 仅供本机执行策略已允许该脚本的高级使用者，不自动修改执行策略。Linux/macOS 使用 Bash 与系统 HTTPS、SHA256 工具；本源码发行的 macOS 最低版本为 13。
 
 当前发行采用[固定源码构建与手动发行流程](../docs/detector-source-release.md)，随发行提供对应源码、构建配方、完整许可/通知材料及校验文件。历史[离线库存审计器](../docs/detector-distribution-audit.md)继续用于检查旧预编译归档，其 `ready: false` 不代表新源码发行的门槛结果。新流程独立验证源码、实际链接文件许可映射、重复构建输出和 GitHub 构建来源证明。
