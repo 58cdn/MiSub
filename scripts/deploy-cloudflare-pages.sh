@@ -57,6 +57,10 @@ case "$status" in
 esac
 
 if [[ "$existing_only" == true ]]; then
+  if ! jq -e '.result.production_branch == "main"' "$project_json" >/dev/null; then
+    echo '::error::Automatic release requires the existing Pages production branch to be main.'
+    exit 1
+  fi
   if ! jq -e '
     (.result.deployment_configs.production.env_vars // {}) as $vars |
     $vars.ADMIN_PASSWORD.type == "secret_text" and

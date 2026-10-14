@@ -14,7 +14,7 @@ const d1Id = '11111111-2222-4333-8444-555555555555';
 const sha = 'b'.repeat(40);
 const project = (production = {}, status = 200) => ({
     suffix: '/pages/projects/misub', status,
-    body: { success: status === 200, result: { deployment_configs: { production } } },
+    body: { success: status === 200, result: { production_branch: 'main', deployment_configs: { production } } },
 });
 const namespaces = (result) => ({
     suffix: '/storage/kv/namespaces?per_page=1000', body: { success: true, result },
@@ -196,6 +196,19 @@ test('automatic release never creates a missing project', (t) => {
     assert.deepEqual(result.calls, []);
     assert.deepEqual(result.remaining, []);
     assert.match(result.output, /requires an existing Pages project/);
+});
+
+test('automatic release refuses a missing or different production branch', (t) => {
+    for (const branch of [undefined, 'production', '']) {
+        const response = project(existingProduction());
+        response.body.result.production_branch = branch;
+        const result = runScript(t, [response], automatic);
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.deepEqual(result.remaining, []);
+        assert.equal(result.config, '');
+        assert.match(result.output, /production branch to be main/);
+    }
 });
 
 test('automatic release never discovers or creates a missing KV binding', (t) => {

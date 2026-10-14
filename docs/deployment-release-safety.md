@@ -1,6 +1,6 @@
 # 自动发布的配置边界
 
-GitHub Actions 的 `push` 发布先读取现有 Pages 项目配置，再发布代码。项目、`MISUB_KV` 和 `ADMIN_PASSWORD` 密钥绑定必须已存在；`COOKIE_SECRET` 若存在，必须仍为密钥类型。缺失配置会终止发布。
+GitHub Actions 的 `push` 发布先读取现有 Pages 项目配置，再发布代码。项目的生产分支必须是 `main`，`MISUB_KV` 和 `ADMIN_PASSWORD` 密钥绑定必须已存在；`COOKIE_SECRET` 若存在，必须仍为密钥类型。缺失配置或生产分支不匹配会终止发布，避免将生产绑定带入预览环境。
 
 自动发布沿用现有 `MISUB_KV`、`MISUB_DB` 和 `MISUB_PROBE_DB` 的资源 ID，拒绝添加或替换数据库绑定，并拒绝自动开通 Probe 数据库。生产管理员密码与 Cookie 密钥均保留当前值，仓库 secret 的值不会在普通发布中写回。脚本不执行业务数据迁移。
 
