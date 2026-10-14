@@ -1,5 +1,7 @@
 // FILE: src/composables/useSubscriptions.js
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, toValue } from 'vue';
+import { normalizeGroupsPageSize } from '../../shared/pagination.js';
+import { matchesSubscriptionStatus } from '../utils/dashboard-deeplink.js';
 import { storeToRefs } from 'pinia';
 import { useDataStore } from '../stores/useDataStore';
 import { useToastStore } from '../stores/toast.js';
@@ -11,7 +13,7 @@ import { getAirportIdentityKey } from '../utils/airport-identity.js';
 
 const isDev = import.meta.env.DEV;
 
-export function useSubscriptions(markDirty) {
+export function useSubscriptions(markDirty, { statusFilter, configurablePagination = false } = {}) {
     const { showToast } = useToastStore();
     const dataStore = useDataStore();
     // Rename the store ref to avoid confusion, as it contains ALL items
@@ -30,9 +32,13 @@ export function useSubscriptions(markDirty) {
     const isRefreshing = ref(false);
     const filteredSubscriptions = computed(() => {
         const query = searchQuery.value.trim().toLowerCase();
-        if (!query) return subscriptions.value;
+        const status = toValue(statusFilter);
+        const candidates = status
+            ? subscriptions.value.filter((sub) => matchesSubscriptionStatus(sub, status))
+            : subscriptions.value;
+        if (!query) return candidates;
 
-        return subscriptions.value.filter((sub) =>
+        return candidates.filter((sub) =>
             [
                 sub.name,
                 sub.description,
@@ -50,7 +56,17 @@ export function useSubscriptions(markDirty) {
     });
 
     const subsCurrentPage = ref(1);
-    const subsItemsPerPage = 6;
+    // The page override lasts only for this mounted view. The default is a global setting.
+    const pageSizeOverride = ref(null);
+    const subsItemsPerPage = computed(() =>
+        configurablePagination
+            ? (pageSizeOverride.value ?? normalizeGroupsPageSize(dataStore.settings.groupsPageSize))
+            : 6
+    );
+    function changeSubsPageSize(size) {
+        pageSizeOverride.value = normalizeGroupsPageSize(size);
+        subsCurrentPage.value = 1;
+    }
     const enabledSubscriptions = computed(() => subscriptions.value.filter((s) => s.enabled));
 
     /** 保持同一站点订阅相邻，避免分页后多个机场组交错出现。 */
@@ -92,15 +108,15 @@ export function useSubscriptions(markDirty) {
     });
 
     const subsTotalPages = computed(() =>
-        Math.ceil(orderedFilteredSubscriptions.value.length / subsItemsPerPage)
+        Math.max(1, Math.ceil(orderedFilteredSubscriptions.value.length / subsItemsPerPage.value))
     );
     const paginatedSubscriptions = computed(() => {
-        const start = (subsCurrentPage.value - 1) * subsItemsPerPage;
-        const end = start + subsItemsPerPage;
+        const start = (subsCurrentPage.value - 1) * subsItemsPerPage.value;
+        const end = start + subsItemsPerPage.value;
         return orderedFilteredSubscriptions.value.slice(start, end);
     });
 
-    watch([searchQuery, () => filteredSubscriptions.value.length], () => {
+    watch([searchQuery, () => toValue(statusFilter), subsItemsPerPage], () => {
         subsCurrentPage.value = 1;
     });
 
@@ -111,7 +127,7 @@ export function useSubscriptions(markDirty) {
     });
 
     function changeSubsPage(page) {
-        if (page < 1 || page > subsTotalPages.value) return;
+        if (!Number.isInteger(page) || page < 1 || page > subsTotalPages.value) return;
         subsCurrentPage.value = page;
     }
 
@@ -510,21 +526,29 @@ export function useSubscriptions(markDirty) {
     }
 
     function reorderSubscriptions(newOrder) {
-        // 1. Get all Manual Nodes (to preserve them)
-        // We can't rely just on manualNodes computed because it might be filtered or not imported here.
-        // Instead, filter from source of truth: allSubscriptions
-        const currentManualNodes = (allSubscriptions.value || []).filter(
-            (item) => !item.url || !/^https?:\/\//.test(item.url)
+        if (!Array.isArray(newOrder) || newOrder.length < 2) return;
+
+        const current = allSubscriptions.value || [];
+        if (new Set(current.map((item) => item.id)).size !== current.length) return;
+        const currentById = new Map(subscriptions.value.map((item) => [item.id, item]));
+        const orderedIds = newOrder.map((item) => item?.id);
+        const reorderedIds = new Set(orderedIds);
+        if (
+            reorderedIds.size !== orderedIds.length ||
+            orderedIds.some((id) => !id || !currentById.has(id))
+        ) {
+            return;
+        }
+
+        // A filtered view reorders only its own slots. Keep all other records in
+        // place and use current objects so a drag cannot overwrite newer fields.
+        let index = 0;
+        const mergedList = current.map((item) =>
+            reorderedIds.has(item.id) ? currentById.get(orderedIds[index++]) : item
         );
+        if (mergedList.every((item, position) => item === current[position])) return;
 
-        // 2. Combine New Ordered Subscriptions + Existing Manual Nodes
-        // Logic: Manual Nodes at top, Subscriptions at bottom
-        const mergedList = [...currentManualNodes, ...newOrder];
-
-        // 3. Update Store
         dataStore.overwriteSubscriptions(mergedList);
-
-        // 4. Mark Dirty
         markDirty();
     }
 
@@ -537,6 +561,8 @@ export function useSubscriptions(markDirty) {
         refreshError,
         lastRefreshAt,
         subsCurrentPage,
+        subsItemsPerPage,
+        changeSubsPageSize,
         subsTotalPages,
         paginatedSubscriptions,
         totalRemainingTraffic,

@@ -317,7 +317,7 @@ describe('security hardening', () => {
         const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
         const env = {
             ASSETS: createAssets(),
-            MISUB_DB: createD1({ cronSecret: 'cron-secret' }),
+            MISUB_DB: createD1({ cronSecret: 'cron-secret', storageType: 'd1' }),
         };
         const next = vi.fn(async () => new Response('next'));
 
@@ -343,7 +343,7 @@ describe('security hardening', () => {
             expect(queryResponse.status).not.toBe(401);
             expect(bearerResponse.status).not.toBe(401);
             expect(wrongQueryResponse.status).toBe(401);
-            expect(warnSpy).toHaveBeenCalledWith(
+            expect(warnSpy).not.toHaveBeenCalledWith(
                 '[Storage] No KV binding found, using noop adapter'
             );
             expect(infoSpy).toHaveBeenCalledWith(

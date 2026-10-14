@@ -5,6 +5,17 @@ export const messages = {
     'zh-CN': {
         notifications: notificationMessages['zh-CN'],
         session: sessionMessages['zh-CN'],
+        groupsPagination: {
+            navigation: '机场订阅分页',
+            range: '显示 {start} 至 {end} 共 {total} 条结果',
+            perPage: '每页：',
+            pageSizeLabel: '机场订阅每页条数',
+            loading: '正在加载结果…',
+            settingsTitle: '列表显示',
+            settingsDescription:
+                '全站设置，适用于所有管理员的机场订阅页。保存后生效；页面底栏可临时调整条数，重新打开页面时恢复此默认值。按订阅源计数，展开机场组仅显示当前页内的结果。',
+            defaultPageSize: '机场订阅默认每页条数',
+        },
         diagnostics: {
             title: '节点诊断',
             action: '诊断',
@@ -570,6 +581,10 @@ export const messages = {
         },
         store: {
             fetchDataFailed: '获取数据失败: {message}',
+            loadBeforeSave: '尚未完整加载服务器数据，请刷新成功后再保存；当前编辑仍保留。',
+            invalidDataResponse: '服务器返回的数据不完整，已保留当前数据。',
+            editedDuringLoad: '加载期间已有新编辑，已保留当前编辑；如需放弃，请再次刷新。',
+            invalidSaveResponse: '服务器未返回完整的保存结果，当前编辑仍保留，请核对后重试。',
             tooFrequent: '操作过于频繁，请稍候...',
             saveFailed: '保存失败',
             dataSaved: '数据已保存',
@@ -1863,6 +1878,17 @@ export const messages = {
     'en-US': {
         notifications: notificationMessages['en-US'],
         session: sessionMessages['en-US'],
+        groupsPagination: {
+            navigation: 'Airport subscription pagination',
+            range: 'Showing {start} to {end} of {total} results',
+            perPage: 'Per page:',
+            pageSizeLabel: 'Airport subscriptions per page',
+            loading: 'Loading results…',
+            settingsTitle: 'List display',
+            settingsDescription:
+                'Global setting for every administrator’s airport subscriptions page. Save to apply. The page footer can temporarily override this value; reopening the page restores the default. Results count subscription sources; expanded airport groups show only the current page’s results.',
+            defaultPageSize: 'Default airport subscriptions per page',
+        },
         diagnostics: {
             title: 'Node diagnostics',
             action: 'Diagnose',
@@ -2504,6 +2530,14 @@ export const messages = {
         },
         store: {
             fetchDataFailed: 'Failed to load data: {message}',
+            loadBeforeSave:
+                'Load complete server data before saving. Your current edits are preserved.',
+            invalidDataResponse:
+                'The server returned incomplete data. Your current data is preserved.',
+            editedDuringLoad:
+                'Edits made during loading are preserved. Refresh again to discard them.',
+            invalidSaveResponse:
+                'The server returned an incomplete save result. Your edits are preserved; check before retrying.',
             tooFrequent: 'Too many actions. Wait...',
             saveFailed: 'Save failed',
             dataSaved: 'Data saved',

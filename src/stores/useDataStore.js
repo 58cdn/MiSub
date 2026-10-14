@@ -14,6 +14,34 @@ const isDev = import.meta.env.DEV;
 // Initialize Cache
 const dataCache = createStorageCache('misub_data_cache', TIMING.CACHE_TTL_MS);
 
+const cloneData = (value) => JSON.parse(JSON.stringify(value));
+const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+const isCollection = (value) => Array.isArray(value) && value.every(isRecord);
+
+function validIdentifiedCollection(value) {
+    if (!isCollection(value)) return false;
+    const ids = new Set();
+    return value.every((item) => {
+        if (typeof item.id !== 'string' || !item.id.trim() || ids.has(item.id)) return false;
+        ids.add(item.id);
+        return true;
+    });
+}
+
+function validCollections(data) {
+    return (
+        isRecord(data) &&
+        !data.error &&
+        (data.success === undefined || data.success === true) &&
+        validIdentifiedCollection(data.misubs) &&
+        validIdentifiedCollection(data.profiles)
+    );
+}
+
+function validLoadedData(data) {
+    return validCollections(data) && isCollection(data.ruleTemplates) && isRecord(data.config);
+}
+
 export const useDataStore = defineStore('data', () => {
     const { showToast } = useToastStore();
     const settingsStore = useSettingsStore();
@@ -43,24 +71,40 @@ export const useDataStore = defineStore('data', () => {
         subscriptions: [],
         profiles: [],
         ruleTemplates: [],
+        config: {},
     };
+    let hasAuthoritativeBaseline = false;
+    let lifecycle = 0;
+    let editVersion = 0;
+    let saveSequence = 0;
+    let saving = false;
 
     // --- Actions ---
 
-    // Data Hydration (avoid re-fetching if passed from outside)
-    function hydrateFromData(data) {
-        if (!data) return false;
-
+    // External hydration receives the complete authenticated /api/data response.
+    function hydrateFromData(data, { fromCache = false } = {}) {
+        if (!validLoadedData(data)) return false;
         try {
-            const cleanSubs = (data.misubs || []).map((sub) => ({ ...sub, isUpdating: false }));
-            subscriptions.value = cleanSubs;
-            profiles.value = data.profiles || [];
-            ruleTemplates.value = data.ruleTemplates || [];
-            settingsStore.setConfig({ ...DEFAULT_SETTINGS, ...data.config });
-
-            updateSnapshot();
-            lastUpdated.value = new Date();
-            dataCache.set(data);
+            // Prepare every collection before publishing any state or saved baseline.
+            const next = cloneData(data);
+            if (!validLoadedData(next)) return false;
+            const snapshot = {
+                subscriptions: cloneData(next.misubs),
+                profiles: cloneData(next.profiles),
+                ruleTemplates: cloneData(next.ruleTemplates),
+                config: cloneData(next.config),
+            };
+            subscriptions.value = next.misubs.map((sub) => ({ ...sub, isUpdating: false }));
+            profiles.value = next.profiles;
+            ruleTemplates.value = next.ruleTemplates;
+            settingsStore.setConfig({ ...DEFAULT_SETTINGS, ...next.config });
+            if (!fromCache) {
+                lifecycle += 1;
+                lastSavedData = snapshot;
+                hasAuthoritativeBaseline = true;
+                lastUpdated.value = new Date();
+                dataCache.set(next);
+            }
             return true;
         } catch (error) {
             console.error('hydrateFromData failed:', error);
@@ -72,44 +116,55 @@ export const useDataStore = defineStore('data', () => {
 
     async function fetchData(forceRefresh = false) {
         if (fetchDataPromise) return fetchDataPromise;
+        if (saving) {
+            showToast(t('store.tooFrequent'), 'warning');
+            return false;
+        }
+        if (hasAuthoritativeBaseline && !forceRefresh) return true;
 
-        // Effective Cache Check
-        if (hasDataLoaded.value && !forceRefresh) return true;
-
-        if (!forceRefresh) {
+        // Cached collections can be displayed, but only an authoritative load enables saving.
+        if (!forceRefresh && !isDirty.value) {
             const cachedData = dataCache.get();
-            if (cachedData) {
-                hydrateFromData(cachedData);
-                return true;
-            }
+            if (cachedData) hydrateFromData(cachedData, { fromCache: true });
         }
 
-        fetchDataPromise = (async () => {
+        const request = (async () => {
             isLoading.value = true;
+            const requestLifecycle = lifecycle;
+            const requestEditVersion = editVersion;
+            let startingEditorData;
             try {
+                startingEditorData = JSON.stringify(captureEditorData());
                 const data = await api.get('/api/data');
-
-                if (data.error) {
-                    throw new Error(data.error);
+                if (requestLifecycle !== lifecycle) return false;
+                if (!validLoadedData(data)) throw new Error(t('store.invalidDataResponse'));
+                if (editorChangedSince(startingEditorData, requestEditVersion)) {
+                    throw new Error(t('store.editedDuringLoad'));
                 }
-
-                hydrateFromData(data); // Re-use hydration logic
-                pruneInvalidReferences(); // 数据拉取后执行自愈
+                if (!hydrateFromData(data)) throw new Error(t('store.invalidDataResponse'));
                 clearDirty();
                 return true;
             } catch (error) {
+                if (requestLifecycle !== lifecycle) return false;
+                if (
+                    startingEditorData !== undefined &&
+                    editorChangedSince(startingEditorData, requestEditVersion)
+                ) {
+                    markDirty();
+                }
                 console.error('Failed to fetch data:', error);
                 showToast(t('store.fetchDataFailed', { message: error.message }), 'error');
-                // 不向调用方抛出：所有调用点都没有 try/catch，rejection 会冒泡成
-                // 全局 unhandledrejection，被 main.js 处理器再提示一次，
-                // 用户会看到两个「操作失败」弹窗。
                 return false;
             } finally {
                 isLoading.value = false;
-                fetchDataPromise = null;
             }
         })();
-        return fetchDataPromise;
+        fetchDataPromise = request;
+        try {
+            return await request;
+        } finally {
+            if (fetchDataPromise === request) fetchDataPromise = null;
+        }
     }
 
     async function saveData() {
@@ -117,22 +172,23 @@ export const useDataStore = defineStore('data', () => {
             showToast(t('store.tooFrequent'), 'warning');
             return false;
         }
+        if (!hasAuthoritativeBaseline) {
+            showToast(t('store.saveDataFailed', { message: t('store.loadBeforeSave') }), 'error');
+            return false;
+        }
 
+        saving = true;
         isLoading.value = true;
         saveState.value = 'saving';
-
-        // 保存前执行数据自愈，确保发往后端的数据是干净的
-        pruneInvalidReferences();
-
+        const requestLifecycle = lifecycle;
+        const requestEditVersion = editVersion;
+        const requestSequence = ++saveSequence;
         try {
-            const sanitizedSubs = subscriptions.value.map((sub) => {
-                const { isUpdating, ...rest } = sub;
-                return rest;
-            });
-
+            const submitted = captureEditorData();
+            const startingEditorData = JSON.stringify(submitted);
             const payload = {
-                misubs: sanitizedSubs,
-                profiles: profiles.value.map((profile) => {
+                misubs: submitted.misubs,
+                profiles: submitted.profiles.map((profile) => {
                     const normalizedProfile = { ...profile };
                     normalizedProfile.ruleLevel =
                         normalizedProfile.ruleLevel || normalizedProfile.clashRuleLevel || '';
@@ -140,53 +196,62 @@ export const useDataStore = defineStore('data', () => {
                     return normalizedProfile;
                 }),
             };
-
+            pruneInvalidReferences(payload.profiles, payload.misubs);
             const result = await api.post('/api/misubs', payload);
-
-            if (!result.success) {
-                throw new Error(result.message || t('store.saveFailed'));
+            if (requestLifecycle !== lifecycle) return false;
+            if (result?.success !== true) {
+                throw new Error(result?.message || t('store.saveFailed'));
             }
+            if (!validCollections(result.data)) throw new Error(t('store.invalidSaveResponse'));
+            const confirmed = cloneData(result.data);
+            if (!validCollections(confirmed)) throw new Error(t('store.invalidSaveResponse'));
 
-            // Update local state with backend response (Source of Truth)
-            if (result.data) {
-                if (result.data.misubs) subscriptions.value = result.data.misubs;
-                if (result.data.profiles) profiles.value = result.data.profiles;
+            const editedDuringSave = editorChangedSince(startingEditorData, requestEditVersion);
+            lastSavedData.subscriptions = cloneData(confirmed.misubs);
+            lastSavedData.profiles = cloneData(confirmed.profiles);
+            if (editedDuringSave) {
+                markDirty();
+                saveState.value = 'idle';
+            } else {
+                subscriptions.value = confirmed.misubs.map((sub) => ({
+                    ...sub,
+                    isUpdating: false,
+                }));
+                profiles.value = confirmed.profiles;
+                clearDirty();
+                saveState.value = 'success';
             }
-
-            updateSnapshot();
-
             showToast(t('store.dataSaved'), 'success');
             lastUpdated.value = new Date();
-            clearDirty();
-            saveState.value = 'success';
-
-            // Auto reset idle state
             setTimeout(() => {
-                if (saveState.value === 'success') {
+                if (
+                    requestLifecycle === lifecycle &&
+                    requestSequence === saveSequence &&
+                    saveState.value === 'success'
+                ) {
                     saveState.value = 'idle';
                 }
             }, 2000);
 
-            // Update cache with the most recent merged data
+            // Cache only acknowledged collections, independently of the current editor.
             dataCache.set({
-                misubs: subscriptions.value.map((s) => {
-                    const { isUpdating, ...rest } = s;
-                    return rest;
-                }),
-                profiles: profiles.value,
-                ruleTemplates: ruleTemplates.value,
-                config: settingsStore.config,
+                misubs: lastSavedData.subscriptions,
+                profiles: lastSavedData.profiles,
+                ruleTemplates: lastSavedData.ruleTemplates,
+                config: lastSavedData.config,
             });
-
             return true;
         } catch (error) {
+            if (requestLifecycle !== lifecycle) return false;
+            markDirty();
             console.error('[Store] Failed to save data:', error);
             showToast(t('store.saveDataFailed', { message: error.message }), 'error');
             saveState.value = 'idle';
-            // 同 fetchData：提示一次即可，不再向上抛出避免二次弹窗
             return false;
         } finally {
+            saving = false;
             isLoading.value = false;
+            if (saveState.value === 'saving') saveState.value = 'idle';
         }
     }
 
@@ -218,8 +283,7 @@ export const useDataStore = defineStore('data', () => {
                 throw new Error(result.message || t('store.saveSettingsFailed'));
             }
 
-            settingsStore.updateConfig(newSettings);
-            syncCachedConfig(settingsStore.config);
+            applySavedSettings(newSettings);
             if (!silent) showToast(t('store.settingsUpdated'), 'success');
             return true;
         } catch (error) {
@@ -234,6 +298,12 @@ export const useDataStore = defineStore('data', () => {
         } finally {
             editorStore.setLoading(false);
         }
+    }
+
+    // Keep successful settings edits visible even when navigating before a scheduled reload.
+    function applySavedSettings(newSettings) {
+        settingsStore.updateConfig(newSettings);
+        syncCachedConfig(settingsStore.config);
     }
 
     async function fetchRuleTemplates() {
@@ -268,20 +338,33 @@ export const useDataStore = defineStore('data', () => {
 
     // --- Helpers ---
 
-    function updateSnapshot() {
-        lastSavedData = {
-            subscriptions: JSON.parse(JSON.stringify(subscriptions.value)),
-            profiles: JSON.parse(JSON.stringify(profiles.value)),
-            ruleTemplates: JSON.parse(JSON.stringify(ruleTemplates.value)),
+    function captureEditorData() {
+        return {
+            misubs: cloneData(subscriptions.value.map(({ isUpdating, ...sub }) => sub)),
+            profiles: cloneData(profiles.value),
+            ruleTemplates: cloneData(ruleTemplates.value),
         };
     }
 
+    function editorChangedSince(serializedData, version) {
+        if (editVersion !== version) return true;
+        try {
+            return serializedData !== JSON.stringify(captureEditorData());
+        } catch {
+            return true;
+        }
+    }
+
     function clearCachedData() {
+        lifecycle += 1;
+        hasAuthoritativeBaseline = false;
+        lastUpdated.value = null;
         dataCache.clear();
     }
 
     function isSavedNode(node) {
         return Boolean(
+            hasAuthoritativeBaseline &&
             node &&
             lastSavedData.subscriptions.some(
                 (saved) => saved.id === node.id && saved.url === node.url
@@ -290,6 +373,7 @@ export const useDataStore = defineStore('data', () => {
     }
 
     function syncCachedConfig(nextConfig) {
+        lastSavedData.config = cloneData(nextConfig);
         const cachedData = dataCache.get();
         if (!cachedData) return;
 
@@ -392,58 +476,24 @@ export const useDataStore = defineStore('data', () => {
      * 数据自愈：清理订阅组中不存在的节点/订阅引用
      * 同时处理可能存在的重复 ID
      */
-    function pruneInvalidReferences() {
-        if (!profiles.value || profiles.value.length === 0) return;
-
-        // 收集所有当前存在的订阅和手动节点 ID
-        const validIds = new Set(subscriptions.value.map((item) => item.id));
-
-        let modified = false;
-        profiles.value.forEach((profile) => {
-            // 1. 处理手动节点引用
-            if (Array.isArray(profile.manualNodes) && profile.manualNodes.length > 0) {
-                const originalLength = profile.manualNodes.length;
+    function pruneInvalidReferences(items, subscriptionsToSave) {
+        const validIds = new Set(subscriptionsToSave.map((item) => item.id));
+        for (const profile of items) {
+            for (const field of ['manualNodes', 'subscriptions']) {
+                if (!Array.isArray(profile[field])) continue;
                 const seenIds = new Set();
-                profile.manualNodes = profile.manualNodes.filter((id) => {
-                    // ID 必须存在且未被重复记录
-                    if (validIds.has(id) && !seenIds.has(id)) {
-                        seenIds.add(id);
-                        return true;
-                    }
-                    return false;
+                profile[field] = profile[field].filter((id) => {
+                    if (!validIds.has(id) || seenIds.has(id)) return false;
+                    seenIds.add(id);
+                    return true;
                 });
-                if (profile.manualNodes.length !== originalLength) {
-                    modified = true;
-                }
-            }
-
-            // 2. 处理机场订阅引用
-            if (Array.isArray(profile.subscriptions) && profile.subscriptions.length > 0) {
-                const originalLength = profile.subscriptions.length;
-                const seenIds = new Set();
-                profile.subscriptions = profile.subscriptions.filter((id) => {
-                    if (validIds.has(id) && !seenIds.has(id)) {
-                        seenIds.add(id);
-                        return true;
-                    }
-                    return false;
-                });
-                if (profile.subscriptions.length !== originalLength) {
-                    modified = true;
-                }
-            }
-        });
-
-        if (modified) {
-            profiles.value = [...profiles.value]; // 强制触发响应式
-            if (isDev) {
-                console.info('[DataStore] Cleaned up stale IDs or duplicates in profiles');
             }
         }
     }
 
     // --- Dirty State Proxies ---
     function markDirty() {
+        editVersion += 1;
         if (saveState.value === 'success') {
             saveState.value = 'idle';
         }
@@ -474,6 +524,7 @@ export const useDataStore = defineStore('data', () => {
         fetchData,
         saveData,
         saveSettings,
+        applySavedSettings,
         fetchRuleTemplates,
         saveRuleTemplates,
         hydrateFromData,
