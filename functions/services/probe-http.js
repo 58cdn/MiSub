@@ -52,7 +52,7 @@ function managementPage(searchParams) {
     return { offset: read('offset', 0, 0, 100000), limit: read('limit', 20, 1, 50) };
 }
 /** Explicit dependencies make the HTTP/auth boundary testable without a Cloudflare runtime. */
-export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNodes, makeStore = env => new ProbeStore(env.MISUB_PROBE_DB) }) {
+export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNodes, makeStore = env => new ProbeStore(env.MISUB_PROBE_DB, Date.now, { runtimeMode: env.PROBE_AGENT_RUNTIME_MODE }) }) {
     async function resolveNodes(input, env) {
         if (input.scope === 'snapshot') return prepareNodes(input.nodes);
         requireValue(input.scope === 'selected' || input.scope === 'all', 'invalid_scope');

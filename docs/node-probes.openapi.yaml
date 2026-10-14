@@ -488,7 +488,14 @@ paths:
       description: |
         At most one unexpired task lease per identity. An idle response is data=null.
         Default polling is every 60 seconds. Never copy the same identity to multiple machines.
-        Only claims declaring observationsVersion=1 may receive observation tasks.
+        New clients send capabilities={schemaVersion:1,observationsVersion:1} and retain
+        top-level observationsVersion=1 for older servers. A valid nested declaration may
+        omit the top-level field. Only an absent capabilities field permits legacy fallback.
+        Both declaration fields accept arbitrary JSON values at the HTTP boundary.
+        Malformed, unsupported-schema or conflicting declarations cannot receive observation
+        tasks, including mixed tasks containing observations, but may receive ordinary tasks.
+        Each claim completely replaces the recorded declaration; unknown fields are discarded.
+        Scheduling always uses this claim, never a previously persisted declaration or result.
       requestBody:
         required: true
         content:
@@ -498,7 +505,10 @@ paths:
               properties:
                 version: { type: string, maxLength: 50 }
                 platform: { type: string, maxLength: 30 }
-                observationsVersion: { type: integer, const: 1 }
+                observationsVersion:
+                  description: Any JSON value is accepted. Only integer 1 is a supported legacy declaration. When capabilities is present this field must agree with its supported version; otherwise observation tasks are excluded and ordinary tasks remain eligible.
+                capabilities:
+                  description: Any JSON value is accepted. AgentClaimCapabilities describes the supported declaration. Invalid, unknown-schema or conflicting values exclude observation tasks but still allow ordinary tasks; unknown object properties are discarded.
       responses:
         '200':
           description: A private task snapshot with a 90-second lease, or null.
@@ -834,8 +844,16 @@ components:
               description: Latest retained done task's server result receipt time, including failed checks; excludes stops. Null if absent.
             hidden: { type: boolean, description: Whether a revoked identity is currently archived from default lists. }
             archivedAt: { type: [integer, 'null'], description: Latest archive transition in Unix milliseconds; retained after restore. }
-            lastHeartbeatAt: { type: 'null', description: Heartbeat-only timestamps are not independently persisted. lastSeen includes claims and accepted heartbeats. }
-            capabilities: { type: 'null', description: Capabilities are not persisted or inferred from version/platform. }
+            lastHeartbeatAt:
+              type: [integer, 'null']
+              minimum: 1
+              maximum: 9007199254740991
+              description: Server receipt time of a successful lease renewal, Unix milliseconds. Independent of claim receipt; invalid or future values are null. Null while runtime reads are disabled.
+            capabilities:
+              description: Latest complete claim declaration when runtime reads are enabled. Null for missing or inconsistent records, invalid or future claim times, revoked identities, or disabled reads. Never inferred from version, platform or historical results.
+              oneOf:
+                - { $ref: '#/components/schemas/AgentClaimDeclaration' }
+                - { type: 'null' }
             taskCounts:
               type: object
               required: [queued, running, done, stopped]
@@ -844,6 +862,40 @@ components:
                 running: { type: integer, minimum: 0 }
                 done: { type: integer, minimum: 0 }
                 stopped: { type: integer, minimum: 0, description: Expired or cancelled tasks. }
+    AgentClaimCapabilities:
+      type: object
+      required: [schemaVersion, observationsVersion]
+      description: Versioned claim input. Unknown properties are discarded; this is a detector declaration, not proof of runtime capabilities.
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        observationsVersion: { type: integer, const: 1 }
+    AgentClaimDeclaration:
+      type: object
+      additionalProperties: false
+      required: [source, state, schemaVersion, observationsVersion, receivedAt, freshness]
+      properties:
+        source: { type: string, const: agent_claim }
+        state: { type: string, enum: [declared, legacy, missing, unsupported_schema, invalid_declaration, conflicting_versions] }
+        schemaVersion: { type: [integer, 'null'], enum: [1, null] }
+        observationsVersion: { type: [integer, 'null'], enum: [1, null] }
+        receivedAt: { type: integer, minimum: 1, maximum: 9007199254740991, description: Server receipt time of the claim, Unix milliseconds; never refreshed by a heartbeat. }
+        freshness:
+          type: string
+          enum: [fresh, stale]
+          description: Age of the recorded claim only. Fresh means checkedAt minus receivedAt is less than 300000 milliseconds; it does not establish current availability or capabilities.
+      oneOf:
+        - properties:
+            state: { const: declared }
+            schemaVersion: { const: 1 }
+            observationsVersion: { const: 1 }
+        - properties:
+            state: { const: legacy }
+            schemaVersion: { const: null }
+            observationsVersion: { const: 1 }
+        - properties:
+            state: { enum: [missing, unsupported_schema, invalid_declaration, conflicting_versions] }
+            schemaVersion: { const: null }
+            observationsVersion: { const: null }
     DetectorOverviewPage:
       type: object
       required: [agents, total, nextOffset, checkedAt, onlineWindowMs, retentionDays]

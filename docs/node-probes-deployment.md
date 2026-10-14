@@ -42,6 +42,8 @@ D1、Pages 请求和检测节点流量由自己的 Cloudflare/服务器账户承
 
 ## 本地验证
 
+检测器领单能力持久化默认关闭，使用独立迁移文件和 `off → record → read` 阶段。生产建表、启用记录和启用读取需分别审批，普通部署只保留已存在的合法配置，不自动迁移或激活。操作及回滚门槛见 [领单声明与续租记录](probe-agent-runtime.md)。
+
 ```sh
 bash -n scripts/deploy-cloudflare-pages.sh
 bash -n scripts/provision-probe-d1.sh

@@ -1,6 +1,8 @@
 <script setup>
     import { nextTick } from 'vue';
     import { useI18n } from '@/i18n/index.js';
+    import DetectorRuntimeDeclaration from './DetectorRuntimeDeclaration.vue';
+    import { validRuntimeTimestamp } from '@/utils/detector-runtime-view.js';
 
     defineProps({
         agents: { type: Array, required: true },
@@ -12,6 +14,7 @@
         agentStale: { type: Function, required: true },
         date: { type: Function, required: true },
         iso: { type: Function, required: true },
+        checkedAt: { default: null },
     });
     defineEmits(['sort', 'history', 'revoke', 'archive', 'restore']);
     const { locale } = useI18n();
@@ -158,12 +161,29 @@
                                 [agent.version, agent.platform].filter(Boolean).join(' · ') ||
                                 L('未知', 'Unknown')
                             }}</span>
-                            <span v-else-if="column.key === 'capabilities'">{{
-                                L('未知（尚未上报）', 'Unknown (not reported)')
-                            }}</span>
-                            <span v-else-if="column.key === 'lastHeartbeatAt'">{{
-                                L('未知（未单独记录）', 'Unknown (not recorded separately)')
-                            }}</span>
+                            <DetectorRuntimeDeclaration
+                                v-else-if="column.key === 'capabilities'"
+                                :capabilities="agent.capabilities"
+                                :checked-at="checkedAt"
+                                :revoked="!!agent.revokedAt || agent.status === 'revoked'"
+                            />
+                            <template v-else-if="column.key === 'lastHeartbeatAt'">
+                                <time
+                                    v-if="validRuntimeTimestamp(agent.lastHeartbeatAt, checkedAt)"
+                                    :datetime="iso(agent.lastHeartbeatAt)"
+                                    data-testid="detector-lease-renewal"
+                                    >{{ date(agent.lastHeartbeatAt) }}</time
+                                >
+                                <span v-else>{{
+                                    L('未知（无可用记录）', 'Unknown (no usable record)')
+                                }}</span>
+                                <span class="mt-1 block text-xs text-gray-600 dark:text-gray-400">{{
+                                    L(
+                                        '仅记录任务成功续租，不表示空闲时有独立心跳。',
+                                        'Records successful task lease renewal; it does not indicate an independent idle heartbeat.'
+                                    )
+                                }}</span>
+                            </template>
                             <time v-else :datetime="iso(agent[column.key])">{{
                                 date(agent[column.key])
                             }}</time>
@@ -247,6 +267,13 @@
     .detector-actions-cell {
         min-width: 13rem;
         width: 13rem;
+    }
+    [data-column='capabilities'] {
+        min-width: 20rem;
+        width: 20rem;
+    }
+    [data-column='lastHeartbeatAt'] {
+        min-width: 15rem;
     }
     .detector-long-text {
         display: block;

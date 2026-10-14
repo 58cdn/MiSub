@@ -199,6 +199,8 @@ test('automatic release preserves an approved session binding and its exact mode
         assert.equal(result.calls.length, 1);
         assert.ok(result.config.includes(`database_id = "${sessionId}"`));
         assert.equal(result.config.includes('SESSION_AUTH_MODE = "d1-v1"'), enabled);
+        assert.equal((result.config.match(/^\[vars\]$/gm) || []).length, enabled ? 1 : 0);
+        assert.ok(!result.config.includes('PROBE_AGENT_RUNTIME_MODE'));
     }
 });
 
@@ -211,6 +213,118 @@ test('CI environment cannot provision or enable session authority', (t) => {
     assert.equal(result.calls.length, 1);
     assert.ok(!result.config.includes('SESSION_AUTH_MODE'));
     assert.ok(!result.config.includes('MISUB_SESSION_DB'));
+});
+
+test('preserves each approved probe runtime mode without changing resources or credentials', (t) => {
+    const probeId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    for (const mode of ['off', 'record', 'read']) {
+        const production = existingProduction();
+        production.d1_databases = { MISUB_PROBE_DB: { id: probeId } };
+        production.env_vars.PROBE_AGENT_RUNTIME_MODE = { type: 'plain_text', value: mode };
+        const result = runScript(t, [project(production)], {
+            ...automatic, PROBE_AGENT_RUNTIME_MODE: mode === 'read' ? 'off' : 'read',
+        });
+        expectDeployed(result);
+        assert.equal(result.calls.length, 1);
+        assert.ok(result.config.includes(`database_id = "${probeId}"`));
+        assert.ok(result.config.includes(`PROBE_AGENT_RUNTIME_MODE = "${mode}"`));
+        assert.equal((result.config.match(/^\[vars\]$/gm) || []).length, 1);
+        assert.ok(!result.config.includes('SESSION_AUTH_MODE'));
+    }
+});
+
+test('an approved off probe runtime mode needs no database binding', (t) => {
+    const production = existingProduction();
+    production.env_vars.PROBE_AGENT_RUNTIME_MODE = { type: 'plain_text', value: 'off' };
+    const result = runScript(t, [project(production)], automatic);
+    expectDeployed(result);
+    assert.equal(result.calls.length, 1);
+    assert.ok(result.config.includes('PROBE_AGENT_RUNTIME_MODE = "off"'));
+    assert.ok(!result.config.includes('MISUB_PROBE_DB'));
+});
+
+test('CI and manual environment inputs cannot introduce a probe runtime mode', (t) => {
+    for (const trigger of [automatic, { GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch' }]) {
+        for (const mode of ['off', 'record', 'read']) {
+            const result = runScript(t, [project(existingProduction())], {
+                ...trigger, PROBE_AGENT_RUNTIME_MODE: mode,
+            });
+            expectDeployed(result);
+            assert.equal(result.calls.length, trigger === automatic ? 1 : 2);
+            assert.ok(!result.config.includes('PROBE_AGENT_RUNTIME_MODE'));
+            assert.ok(!result.config.includes('MISUB_PROBE_DB'));
+            assert.ok(!result.config.includes('[vars]'));
+        }
+    }
+});
+
+test('preserves session and probe modes in one variables table', (t) => {
+    const production = existingProduction();
+    production.env_vars.SESSION_AUTH_MODE = { type: 'plain_text', value: 'd1-v1' };
+    production.env_vars.PROBE_AGENT_RUNTIME_MODE = { type: 'plain_text', value: 'read' };
+    production.d1_databases = {
+        MISUB_SESSION_DB: { id: 'cccccccc-2222-4333-8444-555555555555' },
+        MISUB_PROBE_DB: { id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' },
+    };
+    const result = runScript(t, [project(production)], automatic);
+    expectDeployed(result);
+    assert.equal(result.calls.length, 1);
+    assert.equal((result.config.match(/^\[vars\]$/gm) || []).length, 1);
+    assert.match(result.config, /\[vars\]\nSESSION_AUTH_MODE = "d1-v1"\nPROBE_AGENT_RUNTIME_MODE = "read"\n/);
+});
+
+test('refuses invalid probe runtime values and types before any writes', (t) => {
+    for (const mode of [
+        { type: 'secret_text', value: 'read' },
+        { type: 'plain_text' },
+        { type: 'plain_text', value: null },
+        { type: 'plain_text', value: false },
+        { type: 'plain_text', value: 0 },
+        { type: 'plain_text', value: ['off'] },
+        { type: 'plain_text', value: {} },
+        ...['', 'READ', 'legacy', ' read', 'record ', 'off\n', 'read\n[bad]'].map(value => ({ type: 'plain_text', value })),
+    ]) {
+        const production = existingProduction();
+        production.d1_databases = { MISUB_PROBE_DB: { id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' } };
+        production.env_vars.PROBE_AGENT_RUNTIME_MODE = mode;
+        const result = runScript(t, [project(production)], automatic);
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.deepEqual(result.remaining, []);
+        assert.equal(result.config, '');
+        assert.match(result.output, /Existing probe runtime mode must be plain_text/);
+    }
+});
+
+test('record and read require an existing probe database, not a provisioning input or another binding', (t) => {
+    for (const mode of ['record', 'read']) {
+        for (const d1_databases of [undefined, { MISUB_DB: { id: d1Id } }]) {
+            const production = existingProduction();
+            production.d1_databases = d1_databases;
+            production.env_vars.PROBE_AGENT_RUNTIME_MODE = { type: 'plain_text', value: mode };
+            const result = runScript(t, [project(production)], {
+                ...automatic, PROVISION_NODE_PROBES: 'true',
+                CLOUDFLARE_PROBE_D1_DATABASE_ID: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+            });
+            assert.notEqual(result.status, 0);
+            assert.deepEqual(result.calls, []);
+            assert.deepEqual(result.remaining, []);
+            assert.equal(result.config, '');
+            assert.match(result.output, /record\/read require an existing MISUB_PROBE_DB binding/);
+        }
+    }
+});
+
+test('a preserved probe runtime mode does not allow unknown production settings', (t) => {
+    const production = existingProduction();
+    production.env_vars.PROBE_AGENT_RUNTIME_MODE = { type: 'plain_text', value: 'off' };
+    production.env_vars.EXTRA = { type: 'plain_text', value: 'unapproved' };
+    const result = runScript(t, [project(production)], automatic);
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(result.calls, []);
+    assert.deepEqual(result.remaining, []);
+    assert.equal(result.config, '');
+    assert.match(result.output, /additional production settings/);
 });
 
 test('refuses invalid session modes or a mode with no existing database', (t) => {
