@@ -349,6 +349,38 @@ try {
         assert.equal((await check(b)).authenticated, true);
         assert.equal(await b.evaluate(() => store.sessionState), 'loggedIn');
     });
+    await test('queued pending and complete events settle normally without a new user action', async () => {
+        const a = await fresh();
+        await a.evaluate(() => store.login('synthetic-password'));
+        const b = await newPage();
+        await b.evaluate(() => {
+            window.seenRaw = [];
+            const observer = new BroadcastChannel('misub-session-events-v1');
+            observer.onmessage = (e) => seenRaw.push(e.data.type);
+            const open = indexedDB.open.bind(indexedDB);
+            indexedDB.open = (...args) => {
+                const pending = {};
+                window.releaseOpen = () => {
+                    const actual = open(...args);
+                    actual.onsuccess = () => {
+                        pending.result = actual.result;
+                        pending.onsuccess();
+                    };
+                    actual.onerror = () => pending.onerror();
+                };
+                return pending;
+            };
+        });
+        await a.evaluate(() => store.logout());
+        await b.waitForFunction(
+            () => seenRaw.includes('logout-pending') && seenRaw.includes('logout-complete')
+        );
+        await b.evaluate(() => releaseOpen());
+        await b.waitForFunction(() => events.includes('logout-complete'));
+        assert.equal(await b.evaluate(() => store.sessionState), 'loggedOut');
+        assert.equal(await b.evaluate(() => store.logoutPending), false);
+        assert.equal((await check(b)).authenticated, false);
+    });
     await test('cleared localStorage cannot reuse a delayed login generation', async () => {
         const a = await fresh(),
             b = await newPage();
