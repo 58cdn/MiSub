@@ -13,6 +13,15 @@ import {
     readJsonWithLimit,
 } from './utils.js';
 import { StorageFactory } from '../storage-adapter.js';
+import { SessionAuthority, sessionProtocol } from './session-authority.js';
+import { handleSessionRequest, sessionError } from './session-handler.js';
+import { loginDevice } from '../services/login-security-metadata.js';
+import {
+    loginSecurityContext,
+    loginLocked,
+    securityJson,
+    securityUnavailable,
+} from '../services/login-security.js';
 
 function normalizeSecret(value) {
     return String(value ?? '')
@@ -116,6 +125,22 @@ export async function verifySignedToken(key, token) {
  * @returns {Promise<Object>}
  */
 export async function getAuthSessionDiagnostic(request, env) {
+    if (sessionProtocol(env) === 'd1-v1') {
+        const header = request.headers.get('Cookie') || '';
+        if (!header.includes('__Host-misub_sid_'))
+            return {
+                isAuthenticated: false,
+                shouldRenew: false,
+                protocol: 'd1-v1',
+                reason: 'no_cookie',
+            };
+        const auth = await new SessionAuthority(env.MISUB_SESSION_DB).authenticate(header);
+        return {
+            ...auth,
+            protocol: 'd1-v1',
+            reason: auth.isAuthenticated ? 'ok' : 'session_invalid',
+        };
+    }
     const result = {
         isAuthenticated: false,
         reason: 'unknown',
@@ -221,6 +246,25 @@ export async function getAuthSessionDiagnostic(request, env) {
  * @returns {Promise<Response>}
  */
 export async function renewAuthSession(request, env, response, diagnostic = null) {
+    if (sessionProtocol(env) === 'd1-v1') {
+        if (
+            response.status >= 400 ||
+            !(request.headers.get('Cookie') || '').includes('__Host-misub_sid_')
+        )
+            return response;
+        // Authorization precedes route execution. An optional idle-time extension must
+        // not replace an already produced response during a subsequent store outage.
+        try {
+            const current = await getAuthSessionDiagnostic(request, env);
+            if (current.isAuthenticated && current.shouldRenew)
+                await new SessionAuthority(env.MISUB_SESSION_DB).renew(
+                    request.headers.get('Cookie') || ''
+                );
+        } catch {
+            /* A failed extension leaves the existing server expiry unchanged. */
+        }
+        return response;
+    }
     const authDiagnostic = diagnostic || (await getAuthSessionDiagnostic(request, env));
     if (!authDiagnostic?.isAuthenticated || !authDiagnostic.shouldRenew) {
         return response;
@@ -303,6 +347,7 @@ export async function authMiddleware(request, env) {
         const diagnostic = await getAuthSessionDiagnostic(request, env);
         return diagnostic.isAuthenticated;
     } catch (e) {
+        if (env?.SESSION_AUTH_MODE) throw e;
         console.error('[Auth] 鉴权失败', { ...logMeta, error: e?.message });
         return false;
     }
@@ -315,27 +360,32 @@ export async function authMiddleware(request, env) {
  * @returns {Promise<Response>} 登录响应
  */
 export async function handleLogin(request, env) {
+    try {
+        if (sessionProtocol(env) === 'd1-v1') return handleSessionRequest(request, env, '/login');
+    } catch (error) {
+        return sessionError(error);
+    }
     if (request.method !== 'POST') {
-        return new Response('Method Not Allowed', { status: 405 });
+        return securityJson({ error: 'Method Not Allowed' }, 405, { Allow: 'POST' });
     }
 
-    const logMeta = buildRequestMeta(request, env);
+    let security;
+    try {
+        security = await loginSecurityContext(request, env);
+        if (security.response) return security.response;
+    } catch {
+        return securityUnavailable();
+    }
     let payload;
     try {
         payload = await readJsonWithLimit(request, JSON_BODY_LIMITS.auth);
     } catch (e) {
-        console.error('[API Error /login] Request body parse failed', {
-            ...logMeta,
-            error: e?.message,
-        });
         if (e instanceof RequestBodyTooLargeError) {
-            return new Response(JSON.stringify({ error: e.message }), {
-                status: e.status,
-                headers: { 'Content-Type': 'application/json' },
-            });
+            return securityJson({ error: '请求体过大' }, e.status);
         }
-        return new Response(JSON.stringify({ error: '请求体解析失败' }), { status: 400 });
+        return securityJson({ error: '请求体解析失败' }, 400);
     }
+    if (typeof payload?.password !== 'string') return securityJson({ error: '请输入密码' }, 400);
 
     try {
         const { password } = payload || {};
@@ -348,7 +398,10 @@ export async function handleLogin(request, env) {
             const token = await createSignedToken(secret, String(Date.now()));
             const isSecure = request.url.startsWith('https');
             const cookieString = `${COOKIE_NAME}=${token}; Path=/; HttpOnly; ${isSecure ? 'Secure;' : ''} SameSite=Lax; Max-Age=${SESSION_DURATION / 1000}`;
-            const responseBody = { success: true };
+            const responseBody = {
+                success: true,
+                loginSecurity: { enabled: false, warning: null },
+            };
             if (await isUsingDefaultAdminPassword(env)) {
                 responseBody.securityWarning = {
                     type: 'default_admin_password',
@@ -356,17 +409,30 @@ export async function handleLogin(request, env) {
                     message: '当前正在使用默认管理员密码 admin，请登录后立即修改。',
                 };
             }
-            return new Response(JSON.stringify(responseBody), {
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Set-Cookie': cookieString,
-                },
-            });
+            if (security.store) {
+                let result;
+                try {
+                    result = await security.store.record(security.ip, true, loginDevice(request));
+                } catch {
+                    return securityUnavailable();
+                }
+                if (result.lockedUntil) return loginLocked(result.lockedUntil);
+                responseBody.loginSecurity = { enabled: result.enabled, warning: result.warning };
+            }
+            return securityJson(responseBody, 200, { 'Set-Cookie': cookieString });
         }
-        return new Response(JSON.stringify({ error: '密码错误' }), { status: 401 });
-    } catch (e) {
-        console.error('[API Error /login] Login handler failed', { ...logMeta, error: e?.message });
-        return new Response(JSON.stringify({ error: '登录处理失败' }), { status: 500 });
+        if (security.store) {
+            try {
+                const result = await security.store.record(security.ip, false);
+                if (result.lockedUntil) return loginLocked(result.lockedUntil);
+            } catch {
+                return securityUnavailable();
+            }
+        }
+        return securityJson({ error: '密码错误' }, 401);
+    } catch {
+        // Authentication failures must never log request bodies, URLs, UA or secrets.
+        return securityJson({ error: '登录处理失败' }, 500);
     }
 }
 
@@ -374,7 +440,12 @@ export async function handleLogin(request, env) {
  * 处理用户登出
  * @returns {Promise<Response>} 登出响应
  */
-export async function handleLogout(request) {
+export async function handleLogout(request, env) {
+    try {
+        if (sessionProtocol(env) === 'd1-v1') return handleSessionRequest(request, env, '/logout');
+    } catch (error) {
+        return sessionError(error);
+    }
     const headers = new Headers({ 'Content-Type': 'application/json' });
     const isSecure = typeof request?.url === 'string' && request.url.startsWith('https');
     const secureFlag = isSecure ? 'Secure;' : '';

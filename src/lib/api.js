@@ -4,6 +4,7 @@
 
 import { api, APIError } from './http.js';
 import { t } from '../i18n/index.js';
+import { sessionClient } from './session-client.js';
 
 /**
  * 统一的 API 错误处理辅助函数
@@ -81,13 +82,16 @@ function normalizeApiFailure(data, fallbackMessage = t('settings.operationFailed
         data,
     };
 }
-export async function fetchInitialData() {
+export async function fetchInitialData({ shouldHandleUnauthorized } = {}) {
     let timeoutId;
     try {
         const controller = new AbortController();
         timeoutId = setTimeout(() => controller.abort(), 8000); // 8秒超时
 
-        const data = await api.get('/api/data', { signal: controller.signal });
+        const data = await api.get('/api/data', {
+            signal: controller.signal,
+            shouldHandleUnauthorized,
+        });
 
         // 检查新的认证状态响应 (200 OK with authenticated: false)
         if (data && data.authenticated === false) {
@@ -104,9 +108,21 @@ export async function fetchInitialData() {
 
 export async function login(password) {
     try {
-        const data = await api.post('/api/login', { password });
+        const data = await sessionClient().login(password);
         return { success: true, data };
     } catch (error) {
+        if (error instanceof APIError && (error.status === 429 || error.status === 503)) {
+            return {
+                success: false,
+                error:
+                    error.status === 503
+                        ? t('notifications.serviceError')
+                        : t('settings.loginFailed'),
+                errorType: 'server',
+                status: error.status,
+                data: error.data,
+            };
+        }
         if (error instanceof APIError && error.status === 401) {
             return {
                 success: false,
@@ -176,7 +192,7 @@ export async function fetchSettings() {
     }
 }
 
-export async function fetchPublicConfig() {
+export async function fetchPublicConfig({ shouldHandleUnauthorized } = {}) {
     let timeoutId;
     try {
         const controller = new AbortController();
@@ -188,6 +204,7 @@ export async function fetchPublicConfig() {
         const data = await api.get('/api/public_config', {
             signal: controller.signal,
             headers,
+            shouldHandleUnauthorized,
         });
         return { success: true, data };
     } catch (error) {

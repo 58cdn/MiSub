@@ -4,6 +4,8 @@
  */
 
 import { StorageFactory, DataMigrator } from '../storage-adapter.js';
+import { handleSessionRequest } from './session-handler.js';
+import { handleLoginSecurityAdmin, securityJson } from '../services/login-security.js';
 import { KV_KEY_SUBS } from './config.js';
 import {
     createJsonResponse,
@@ -94,6 +96,7 @@ function isAuthDiagnosticsEnabled(env) {
 export async function handleApiRequest(request, env, context = null) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api/, '');
+    if (path.startsWith('/session/')) return handleSessionRequest(request, env, path);
 
     if (path === '/external-nodes-callback') {
         return handleExternalNodesCallbackRequest(request, env);
@@ -293,7 +296,7 @@ export async function handleApiRequest(request, env, context = null) {
 
     // Logout 无需认证（cookie 过期时也需能正常登出）
     if (path === '/logout') {
-        return await handleLogout(request);
+        return await handleLogout(request, env);
     }
 
     // 认证调试端点（默认关闭，不返回敏感值）
@@ -301,6 +304,8 @@ export async function handleApiRequest(request, env, context = null) {
         if (!isAuthDiagnosticsEnabled(env)) {
             return createErrorResponse('Not Found', 404);
         }
+        if (!(await authMiddleware(request, env)))
+            return securityJson({ error: 'Unauthorized' }, 401);
         const debugInfo = await getAuthDebugInfo(env);
         const authDiagnostic = await getAuthSessionDiagnostic(request, env);
 
@@ -316,6 +321,8 @@ export async function handleApiRequest(request, env, context = null) {
         if (!isAuthDiagnosticsEnabled(env)) {
             return createErrorResponse('Not Found', 404);
         }
+        if (!(await authMiddleware(request, env)))
+            return securityJson({ error: 'Unauthorized' }, 401);
         if (request.method !== 'POST') {
             return createJsonResponse({ error: 'Method Not Allowed' }, 405);
         }
@@ -324,7 +331,13 @@ export async function handleApiRequest(request, env, context = null) {
     }
 
     if (!(await authMiddleware(request, env))) {
-        return createJsonResponse({ error: 'Unauthorized' }, 401);
+        return securityJson({ error: 'Unauthorized' }, 401);
+    }
+
+    if (
+        ['/admin/notifications', '/admin/notifications/read', '/admin/login-audit'].includes(path)
+    ) {
+        return await handleLoginSecurityAdmin(request, env, path);
     }
 
     // Auth-only route for client management (POST, DELETE, etc.)
