@@ -7,6 +7,174 @@
             "platforms": ["linux", "darwin"],
             "requiredPlatform": "win32",
             "reason": "Windows PowerShell 5.1 native command parsing must execute in the Windows Vitest CI lane."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler verifies a two-hop download and passes discrete arguments",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler isolates resume and never sends a previous window",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler rejects redirect http://release-assets.githubusercontent.com/fixture without requesting it",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler rejects redirect https://release-assets.githubusercontent.com.evil.invalid/fixture without requesting it",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler rejects redirect https://user@release-assets.githubusercontent.com/fixture without requesting it",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler rejects redirect https://release-assets.githubusercontent.com:444/fixture without requesting it",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler rejects redirect https://release-assets.githubusercontent.com/fixture#fragment without requesting it",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler rejects redirect https://release-assets.githubusercontent.com/fixture\\evil without requesting it",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler rejects redirect https://evil.invalid/fixture without requesting it",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler rejects redirect /relative without requesting it",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler bounds trusted redirect loops",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler never executes after http",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler never executes after timeout",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler rejects truncated before script parsing",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler rejects altered before script parsing",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler rejects oversized before script parsing",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler rejects a digest-matching malformed UTF-8 script",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler honors organization MachinePolicy Restricted before network access",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler honors organization MachinePolicy AllSigned before network access",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler honors organization MachinePolicy RemoteSigned before network access",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler honors organization UserPolicy Restricted before network access",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler honors organization UserPolicy AllSigned before network access",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler honors organization UserPolicy RemoteSigned before network access",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
+        },
+        {
+            "file": "tests/unit/probe-network-bootstrap.test.js",
+            "fullName": "Windows short installer with an offline HttpMessageHandler honors local AllSigned before network access",
+            "platforms": ["linux", "darwin"],
+            "requiredPlatform": "win32",
+            "reason": "PowerShell loader cases execute in the Windows full Vitest lane and native PowerShell 5.1/7 installer lanes."
         }
     ]
 }

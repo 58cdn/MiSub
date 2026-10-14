@@ -44,3 +44,7 @@ Vitest 的文件系统清单独立于配置的 include/exclude；修改发现规
 | `session-cookie-protocol.mjs`          | 依赖对应分支的 `experiments/session-cookie-protocol` 模型及其内存 SQLite 支持，显式传入本次证据目录，使用 Chromium 对拦截的合成 HTTPS origin 验证 Cookie/IndexedDB；核对模型摘要、非空 checks、错误及外联记录。它是离线协议模型，不能替代实际 MiSub 会话运行时验收。                                                                                                                                                                                                                |
 
 专用后端环境缺失或固定基线比较失败，应报告失败及未执行项。不得把这些入口登记为 helper、允许任意跳过，或将旧的独立运行报告当成本次 CI 完成证据。普通浏览器 fixture 与专用集成 lane 必须分别明确入口和依赖，并一并纳入合流的完整完成清单。
+
+### 已合并短安装器的平台用例
+
+#39 带来的 24 条 Windows 短入口用例已按文件和完整测试名逐项登记；加上原 PowerShell 解析用例，Linux/macOS 共允许 25 条明确平台未执行项，不计入通过。Windows 全量 Vitest lane 必须实际执行这些用例，且安装器原生 lane 分别运行 PowerShell 5.1/7。登记中的用例缺失、重名、改名，或 Windows 上出现跳过，继续失败关闭。

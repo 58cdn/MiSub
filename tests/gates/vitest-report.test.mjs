@@ -39,12 +39,18 @@ const report = (files = expected) => ({
 const discoveryErrors = (value, inventory = expected) =>
     inspectVitestDiscovery(root, inventory, value).errors;
 const completion = (value, inventory = expected) => inspectVitestCompletion(root, inventory, value);
-const platformPolicy = JSON.parse(
+const repositoryPlatformPolicy = JSON.parse(
     await readFile(
         new URL('../../scripts/test-gates/vitest-platforms.json', import.meta.url),
         'utf8'
     )
 );
+// Synthetic reports below contain only the parser fixture, not every repository
+// test. The full CI runner checks all real cases against the complete policy.
+const platformPolicy = {
+    ...repositoryPlatformPolicy,
+    allowedSkips: [repositoryPlatformPolicy.allowedSkips[0]],
+};
 const nativeCase = platformPolicy.allowedSkips[0];
 const nativeFiles = [nativeCase.file, expected[0]];
 const platformReport = (status = 'skipped') => {
@@ -252,7 +258,7 @@ test('full-suite CLI rejects missing arguments, filters and extra arguments befo
     }
 });
 
-test('platform policy permits only the named native parser skip on Linux and macOS', () => {
+test('the native parser fixture permits only its exact skip on Linux and macOS', () => {
     assert.deepEqual(platformPolicy.allowedSkips, [
         {
             file: 'tests/unit/probe-bootstrap-command.test.js',
