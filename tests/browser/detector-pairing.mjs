@@ -263,8 +263,13 @@ try {
         await page.getByTestId('pairing-window-id').waitFor();
         assert.ok((await page.getByTestId('pairing-window-id').textContent()).includes(windowId));
         const windowsCommand = await page.getByTestId('pairing-command').textContent();
-        assert.ok(windowsCommand.includes("@('--setup', '--server'"));
-        assert.ok(!/install\.ps1|ExecutionPolicy|EncodedCommand/.test(windowsCommand));
+        assert.ok(windowsCommand.includes('/probe-v9.9.9/install.ps1'));
+        assert.ok(windowsCommand.includes("& $installer -Server 'https://misub.fixture.invalid'"));
+        assert.ok(!/Set-ExecutionPolicy|\s-ExecutionPolicy\s|EncodedCommand/.test(windowsCommand));
+        assert.ok(windowsCommand.length < 3200);
+        assert.ok(
+            (await page.getByTestId('pairing-network-help').textContent()).includes('direct HTTPS')
+        );
         await page.getByTestId('pairing-copy-command').click();
         assert.equal(await page.evaluate(() => window.__fixtureClipboard), windowsCommand);
         assert.equal(created, before + 1);
@@ -281,6 +286,10 @@ try {
         await page.getByText('Review complete installation command', { exact: true }).click();
         await page.screenshot({
             path: resolve(evidence, `detector-pairing-${name}-window.png`),
+        });
+        await page.getByTestId('pairing-network-help').scrollIntoViewIfNeeded();
+        await page.screenshot({
+            path: resolve(evidence, `detector-pairing-${name}-network-help.png`),
         });
         const commandOverflow = await page.evaluate(() =>
             [...document.querySelectorAll('main, section, pre')]
@@ -398,7 +407,7 @@ try {
             'explicit unpublished fixture blocks every installation window and command',
             'release refresh reads only; advanced manual configuration remains available',
             'synthetic compatible-release metadata only for session regressions',
-            'copies the complete native Windows exe setup command without downloading a ps1',
+            'copies the fixed-version Windows script downloader with checksum and policy checks',
             'fixed verified Unix script command and independent resume command',
             'expired windows remove the executable pairing command',
             'no implicit enrollment or approval',
