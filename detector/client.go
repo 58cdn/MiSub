@@ -80,7 +80,11 @@ func (a *API) post(ctx context.Context, path string, input any, output any) erro
 }
 func (a *API) claim(ctx context.Context) (*Task, error) {
 	var task *Task
-	err := a.post(ctx, "claim", map[string]any{"version": version, "platform": runtime.GOOS + "-" + runtime.GOARCH, "observationsVersion": observationsVersion}, &task)
+	err := a.post(ctx, "claim", map[string]any{
+		"version": version, "platform": runtime.GOOS + "-" + runtime.GOARCH,
+		"observationsVersion": observationsVersion,
+		"capabilities":        map[string]int{"schemaVersion": 1, "observationsVersion": observationsVersion},
+	}, &task)
 	if err == nil && task != nil {
 		err = task.validate()
 	}

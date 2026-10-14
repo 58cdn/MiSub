@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createProbeHandler } from '../../functions/services/probe-http.js';
 import { createProbeNodePreparer } from '../../functions/services/probe-node.js';
 import { ProbeStore } from '../../functions/services/probe-store.js';
@@ -73,4 +74,79 @@ test('task creation requires explicit node-sharing consent',async()=>{
  assert.equal(denied.status,400);assert.equal((await denied.json()).error.code,'consent_required');
  const accepted=await handle(request('jobs',{...body,consent:true},{...admin,'Idempotency-Key':'consent-test-01'}),env);
  assert.equal(accepted.status,202);
+});
+
+const runtimeSchema = readFileSync(new URL('../../migrations/probes/0001_agent_runtime.sql', import.meta.url), 'utf8');
+const declared = { schemaVersion: 1, observationsVersion: 1 };
+
+test('runtime HTTP modes preserve legacy reads and expose only bounded administrator declarations', async () => {
+    const { env, handle, request } = fixture();
+    const store = await new ProbeStore(env.MISUB_PROBE_DB).init();
+    const agent = await store.addAgent('runtime fixture');
+    const headers = { Authorization: `Bearer ${agent.token}` };
+    assert.equal((await handle(request('agent/claim', { capabilities: declared }, headers), env)).status, 200);
+    assert.equal(await store.q("SELECT name FROM sqlite_master WHERE name='probe_agent_runtime_v1'").first(), null);
+    await env.MISUB_PROBE_DB.prepare(runtimeSchema).run();
+    env.PROBE_AGENT_RUNTIME_MODE = 'record';
+    assert.equal((await handle(request('agent/claim', { observationsVersion: 1, capabilities: { ...declared, token: 'fixture-private-claim' } }, headers), env)).status, 200);
+    const overview = async () => (await (await handle(request('agents/overview', undefined, admin), env)).json()).data;
+    assert.equal((await overview()).agents[0].capabilities, null);
+    env.PROBE_AGENT_RUNTIME_MODE = 'read';
+    const result = await overview();
+    assert.equal(result.agents[0].capabilities.state, 'declared');
+    assert.equal(result.agents[0].capabilities.source, 'agent_claim');
+    assert.equal(result.agents[0].capabilities.observationsVersion, 1);
+    assert.ok(!JSON.stringify(result).includes('fixture-private-claim'));
+    const history = await (await handle(request(`agents/${agent.id}/history`, undefined, admin), env)).json();
+    assert.equal(history.data.agent.capabilities.state, 'declared');
+    assert.equal((await handle(request('agents/overview', undefined, headers), env)).status, 401);
+    env.PROBE_AGENT_RUNTIME_MODE = 'off';
+    assert.equal((await overview()).agents[0].capabilities, null);
+});
+
+test('runtime missing schema fails closed with fixed HTTP errors without blocking revoke or cancellation', async () => {
+    const { env, handle, request } = fixture();
+    const store = await new ProbeStore(env.MISUB_PROBE_DB).init();
+    const agent = await store.addAgent('runtime unavailable');
+    const jobResponse = await handle(request('jobs', { scope: 'all', agentIds: [agent.id], types: ['tcp'], consent: true }, { ...admin, 'Idempotency-Key': 'runtime-http-job' }), env);
+    const { data: job } = await jobResponse.json();
+    env.PROBE_AGENT_RUNTIME_MODE = 'record';
+    const claim = await handle(request('agent/claim', { capabilities: declared }, { Authorization: `Bearer ${agent.token}` }), env);
+    assert.equal(claim.status, 503);
+    assert.deepEqual(await claim.json(), { success: false, error: { code: 'probe_runtime_unavailable' } });
+    const task = await store.q('SELECT state,attempt FROM probe_tasks WHERE job_id=?', job.id).first();
+    assert.equal(task.state, 'queued');
+    assert.equal(task.attempt, 0);
+    env.PROBE_AGENT_RUNTIME_MODE = 'read';
+    const overview = await handle(request('agents/overview', undefined, admin), env);
+    assert.equal(overview.status, 503);
+    assert.equal((await overview.json()).error.code, 'probe_runtime_unavailable');
+    assert.equal(await store.q("SELECT name FROM sqlite_master WHERE name='probe_agent_runtime_v1'").first(), null);
+    env.PROBE_AGENT_RUNTIME_MODE = 'invalid-fixture-mode';
+    const invalid = await handle(request('agent/claim', {}, { Authorization: `Bearer ${agent.token}` }), env);
+    assert.equal(invalid.status, 503);
+    assert.equal((await invalid.json()).error.code, 'probe_runtime_mode_invalid');
+    assert.equal((await handle(request(`jobs/${job.id}/cancel`, {}, admin), env)).status, 200);
+    assert.equal((await handle(new Request(`${base}agents/${agent.id}`, { method: 'DELETE', headers: admin }), env)).status, 200);
+    assert.equal((await store.q('SELECT state FROM probe_tasks WHERE job_id=?', job.id).first()).state, 'cancelled');
+});
+
+test('runtime declaration writes remain behind native agent authentication and strip unknown fields', async () => {
+    const { env, handle, request } = fixture();
+    const store = await new ProbeStore(env.MISUB_PROBE_DB).init();
+    const agent = await store.addAgent('runtime authentication');
+    await env.MISUB_PROBE_DB.prepare(runtimeSchema).run();
+    env.PROBE_AGENT_RUNTIME_MODE = 'read';
+    const body = { observationsVersion: 1, capabilities: { schemaVersion: 2, observationsVersion: 1, password: 'fixture-private-declaration' } };
+    for (const headers of [admin, { Authorization: `Bearer mp1_${'0'.repeat(64)}` }, { Authorization: `Bearer ${agent.token}`, Cookie: 'fixture' }, { Authorization: `Bearer ${agent.token}`, Origin: 'https://misub.example' }]) {
+        assert.ok([401, 403].includes((await handle(request('agent/claim', body, headers), env)).status));
+    }
+    assert.equal((await store.q('SELECT COUNT(*) AS n FROM probe_agent_runtime_v1').first()).n, 0);
+    assert.equal((await handle(request('agent/claim', body, { Authorization: `Bearer ${agent.token}` }), env)).status, 200);
+    const response = await handle(request('agents/overview', undefined, admin), env);
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+    const text = await response.text();
+    assert.ok(!text.includes('fixture-private-declaration'));
+    assert.equal(JSON.parse(text).data.agents[0].capabilities.state, 'unsupported_schema');
+    assert.equal(JSON.parse(text).data.agents[0].capabilities.observationsVersion, null);
 });

@@ -227,10 +227,8 @@ describe('detector list and recoverable deletion', () => {
         await flushPromises();
         expect(wrapper.findAll('thead th')).toHaveLength(5);
         expect(wrapper.html()).not.toMatch(/PRIVATE_TOKEN|PRIVATE_CAPABILITY|PRIVATE_QUERY/);
-        expect(get(wrapper, 'detector-row-one').text()).toContain('Unknown (not reported)');
-        expect(get(wrapper, 'detector-row-one').text()).toContain(
-            'Unknown (not recorded separately)'
-        );
+        expect(get(wrapper, 'detector-row-one').text()).toContain('Unknown (unreadable record)');
+        expect(get(wrapper, 'detector-row-one').text()).toContain('Unknown (no usable record)');
         expect(params().has('q')).toBe(false);
     });
     it('retains in-memory view changes when browser preference storage is blocked', async () => {

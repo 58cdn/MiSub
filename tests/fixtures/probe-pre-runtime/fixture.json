@@ -1,0 +1,56 @@
+{
+  "commit": "553f190d10c8f6e990b622291c03b18d8f3b77f3",
+  "description": "Raw pre-runtime ProbeStore bytes. Tests verify the source and unchanged shared dependency bytes before rewriting only the three relative import targets in memory.",
+  "source": {
+    "file": "probe-store.js",
+    "path": "functions/services/probe-store.js",
+    "bytes": 21736,
+    "sha256": "71db1e183e5ab7085ff034f29d3458794a9e7c05ef4c4a22a008b12954ed6d6f"
+  },
+  "imports": [
+    {
+      "specifier": "./probe-contract.js",
+      "path": "functions/services/probe-contract.js"
+    },
+    {
+      "specifier": "./probe-agent-management.js",
+      "path": "functions/services/probe-agent-management.js"
+    },
+    {
+      "specifier": "./probe-execution-metadata.js",
+      "path": "functions/services/probe-execution-metadata.js"
+    }
+  ],
+  "dependencies": [
+    {
+      "path": "functions/services/probe-contract.js",
+      "bytes": 9598,
+      "sha256": "e1757e1903ef1235c97907e466513d9896eac99cf1221b56f8c4145482b5b522"
+    },
+    {
+      "path": "functions/services/probe-agent-management.js",
+      "bytes": 1520,
+      "sha256": "ec60480789a2fa998a7e381bb97431b6076afccbaa5ac2e57ee2ae6ca9bc7a2b"
+    },
+    {
+      "path": "functions/services/probe-execution-metadata.js",
+      "bytes": 3839,
+      "sha256": "8535ba9621692fc140ad00ff222399091e949c60d49a9d674bc9f22ceb99d9fe"
+    },
+    {
+      "path": "functions/services/probe-observations.js",
+      "bytes": 2498,
+      "sha256": "d4f096d5c8bbe220bf7c0d688ad08de0597389e7f09206c6331c100b15487ff9"
+    },
+    {
+      "path": "functions/services/probe-result-rules.js",
+      "bytes": 3203,
+      "sha256": "d9917c636d3dfd6a10c8d3a9f86551e2b8df8550e7d49635ae14e220e65e6836"
+    },
+    {
+      "path": "functions/services/diagnostics/contract.js",
+      "bytes": 8879,
+      "sha256": "8d05b10dd47887ccb55ae33245ac06d6ef52bf395e6f461aff716c0663cfe835"
+    }
+  ]
+}

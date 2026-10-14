@@ -104,7 +104,7 @@ fi
 if ! jq -e '
   (.result.deployment_configs.production // {}) as $p |
   (
-    [($p.env_vars // {} | keys[] | select(. != "ADMIN_PASSWORD" and . != "COOKIE_SECRET" and . != "SESSION_AUTH_MODE"))] +
+    [($p.env_vars // {} | keys[] | select(. != "ADMIN_PASSWORD" and . != "COOKIE_SECRET" and . != "SESSION_AUTH_MODE" and . != "PROBE_AGENT_RUNTIME_MODE"))] +
     [($p.r2_buckets // {} | keys[])] +
     [($p.durable_object_namespaces // {} | keys[])] +
     [($p.services // {} | keys[])] +
@@ -134,6 +134,22 @@ if ! jq -e '
   exit 1
 fi
 session_mode="$(jq -r '.result.deployment_configs.production.env_vars.SESSION_AUTH_MODE.value // empty' "$project_json")"
+
+# Preserve a production-approved runtime mode; CI inputs cannot activate it.
+if ! jq -e '
+  (.result.deployment_configs.production // {}) as $p |
+  ($p.env_vars // {}) as $vars |
+  (($vars | has("PROBE_AGENT_RUNTIME_MODE") | not) or
+    ($vars.PROBE_AGENT_RUNTIME_MODE.type == "plain_text" and
+     ($vars.PROBE_AGENT_RUNTIME_MODE.value == "off" or
+      (($vars.PROBE_AGENT_RUNTIME_MODE.value == "record" or
+        $vars.PROBE_AGENT_RUNTIME_MODE.value == "read") and
+       $p.d1_databases.MISUB_PROBE_DB.id != null))))
+' "$project_json" >/dev/null 2>&1; then
+  echo '::error::Existing probe runtime mode must be plain_text off, record or read; record/read require an existing MISUB_PROBE_DB binding.'
+  exit 1
+fi
+probe_runtime_mode="$(jq -r '.result.deployment_configs.production.env_vars.PROBE_AGENT_RUNTIME_MODE.value // empty' "$project_json")"
 
 existing_kv="$(jq -r '.result.deployment_configs.production.kv_namespaces.MISUB_KV.namespace_id // empty' "$project_json")"
 if [[ "$existing_only" == true && -z "$existing_kv" ]]; then
@@ -229,8 +245,14 @@ if [[ -e wrangler.toml ]]; then
   exit 1
 fi
 sed -E "s/^name = .*/name = \"${project_name}\"/" wrangler-cf-pages.toml > wrangler.toml
-if [[ -n "$session_mode" ]]; then
-  printf '\n[vars]\nSESSION_AUTH_MODE = "d1-v1"\n' >> wrangler.toml
+if [[ -n "$session_mode" || -n "$probe_runtime_mode" ]]; then
+  printf '\n[vars]\n' >> wrangler.toml
+  if [[ -n "$session_mode" ]]; then
+    printf 'SESSION_AUTH_MODE = "d1-v1"\n' >> wrangler.toml
+  fi
+  if [[ -n "$probe_runtime_mode" ]]; then
+    printf 'PROBE_AGENT_RUNTIME_MODE = "%s"\n' "$probe_runtime_mode" >> wrangler.toml
+  fi
 fi
 cat >> wrangler.toml <<CFG
 

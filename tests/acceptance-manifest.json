@@ -2,6 +2,7 @@
     "node": [
         "tests/probes/agent-archive.check.mjs",
         "tests/probes/agent-management.check.mjs",
+        "tests/probes/agent-runtime.check.mjs",
         "tests/probes/client.check.mjs",
         "tests/probes/contract.check.mjs",
         "tests/probes/execution-metadata.check.mjs",
@@ -43,6 +44,13 @@
             "report": "report.json",
             "cases": "cases",
             "errors": ["errors", "external"]
+        },
+        {
+            "file": "tests/browser/probe-agent-runtime.mjs",
+            "report": "report.json",
+            "cases": "tests",
+            "errors": ["pageErrors", "externalRequests"],
+            "passed": true
         },
         {
             "file": "tests/browser/probe-execution-history.mjs",
