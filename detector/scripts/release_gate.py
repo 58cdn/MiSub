@@ -72,12 +72,12 @@ def check_record(path, expected):
     require(record(path) == expected, "artifact_digest_or_size_mismatch")
 
 
-def run(command, cwd, env, log, timeout=1800):
+def run(command, cwd, env, log, timeout=1800, expected_returncode=0):
     with pathlib.Path(log).open("xb") as stream:
         result = subprocess.run([str(v) for v in command], cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                 stdout=stream, stderr=subprocess.STDOUT, timeout=timeout, check=False)
     data = read(log, 32 * 1024 * 1024)
-    if result.returncode:
+    if result.returncode != expected_returncode:
         print(data[-12000:].decode("utf-8", errors="replace"), file=sys.stderr)
         raise GateError("command_failed:" + pathlib.Path(log).name)
     return data
@@ -262,6 +262,75 @@ def bootstrap_environment(target, environment=None):
             if not (target.startswith("windows-") and key.upper() == "PSMODULEPATH")}
 
 
+def cli_environment(home, environment):
+    values = dict(environment)
+    for key in ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME",
+                "XDG_DATA_HOME", "XDG_STATE_HOME", "TMPDIR", "TMP", "TEMP"):
+        values[key] = str(home)
+    return values
+
+
+def installation_token_elevated():
+    if os.name != "nt":
+        return os.geteuid() == 0
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    security = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    security.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    security.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    token, elevated, returned = wintypes.HANDLE(), wintypes.DWORD(), wintypes.DWORD()
+    require(security.OpenProcessToken(kernel.GetCurrentProcess(), 0x0008, ctypes.byref(token)), "native_token_query_failed")
+    try:
+        require(security.GetTokenInformation(token, 20, ctypes.byref(elevated), ctypes.sizeof(elevated), ctypes.byref(returned))
+                and returned.value == ctypes.sizeof(elevated), "native_token_query_failed")
+        return elevated.value != 0
+    finally:
+        kernel.CloseHandle(token)
+
+
+def verify_doctor_report(report, version, commit, target, kernel_version, elevated):
+    require(type(elevated) is bool, "native_token_evidence_invalid")
+    require(isinstance(report, dict) and set(report) == {"schemaVersion", "checkedAt", "scope", "status",
+            "platform", "version", "revision", "kernelLockVersion", "checks"}, "native_doctor_report_invalid")
+    require(type(report["schemaVersion"]) is int and report["schemaVersion"] == 1
+            and (report["scope"], report["status"], report["platform"], report["version"], report["revision"], report["kernelLockVersion"])
+            == ("local_read_only", "issues_found", target, version, commit, kernel_version), "native_doctor_identity_mismatch")
+    require(isinstance(report["checkedAt"], str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", report["checkedAt"]), "native_doctor_timestamp_invalid")
+    expected = {"build": ("ok", "build_metadata_valid"), "platform": ("ok", "platform_supported"),
+                "kernel_materials": ("ok", "kernel_archive_checksum_matches"),
+                "installation": ("info", "installation_not_found"), "configuration": ("error", "configuration_missing"),
+                "service": ("not_run", "service_status_not_checked"),
+                "kernel_execution": ("not_run", "kernel_execution_not_checked"), "network": ("not_run", "network_not_checked")}
+    if elevated:
+        expected["installation"] = ("error", "installation_regular_user_required")
+    checks = report["checks"]
+    require(isinstance(checks, list) and len(checks) == len(expected), "native_doctor_checks_invalid")
+    seen = set()
+    for check in checks:
+        require(isinstance(check, dict) and {"id", "state", "code"} <= set(check)
+                and set(check) <= {"id", "state", "code", "remediation", "source"}, "native_doctor_checks_invalid")
+        name = check["id"]
+        require(isinstance(name, str) and name in expected and name not in seen
+                and (check["state"], check["code"]) == expected[name], "native_doctor_checks_invalid")
+        require(check.get("source") == ("explicit_config" if name == "configuration" else None), "native_doctor_checks_invalid")
+        seen.add(name)
+    return report
+
+
+def verify_cli_evidence(evidence, version, commit, target, kernel_version):
+    require(type(evidence.get("schemaVersion")) is int, "invalid_native_evidence")
+    if evidence.get("schemaVersion") == 1:
+        require((version, commit) == ("0.2.0", "9ccee76c3cab149f34dca96c304310c9574c0d29"), "native_cli_evidence_required")
+        return
+    require(evidence.get("schemaVersion") == 2, "invalid_native_evidence")
+    require(evidence.get("versionOutput") == f"misub-probe {version} ({commit}); mihomo {kernel_version}", "native_cli_version_mismatch")
+    require(evidence.get("doctorHomeUnchanged") is True, "native_doctor_side_effects")
+    verify_doctor_report(evidence.get("doctor"), version, commit, target, kernel_version, evidence.get("installationTokenElevated"))
+
+
 def native(repo, work, target, version, commit, require_materials=False):
     identity(version, commit)
     require(target in TARGETS and source.host_target() == target, "native_target_mismatch")
@@ -311,10 +380,19 @@ def native(repo, work, target, version, commit, require_materials=False):
     run([go, *recipe, "-o", binary, "."], wrapper / "detector", env, logs / "wrapper-build.txt")
     run([go, *recipe, "-o", work / "wrapper.repeat", "."], wrapper / "detector", env, logs / "wrapper-repeat.txt")
     require(read(binary) == read(work / "wrapper.repeat"), "wrapper_repeat_build_mismatch")
-    capabilities = run([binary, "--capabilities"], work, env, logs / "capabilities.txt").decode().strip()
+    cli_home = work / "cli-home"
+    cli_home.mkdir()
+    cli_env = cli_environment(cli_home, env)
+    elevated = installation_token_elevated()
+    capabilities = run([binary, "--capabilities"], cli_home, cli_env, logs / "capabilities.txt", timeout=30).decode().strip()
     require(capabilities == f"misub-probe-bootstrap-v1 {version} {commit} {target}", "native_cli_capability_mismatch")
-    run([binary, "--self-test"], work, env, logs / "self-test.txt")
-    run([binary, "--version"], work, env, logs / "version.txt")
+    version_output = run([binary, "--version"], cli_home, cli_env, logs / "version.txt", timeout=30).decode().strip()
+    require(version_output == f"misub-probe {version} ({commit}); mihomo {lock['source']['version']}", "native_cli_version_mismatch")
+    doctor_output = run([binary, "--doctor", "--json", "--config", cli_home / "missing-probe.json"],
+                        cli_home, cli_env, logs / "doctor.json", timeout=30, expected_returncode=1)
+    doctor = verify_doctor_report(json.loads(doctor_output, object_pairs_hook=audit.unique_object), version, commit, target, lock["source"]["version"], elevated)
+    require(not any(cli_home.iterdir()), "native_doctor_side_effects")
+    run([binary, "--self-test"], cli_home, cli_env, logs / "self-test.txt")
     source.load_prepared(prepared, lock)
     core_pack = output / ("mihomo-source-" + target + ".tar.gz")
     shutil.copyfile(work / "core-source/mihomo-source-materials.tar.gz", core_pack)
@@ -328,14 +406,18 @@ def native(repo, work, target, version, commit, require_materials=False):
         coverage = review_coverage(read_json(review_path), inventory, linked, lock_sha, manifest["modules"])
     else:
         blockers.append("reviewed_license_coverage_missing")
-    evidence = {"schemaVersion": 1, "kind": "misub-native-source-candidate", "version": version, "commit": commit,
+    evidence = {"schemaVersion": 2, "kind": "misub-native-source-candidate", "version": version, "commit": commit,
                 "target": target, "wrapperTree": tree, "lockSha256": lock_sha, "coreBuild": build,
                 "generatedKernelLock": generated, "wrapperRecipe": recipe, "wrapperStandardDependencies": wrapper_standard_dependencies(deps, prepared),
                 "asset": record(binary), "wrapperSource": record(wrapper_pack), "coreSource": record(core_pack),
-                "capabilities": capabilities, "nativeTests": tests, "bootstrapFixtureSha256": source.digest(read(logs / "bootstrap-fixtures.txt")),
+                "capabilities": capabilities, "versionOutput": version_output, "doctor": doctor, "doctorHomeUnchanged": True, "installationTokenElevated": elevated,
+                "nativeTests": tests, "bootstrapFixtureSha256": source.digest(read(logs / "bootstrap-fixtures.txt")),
                 "coverage": coverage, "materialBlockers": blockers, "authenticatedProvenance": "missing", "releaseReady": False}
     save(output / ("evidence-" + target + ".json"), evidence)
-    print(json.dumps({"target": target, "asset": evidence["asset"], "materialBlockers": blockers,
+    print(json.dumps({"target": target, "version": version, "commit": commit, "wrapperTree": tree,
+                      "asset": evidence["asset"], "versionOutput": version_output, "doctor": doctor,
+                      "doctorHomeUnchanged": True, "installationTokenElevated": elevated,
+                      "nativeTests": tests, "materialBlockers": blockers,
                       "authenticatedProvenance": "missing", "releaseReady": False}), flush=True)
     if require_materials:
         require(not blockers, "distribution_materials_blocked")
@@ -364,7 +446,10 @@ def render_bootstrap(unix, windows, assets, version, commit):
                           ("$MisubReleaseSha256 = ''", "$MisubReleaseSha256 = '" + win["sha256"] + "'")]:
         require(windows.count(marker) == 1, "bootstrap_marker_mismatch")
         windows = windows.replace(marker, value)
-    return unix.encode(), windows.encode()
+    scripts = unix.encode(), windows.encode()
+    require(all(0 < len(script) <= 64 * 1024 and b"\0" not in script and b"\r" not in script
+                and not script.startswith(b"\xef\xbb\xbf") for script in scripts), "invalid_bootstrap_script_bytes")
+    return scripts
 
 
 def release_context(version, commit, environment=None):
@@ -386,6 +471,33 @@ def assemble(repo, inputs, output, version, commit):
     return assemble_materials(repo, inputs, output, version, commit)
 
 
+def catalog_history(payload, version):
+    catalog = json.loads(payload, object_pairs_hook=audit.unique_object)
+    require(isinstance(catalog, dict) and type(catalog.get("schemaVersion")) is int
+            and catalog["schemaVersion"] == 1 and type(catalog.get("distributionReady")) is bool,
+            "invalid_source_catalog")
+    previous = catalog.get("legacyReleases")
+    require(isinstance(previous, list), "invalid_source_catalog")
+    previous = list(previous)
+    current = catalog.get("release")
+    require(current is None or isinstance(current, dict), "invalid_source_catalog")
+    require(not catalog["distributionReady"] or current is not None, "invalid_source_catalog")
+    if catalog["distributionReady"]:
+        previous.append({key: current.get(key) for key in ("version", "tag", "capabilities")})
+    seen = set()
+    for entry in previous:
+        require(isinstance(entry, dict) and set(entry) == {"version", "tag", "capabilities"}, "invalid_source_catalog")
+        old = entry["version"]
+        require(isinstance(old, str) and re.fullmatch(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})", old)
+                and old != version and old not in seen and entry["tag"] == "probe-v" + old, "invalid_source_catalog")
+        caps = entry["capabilities"]
+        require(isinstance(caps, list) and all(isinstance(cap, str) and cap in CAPABILITIES for cap in caps)
+                and len(caps) == len(set(caps)) and (old != "0.1.0" or not caps), "invalid_source_catalog")
+        seen.add(old)
+    require(len(previous) <= 20, "invalid_source_catalog")
+    return previous
+
+
 def assemble_materials(repo, inputs, output, version, commit):
     """Verify source-bound candidates and render local release bytes, without publication authority."""
     identity(version, commit)
@@ -400,10 +512,12 @@ def assemble_materials(repo, inputs, output, version, commit):
         directory = inputs / ("source-candidate-" + target)
         evidence_path = directory / ("evidence-" + target + ".json")
         evidence = read_json(evidence_path)
-        require(evidence.get("kind") == "misub-native-source-candidate" and evidence.get("schemaVersion") == 1, "invalid_native_evidence")
+        require(evidence.get("kind") == "misub-native-source-candidate" and type(evidence.get("schemaVersion")) is int
+                and evidence["schemaVersion"] in (1, 2), "invalid_native_evidence")
         require((evidence["target"], evidence["version"], evidence["commit"], evidence["wrapperTree"], evidence["lockSha256"]) == (target, version, commit, tree, lock_sha), "native_identity_mismatch")
         require(evidence["materialBlockers"] == [] and evidence["coverage"] is not None, "distribution_materials_blocked")
         require(evidence["capabilities"] == f"misub-probe-bootstrap-v1 {version} {commit} {target}", "native_cli_capability_mismatch")
+        verify_cli_evidence(evidence, version, commit, target, lock["source"]["version"])
         require(evidence["nativeTests"]["race"] is True and set(evidence["nativeTests"]["requiredCoreTests"]) == CORE_TESTS and evidence["nativeTests"]["passed"] >= len(CORE_TESTS), "native_core_tests_not_passed")
         expected_binary = "misub-probe-" + target + (".exe" if target == "windows-amd64" else "")
         expected_wrapper = "misub-wrapper-source-" + target + ".tar.gz"
@@ -431,7 +545,8 @@ def assemble_materials(repo, inputs, output, version, commit):
     url = "https://github.com/" + REPOSITORY + "/releases/download/probe-v" + version + "/"
     def public_record(entry):
         return dict(entry, url=url + entry["fileName"])
-    catalog = {"schemaVersion": 1, "distributionReady": True, "legacyReleases": [{"version": "0.1.0", "tag": "probe-v0.1.0", "capabilities": []}],
+    catalog = {"schemaVersion": 1, "distributionReady": True,
+               "legacyReleases": catalog_history(source_files["detector/release-catalog.json"], version),
                "release": {"version": version, "tag": "probe-v" + version, "sourceCommit": commit, "bootstrapProtocol": 1, "capabilities": CAPABILITIES,
                            "assets": [dict(public_record(assets[t]), target=t) for t in TARGETS],
                            "bootstrap": {"unix": public_record(record(output / "install.sh")), "windows": public_record(record(output / "install.ps1"))}}}
