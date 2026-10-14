@@ -1,7 +1,7 @@
 # Probe 0.3.0 发行准备
 
 本文件是未发布候选的操作清单。`probe-v0.3.0` 为新标签；新增本地 `doctor`
-与执行版本快照对应兼容功能增量。既有 `probe-v0.2.0` 及其 26 项资产保持不变。
+与执行版本快照、版本化领单声明对应兼容功能增量。领单声明继续携带旧顶层字段，服务端记录模式默认关闭，数据库迁移和 record/read 激活遵循[独立阶段协议](probe-agent-runtime.md)。既有 `probe-v0.2.0` 及其 26 项资产保持不变。
 站点继续使用已核验的 0.2.0 目录，只有新版本公开核验及独立目录 PR 完成后，
 安装页才能提供 0.3.0。
 
@@ -10,12 +10,12 @@
 发行源码必须是最终审查通过并合并到 `main` 的精确 commit。PR 的临时合并
 commit、测试构建摘要、合成 fixture 摘要都不能填入正式发行目录。
 
-| 原生目标 | 可执行文件 |
-| --- | --- |
-| `linux-amd64` | `misub-probe-linux-amd64` |
-| `linux-arm64` | `misub-probe-linux-arm64` |
-| `darwin-amd64` | `misub-probe-darwin-amd64` |
-| `darwin-arm64` | `misub-probe-darwin-arm64` |
+| 原生目标        | 可执行文件                      |
+| --------------- | ------------------------------- |
+| `linux-amd64`   | `misub-probe-linux-amd64`       |
+| `linux-arm64`   | `misub-probe-linux-arm64`       |
+| `darwin-amd64`  | `misub-probe-darwin-amd64`      |
+| `darwin-arm64`  | `misub-probe-darwin-arm64`      |
 | `windows-amd64` | `misub-probe-windows-amd64.exe` |
 
 下载前缀为 `https://github.com/58cdn/MiSub/releases/download/probe-v0.3.0/`。
@@ -38,23 +38,23 @@ Bootstrap 协议仍为 1，能力集合仍是 `pair`、`install`、`start`、`st
 3. 根据现场发布授权决定是否运行下列命令。默认 `publish=false` 只构建测试，
    不上传制品、不创建标签或 Release：
 
-   ```sh
-   gh workflow run probe-source-release.yml --repo 58cdn/MiSub --ref main \
-     -f version=0.3.0 -f publish=false
-   ```
+    ```sh
+    gh workflow run probe-source-release.yml --repo 58cdn/MiSub --ref main \
+      -f version=0.3.0 -f publish=false
+    ```
 
 4. 正式发布需要明确批准。以下命令会从 dispatch 时的 `main` 重新构建全部资产，
    使用工作流的短期 OIDC 身份签证，创建新 tag、草稿及资产，并在核验后公开：
 
-   ```sh
-   gh workflow run probe-source-release.yml --repo 58cdn/MiSub --ref main \
-     -f version=0.3.0 -f publish=true
-   ```
+    ```sh
+    gh workflow run probe-source-release.yml --repo 58cdn/MiSub --ref main \
+      -f version=0.3.0 -f publish=true
+    ```
 
-   dispatch 前后立即核对 `main` 和运行的 `head_sha`；若与已批准的 commit 不符，
-   立即取消该运行，重新审查并批准准确提交后再发起，不得让发布在审查期间继续。
-   现存 tag/Release 会阻止发行。上传失败保留现场，
-   按[草稿恢复流程](detector-draft-recovery.md)核验原运行，不能覆盖重传。
+    dispatch 前后立即核对 `main` 和运行的 `head_sha`；若与已批准的 commit 不符，
+    立即取消该运行，重新审查并批准准确提交后再发起，不得让发布在审查期间继续。
+    现存 tag/Release 会阻止发行。上传失败保留现场，
+    按[草稿恢复流程](detector-draft-recovery.md)核验原运行，不能覆盖重传。
 
 ## 公开发行与安装目录验收
 
