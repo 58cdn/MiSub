@@ -17,6 +17,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "Print detector and pinned kernel versions")
 	capabilities := flag.Bool("capabilities", false, "Print the offline bootstrap capability protocol, version, revision and native target")
 	checkConfig := flag.Bool("check-config", false, "Validate configuration without sending it anywhere")
+	doctor := flag.Bool("doctor", false, "Report local read-only checks; no service query, kernel execution or network request")
 	selfTest := flag.Bool("self-test", false, "Verify and execute the embedded kernel version; no node or API request")
 	pair := flag.Bool("pair", false, "Pair with browser approval, save private configuration, then exit")
 	setup := flag.Bool("setup", false, "Pair with browser approval, install and start the detector")
@@ -29,13 +30,34 @@ func main() {
 	for _, action := range []string{"install", "start", "stop", "status", "uninstall", "reinstall", "resume-install"} {
 		managementFlags[action] = flag.Bool(action, false, "User installation management: "+action+" (no login startup)")
 	}
-	jsonOutput := flag.Bool("json", false, "Print installation --status as JSON")
+	jsonOutput := flag.Bool("json", false, "Print installation --status or local --doctor as JSON")
 	flag.Parse()
 	selected, visited := map[string]bool{}, map[string]bool{}
 	for action, value := range managementFlags {
 		selected[action] = *value
 	}
 	flag.Visit(func(f *flag.Flag) { visited[f.Name] = true })
+	// A diagnostic flag can follow a positional argument or be consumed as a
+	// missing string value. Neither case may enter the normal execution path.
+	if !visited["doctor"] && doctorRequested(os.Args[1:]) {
+		fmt.Fprintln(os.Stderr, "probe: doctor_flags_conflict")
+		os.Exit(2)
+	}
+	if visited["doctor"] {
+		if err := doctorFlags(*doctor, visited, flag.NArg()); err != nil {
+			fmt.Fprintln(os.Stderr, "probe:", err)
+			os.Exit(2)
+		}
+		report := collectDoctor(nativeDoctorHost{}, doctorEnvironment{Target: nativeBootstrapTarget(), Version: version, Revision: commit, Now: time.Now()}, doctorOptions{ConfigPath: *path, ConfigExplicit: visited["config"]})
+		if err := writeDoctorReport(os.Stdout, report, *jsonOutput); err != nil {
+			fmt.Fprintln(os.Stderr, "probe:", err)
+			os.Exit(1)
+		}
+		if report.Status != "local_checks_passed" {
+			os.Exit(1)
+		}
+		return
+	}
 	if visited["capabilities"] {
 		if !*capabilities || len(visited) != 1 || flag.NArg() != 0 {
 			fmt.Fprintln(os.Stderr, "probe: capabilities_flags_conflict")
