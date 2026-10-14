@@ -99,7 +99,7 @@ try {
     page.setDefaultNavigationTimeout(20000);
     page.on('pageerror', (e) => errors.push(e.message));
     const footer = () => page.getByTestId('groups-pagination');
-    const range = async (text) => {
+    const range = async (text, scenario = text) => {
         await page.waitForFunction(
             (text) =>
                 document
@@ -107,7 +107,7 @@ try {
                     ?.textContent.trim() === text,
             text
         );
-        checks.push(text);
+        checks.push(scenario);
     };
     const shot = async (name) => {
         await footer().scrollIntoViewIfNeeded();
@@ -183,7 +183,7 @@ try {
     await page.getByTestId('subscription-search').fill('Fixture source 000');
     await range('显示 1 至 10 共 10 条结果');
     await page.getByTestId('subscription-search').fill('no-match');
-    await range('显示 0 至 0 共 0 条结果');
+    await range('显示 0 至 0 共 0 条结果', 'Empty search filter: 显示 0 至 0 共 0 条结果');
     assert.equal(await footer().locator('button:enabled').count(), 0);
     await shot('empty-filter.png');
     await page.goto(`${origin}/dashboard/groups?status=disabled`);
@@ -286,7 +286,7 @@ try {
     await page.waitForEvent('load');
     assert.equal(settings.groupsPageSize, 50);
     await page.goto(`${origin}/dashboard/groups`);
-    await range('显示 1 至 45 共 45 条结果');
+    await range('显示 1 至 45 共 45 条结果', 'Reloaded saved default: 显示 1 至 45 共 45 条结果');
     assert.equal(await footer().getByRole('combobox').inputValue(), '50');
     checks.push('System setting persisted across application reload; failed save kept prior value');
     await page.getByRole('link', { name: '设置', exact: true }).first().click();
@@ -300,7 +300,7 @@ try {
         page.getByRole('button', { name: '保存修改', exact: true }).click(),
     ]);
     await page.getByRole('link', { name: '机场订阅', exact: true }).first().click();
-    await range('显示 1 至 45 共 45 条结果');
+    await range('显示 1 至 45 共 45 条结果', 'Navigation before reload: 显示 1 至 45 共 45 条结果');
     assert.equal(await footer().getByRole('combobox').inputValue(), '100');
     checks.push('Saved default applies immediately when navigating before the reload countdown');
 
@@ -317,7 +317,7 @@ try {
     });
     releaseData();
     pendingData = null;
-    await range('显示 1 至 45 共 45 条结果');
+    await range('显示 1 至 45 共 45 条结果', 'Initial loading completed: 显示 1 至 45 共 45 条结果');
     failData = true;
     const [failureResponse] = await Promise.all([
         page.waitForResponse((response) => new URL(response.url()).pathname === '/api/data'),
@@ -335,7 +335,7 @@ try {
     count = 0;
     grouped = false;
     await page.goto(`${origin}/dashboard/groups`);
-    await range('显示 0 至 0 共 0 条结果');
+    await range('显示 0 至 0 共 0 条结果', 'Empty dataset: 显示 0 至 0 共 0 条结果');
     await shot('empty-dataset.png');
     assert.deepEqual(errors, []);
     await writeFile(
