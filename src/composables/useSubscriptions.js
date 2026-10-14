@@ -526,21 +526,29 @@ export function useSubscriptions(markDirty, { statusFilter, configurablePaginati
     }
 
     function reorderSubscriptions(newOrder) {
-        // 1. Get all Manual Nodes (to preserve them)
-        // We can't rely just on manualNodes computed because it might be filtered or not imported here.
-        // Instead, filter from source of truth: allSubscriptions
-        const currentManualNodes = (allSubscriptions.value || []).filter(
-            (item) => !item.url || !/^https?:\/\//.test(item.url)
+        if (!Array.isArray(newOrder) || newOrder.length < 2) return;
+
+        const current = allSubscriptions.value || [];
+        if (new Set(current.map((item) => item.id)).size !== current.length) return;
+        const currentById = new Map(subscriptions.value.map((item) => [item.id, item]));
+        const orderedIds = newOrder.map((item) => item?.id);
+        const reorderedIds = new Set(orderedIds);
+        if (
+            reorderedIds.size !== orderedIds.length ||
+            orderedIds.some((id) => !id || !currentById.has(id))
+        ) {
+            return;
+        }
+
+        // A filtered view reorders only its own slots. Keep all other records in
+        // place and use current objects so a drag cannot overwrite newer fields.
+        let index = 0;
+        const mergedList = current.map((item) =>
+            reorderedIds.has(item.id) ? currentById.get(orderedIds[index++]) : item
         );
+        if (mergedList.every((item, position) => item === current[position])) return;
 
-        // 2. Combine New Ordered Subscriptions + Existing Manual Nodes
-        // Logic: Manual Nodes at top, Subscriptions at bottom
-        const mergedList = [...currentManualNodes, ...newOrder];
-
-        // 3. Update Store
         dataStore.overwriteSubscriptions(mergedList);
-
-        // 4. Mark Dirty
         markDirty();
     }
 

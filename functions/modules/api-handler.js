@@ -4,7 +4,12 @@ import { normalizeGroupsPageSize } from '../../shared/pagination.js';
  * 处理各种API请求
  */
 
-import { StorageFactory, SettingsCache, STORAGE_TYPES } from '../storage-adapter.js';
+import {
+    StorageFactory,
+    SettingsCache,
+    STORAGE_TYPES,
+    validateStoredCollection,
+} from '../storage-adapter.js';
 import {
     getCookieSecret,
     getAdminPassword,
@@ -84,9 +89,94 @@ function isStorageUnavailableError(error) {
  * @param {Object} env - Cloudflare环境对象
  * @returns {Promise<Object>} 存储适配器实例
  */
-async function getStorageAdapter(env) {
+async function getStorageAdapter(env, { requireBinding = false } = {}) {
     const storageType = await StorageFactory.getStorageType(env);
+    if (requireBinding) assertStorageBinding(env, storageType);
     return StorageFactory.createAdapter(env, storageType);
+}
+
+function assertStorageBinding(env, storageType) {
+    const available =
+        storageType === STORAGE_TYPES.D1
+            ? Boolean(env?.MISUB_DB)
+            : storageType === STORAGE_TYPES.KV && Boolean(StorageFactory.resolveKV(env));
+    if (!available) {
+        const error = new Error('STORAGE_UNAVAILABLE');
+        error.code = 'STORAGE_UNAVAILABLE';
+        throw error;
+    }
+}
+
+async function readAuthoritativeCollection(storageAdapter, method, key) {
+    const items =
+        typeof storageAdapter[method] === 'function'
+            ? await storageAdapter[method]({ authoritative: true })
+            : ((await storageAdapter.get(key)) ?? []);
+    return validateStoredCollection(items);
+}
+
+function storageReadFailureResponse(error) {
+    if (error?.code !== 'STORAGE_COLLECTION_READ_FAILED' && error?.code !== 'STORAGE_UNAVAILABLE') {
+        return null;
+    }
+    return createJsonResponse(
+        {
+            success: false,
+            code: error.code,
+            message: '无法读取完整订阅数据，请检查存储状态后重试',
+        },
+        503
+    );
+}
+
+function invalidSubscriptionDataResponse() {
+    return createJsonResponse(
+        {
+            success: false,
+            code: 'INVALID_SUBSCRIPTION_DATA',
+            message: '订阅与订阅组数据格式错误，每个集合必须包含有效且互不重复的字符串 ID',
+        },
+        400
+    );
+}
+
+function validateSavedCollection(items) {
+    validateStoredCollection(items);
+    if (new Set(items.map((item) => item.id)).size !== items.length) {
+        throw new Error('duplicate_item_id');
+    }
+}
+
+function validateSubscriptionSaveRequest(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data))
+        throw new Error('invalid_request');
+    if (!data.diff) {
+        validateSavedCollection(data.misubs);
+        validateSavedCollection(data.profiles);
+        return;
+    }
+
+    const assertPatchObject = (patch) => {
+        // Empty array patches remain compatible with existing no-op clients.
+        if (typeof patch !== 'object' || (Array.isArray(patch) && patch.length > 0)) {
+            throw new Error('invalid_patch');
+        }
+    };
+    assertPatchObject(data.diff);
+    for (const patch of [data.diff.subscriptions, data.diff.profiles]) {
+        if (patch == null) continue;
+        assertPatchObject(patch);
+        for (const operation of ['added', 'updated']) {
+            if (patch[operation] !== undefined) validateSavedCollection(patch[operation]);
+        }
+        if (
+            patch.removed !== undefined &&
+            (!Array.isArray(patch.removed) ||
+                patch.removed.some((id) => typeof id !== 'string' || !id.trim()))
+        ) {
+            throw new Error('invalid_removed_ids');
+        }
+    }
 }
 
 function isSimpleArrayDiff(diff) {
@@ -125,11 +215,8 @@ async function applyRowLevelDiff(storageAdapter, type, diff) {
     return true;
 }
 
-async function syncCollectionRowLevel(storageAdapter, type, finalItems) {
+async function syncCollectionRowLevel(storageAdapter, type, finalItems, currentItems) {
     const isProfile = type === 'profiles';
-    const getAll = isProfile
-        ? storageAdapter.getAllProfiles?.bind(storageAdapter)
-        : storageAdapter.getAllSubscriptions?.bind(storageAdapter);
     const putItem = isProfile
         ? storageAdapter.putProfile?.bind(storageAdapter)
         : storageAdapter.putSubscription?.bind(storageAdapter);
@@ -137,7 +224,7 @@ async function syncCollectionRowLevel(storageAdapter, type, finalItems) {
         ? storageAdapter.deleteProfileById?.bind(storageAdapter)
         : storageAdapter.deleteSubscriptionById?.bind(storageAdapter);
 
-    if (!getAll || !putItem || !deleteItem || !Array.isArray(finalItems)) {
+    if (!putItem || !deleteItem || !Array.isArray(finalItems)) {
         return false;
     }
 
@@ -146,7 +233,6 @@ async function syncCollectionRowLevel(storageAdapter, type, finalItems) {
         return false;
     }
 
-    const currentItems = await getAll();
     const currentMap = new Map(currentItems.map((item) => [item.id, item]));
     const finalMap = new Map(finalItems.map((item) => [item.id, item]));
 
@@ -179,21 +265,12 @@ export async function handleDataRequest(env, context = null) {
     let storageType = 'unknown';
     try {
         storageType = await StorageFactory.getStorageType(env);
-        if (storageType === 'd1' && !env.MISUB_DB) {
-            console.error('[API Error /data] D1 binding missing while storageType=d1');
-        }
-        if (storageType === 'kv' && !StorageFactory.resolveKV(env)) {
-            console.error('[API Error /data] KV binding missing while storageType=kv');
-        }
+        assertStorageBinding(env, storageType);
         const storageAdapter = StorageFactory.createAdapter(env, storageType);
         const cachedSettings = await SettingsCache.get(env);
         const [misubs, rawProfiles, settings, ruleTemplates] = await Promise.all([
-            typeof storageAdapter.getAllSubscriptions === 'function'
-                ? storageAdapter.getAllSubscriptions()
-                : storageAdapter.get(KV_KEY_SUBS).then((res) => res || []),
-            typeof storageAdapter.getAllProfiles === 'function'
-                ? storageAdapter.getAllProfiles()
-                : storageAdapter.get(KV_KEY_PROFILES).then((res) => res || []),
+            readAuthoritativeCollection(storageAdapter, 'getAllSubscriptions', KV_KEY_SUBS),
+            readAuthoritativeCollection(storageAdapter, 'getAllProfiles', KV_KEY_PROFILES),
             Promise.resolve(cachedSettings || {}).then((res) => res || {}),
             listRuleTemplates(storageAdapter).catch((error) => {
                 console.warn(
@@ -234,13 +311,14 @@ export async function handleDataRequest(env, context = null) {
         }
         return createJsonResponse({ misubs, profiles, ruleTemplates, config });
     } catch (e) {
+        const failure = storageReadFailureResponse(e);
+        if (failure) return failure;
         console.error('[API Error /data] Failed to read from storage', {
-            error: e?.message,
             storageType,
             hasKv: !!StorageFactory.resolveKV(env),
             hasD1: !!env?.MISUB_DB,
         });
-        return createErrorResponse(e, 500);
+        return createErrorResponse('读取数据失败，请稍后重试', 500);
     }
 }
 
@@ -280,25 +358,27 @@ export async function handleMisubsSave(request, env) {
             );
         }
 
+        try {
+            validateSubscriptionSaveRequest(requestData);
+        } catch {
+            return invalidSubscriptionDataResponse();
+        }
+
         const { misubs, profiles, diff } = requestData;
-        const storageAdapter = await getStorageAdapter(env);
+        const storageAdapter = await getStorageAdapter(env, { requireBinding: true });
 
         let finalMisubs = misubs;
         let finalProfiles = profiles;
 
+        // Complete both authoritative reads before notifications or business writes.
+        const [currentMisubs, currentProfiles] = await Promise.all([
+            readAuthoritativeCollection(storageAdapter, 'getAllSubscriptions', KV_KEY_SUBS),
+            readAuthoritativeCollection(storageAdapter, 'getAllProfiles', KV_KEY_PROFILES),
+        ]);
+
         // 步骤1.5: 检查是否为 Diff 模式
         if (diff) {
             console.info('[API] Processing Diff Patch...');
-            // 获取当前数据
-            const [currentMisubs, currentProfiles] = await Promise.all([
-                typeof storageAdapter.getAllSubscriptions === 'function'
-                    ? storageAdapter.getAllSubscriptions()
-                    : storageAdapter.get(KV_KEY_SUBS).then((res) => res || []),
-                typeof storageAdapter.getAllProfiles === 'function'
-                    ? storageAdapter.getAllProfiles()
-                    : storageAdapter.get(KV_KEY_PROFILES).then((res) => res || []),
-            ]);
-
             // 应用补丁
             if (diff.subscriptions) {
                 finalMisubs = applyPatch(currentMisubs, diff.subscriptions);
@@ -310,38 +390,6 @@ export async function handleMisubsSave(request, env) {
                 finalProfiles = applyPatch(currentProfiles, diff.profiles);
             } else {
                 finalProfiles = currentProfiles; // 无变动
-            }
-
-            if (!Array.isArray(finalMisubs) || !Array.isArray(finalProfiles)) {
-                return createJsonResponse(
-                    {
-                        success: false,
-                        message: '增量更新结果格式错误，请检查补丁数据',
-                    },
-                    400
-                );
-            }
-        } else {
-            // 步骤2: 验证必需字段 (仅在非Diff模式下)
-            if (typeof misubs === 'undefined' || typeof profiles === 'undefined') {
-                return createJsonResponse(
-                    {
-                        success: false,
-                        message: '请求体中缺少 misubs 或 profiles 字段',
-                    },
-                    400
-                );
-            }
-
-            // 步骤3: 验证数据类型
-            if (!Array.isArray(misubs) || !Array.isArray(profiles)) {
-                return createJsonResponse(
-                    {
-                        success: false,
-                        message: 'misubs 和 profiles 必须是数组格式',
-                    },
-                    400
-                );
             }
         }
 
@@ -387,6 +435,13 @@ export async function handleMisubsSave(request, env) {
                         sortIndex: subMap.get(s.id)?.sortIndex,
                     }));
             }
+        }
+
+        try {
+            validateSavedCollection(finalMisubs);
+            validateSavedCollection(finalProfiles);
+        } catch {
+            return invalidSubscriptionDataResponse();
         }
 
         // 步骤4: 获取设置（带错误处理）
@@ -443,8 +498,18 @@ export async function handleMisubsSave(request, env) {
                 }
             } else {
                 const [subsHandled, profilesHandled] = await Promise.all([
-                    syncCollectionRowLevel(storageAdapter, 'subscriptions', finalMisubs),
-                    syncCollectionRowLevel(storageAdapter, 'profiles', finalProfiles),
+                    syncCollectionRowLevel(
+                        storageAdapter,
+                        'subscriptions',
+                        finalMisubs,
+                        currentMisubs
+                    ),
+                    syncCollectionRowLevel(
+                        storageAdapter,
+                        'profiles',
+                        finalProfiles,
+                        currentProfiles
+                    ),
                 ]);
 
                 const saveTasks = [];
@@ -456,11 +521,11 @@ export async function handleMisubsSave(request, env) {
                 }
             }
         } catch (storageError) {
-            console.error('[API Error /misubs] Storage put failed:', storageError);
+            console.error('[API Error /misubs] Storage put failed');
             return createJsonResponse(
                 {
                     success: false,
-                    message: `数据保存失败: ${storageError.message || '存储服务暂时不可用，请稍后重试'}`,
+                    message: '数据保存失败，存储服务暂时不可用，请稍后重试',
                 },
                 500
             );
@@ -490,11 +555,13 @@ export async function handleMisubsSave(request, env) {
             },
         });
     } catch (e) {
-        console.error('[API Error /misubs] Uncaught error:', e);
+        const failure = storageReadFailureResponse(e);
+        if (failure) return failure;
+        console.error('[API Error /misubs] Save failed');
         return createJsonResponse(
             {
                 success: false,
-                message: `保存失败: ${e.message || '服务器内部错误，请稍后重试'}`,
+                message: '保存失败，服务器内部错误，请稍后重试',
             },
             500
         );
