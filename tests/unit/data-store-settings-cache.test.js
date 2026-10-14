@@ -72,6 +72,12 @@ describe('Data store settings cache', () => {
                 if (url === '/api/settings') {
                     return jsonResponse({ success: true });
                 }
+                if (url === '/api/data') {
+                    return jsonResponse({
+                        ...initialData,
+                        config: { ...initialData.config, ...nextSettings },
+                    });
+                }
                 throw new Error(`Unexpected request: ${url}`);
             })
         );
@@ -85,7 +91,7 @@ describe('Data store settings cache', () => {
         expect(cachedData.config).toMatchObject(nextSettings);
 
         const reloadedStore = createStore();
-        await reloadedStore.fetchData(false);
+        expect(await reloadedStore.fetchData(false)).toBe(true);
 
         const settingsStore = useSettingsStore();
         expect(settingsStore.config.siteName).toBe('new site');

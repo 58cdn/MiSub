@@ -119,29 +119,41 @@ describe('SubscriptionGroupsView 深链状态筛选 (?status=)', () => {
 
     it('preserves four sources and profile references when sorting three filtered sources and saving', async () => {
         const store = useDataStore();
-        store.subscriptions = [
-            ...['a', 'b', 'c'].map((id) =>
-                withUrl({ id, name: id, enabled: true, lastError: 'synthetic failure' })
-            ),
-            withUrl({ id: 'd', name: 'd', enabled: true, nodeCount: 3 }),
-        ];
-        store.profiles = [{ id: 'profile', subscriptions: ['a', 'b', 'c', 'd'] }];
+        expect(
+            store.hydrateFromData({
+                misubs: [
+                    ...['a', 'b', 'c'].map((id) =>
+                        withUrl({ id, name: id, enabled: true, lastError: 'synthetic failure' })
+                    ),
+                    withUrl({ id: 'd', name: 'd', enabled: true, nodeCount: 3 }),
+                ],
+                profiles: [{ id: 'profile', subscriptions: ['a', 'b', 'c', 'd'] }],
+                ruleTemplates: [],
+                config: {},
+            })
+        ).toBe(true);
         route.query = { status: 'error' };
         const wrapper = mountView();
-        const post = vi.spyOn(api, 'post').mockResolvedValue({ success: true });
+        const post = vi.spyOn(api, 'post').mockImplementation(async (_path, payload) => ({
+            success: true,
+            data: JSON.parse(JSON.stringify(payload)),
+        }));
         try {
             await wrapper.vm.$nextTick();
             const panel = wrapper.findComponent(SubscriptionPanel);
             expect(panel.props('subscriptions')).toHaveLength(3);
             panel.vm.draggableSubscriptions = [...panel.props('subscriptions')].reverse();
             await wrapper.vm.$nextTick();
-            await store.saveData();
+            expect(await store.saveData()).toBe(true);
 
             expect(post).toHaveBeenCalledOnce();
             const [path, payload] = post.mock.calls[0];
             expect(path).toBe('/api/misubs');
             expect(payload.misubs.map((item) => item.id)).toEqual(['c', 'b', 'a', 'd']);
             expect(payload.profiles[0].subscriptions).toEqual(['a', 'b', 'c', 'd']);
+            expect(store.subscriptions.map((item) => item.id)).toEqual(['c', 'b', 'a', 'd']);
+            expect(store.profiles[0].subscriptions).toEqual(['a', 'b', 'c', 'd']);
+            expect(store.isDirty).toBe(false);
         } finally {
             post.mockRestore();
             wrapper.unmount();
