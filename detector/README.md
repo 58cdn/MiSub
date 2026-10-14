@@ -2,7 +2,7 @@
 
 本目录是主动拉取任务的 Linux、macOS 与 Windows 检测器源码。固定版本 Mihomo 嵌入单个可执行文件，运行时不依赖 Go、Python、Node.js 或 Docker。Windows 目标为 `windows-amd64`，要求 Windows 10 / Windows Server 2016 或更新版本的 x64 系统；不包含 Windows ARM64 或旧版 Windows。
 
-[MiSub Probe 0.2.0](https://github.com/58cdn/MiSub/releases/tag/probe-v0.2.0) 于 2026-10-13 从 MiSub 提交 `9ccee76c3cab149f34dca96c304310c9574c0d29` 发行，提供 Linux/macOS 的 amd64、arm64 与 Windows amd64 原始可执行文件。安装入口核对固定版本、平台、长度、SHA256 与客户端能力。旧 `probe-v0.1.0` 不支持当前配对和用户级安装命令。发行资产可用不代表已完成你的设备安装或实际节点验收。
+当前暂停旧版本分发，安装页不生成新装或在线恢复命令；新发行通过资产与目标环境验收后再恢复入口。已安装客户端、配置与身份保留。下载字节核验不能替代实际设备安装、配对通信与节点验收。
 
 ## 启动
 
@@ -49,7 +49,7 @@ Windows 使用仅当前用户与 SYSTEM 可访问的受保护 ACL；配对可创
 ### 高级方式：手动配置
 
 1. 需要手动管理凭据时，在“添加 / 管理检测器”使用高级手动创建入口，下载一次性生成的 `probe.json`。每台机器使用不同的配置；不要把同一个身份复制到多台机器。
-2. 从 [MiSub Probe 0.2.0](https://github.com/58cdn/MiSub/releases/tag/probe-v0.2.0) 取得匹配平台的原始程序，并按发行的校验文件与来源证明核验。目标为 `linux-amd64`、`linux-arm64`、`darwin-amd64`、`darwin-arm64` 和 `windows-amd64`；Windows 文件名为 `misub-probe-windows-amd64.exe`。旧 `probe-v0.1.0` 不能用于以下管理命令。
+2. 以下高级管理示例只适用于已有且经过核验的本地程序。当前不提供旧版下载或安装命令；没有受支持本地客户端时，等待新发行验收后恢复入口，不删除现有配置或重新领取身份。
 
 ```sh
 chmod 600 probe.json

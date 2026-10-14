@@ -43,19 +43,19 @@ describe('auditable one-command probe bootstrap', () => {
         'pins the %s script and passes only public arguments',
         (terminal) => {
             for (const resume of [false, true]) {
-                const command = buildProbeBootstrapCommand(productionOptions(terminal, resume));
-                const file = catalog.release.bootstrap[terminal];
+                const fixture = syntheticProbeInstallation();
+                const command = buildProbeBootstrapCommand({
+                    ...(resume ? { terminal, resume: true } : options(terminal)),
+                    installation: fixture,
+                });
+                const file = fixture.release.bootstrap[terminal];
                 expect(command).toContain(file.url);
                 expect(command).toContain(file.sha256);
                 expect(command).toContain(String(file.size));
                 expect(command).not.toMatch(
-                    /@@|probe-v9\.9\.9|Set-ExecutionPolicy|\s-ExecutionPolicy\s|EncodedCommand|Invoke-Expression/
+                    /@@|Set-ExecutionPolicy|\s-ExecutionPolicy\s|EncodedCommand|Invoke-Expression/
                 );
                 expect(command.length).toBeLessThan(terminal === 'unix' ? 1900 : 3200);
-                if (!resume) {
-                    const example = read(`../../docs/examples/probe-install-${terminal}.txt`);
-                    expect(example.slice(example.indexOf('\n') + 1)).toBe(command.trimEnd() + '\n');
-                }
                 if (resume) {
                     expect(command).not.toContain(origin);
                     expect(command).not.toContain(id);
@@ -68,6 +68,19 @@ describe('auditable one-command probe bootstrap', () => {
                     );
                 }
             }
+        }
+    );
+    it.each(['unix', 'windows'])(
+        'offers no %s command while production distribution is paused',
+        (terminal) => {
+            for (const resume of [false, true]) {
+                expect(buildProbeBootstrapCommand(productionOptions(terminal, resume))).toBe('');
+            }
+            expect(probeTerminalAvailable(probeInstallationCapabilities(catalog), terminal)).toBe(
+                false
+            );
+            const example = read(`../../docs/examples/probe-install-${terminal}.txt`);
+            expect(example).not.toMatch(/releases\/download|bash -c|Invoke-WebRequest/);
         }
     );
     it('binds each platform to its script rather than binary digest', () => {
@@ -261,8 +274,6 @@ describe('auditable one-command probe bootstrap', () => {
             for (const settings of [
                 options(),
                 { installation: syntheticProbeInstallation(), terminal: 'unix', resume: true },
-                productionOptions('unix'),
-                productionOptions('unix', true),
             ]) {
                 const command = buildProbeBootstrapCommand(settings);
                 expect(command).not.toBe('');
@@ -285,8 +296,6 @@ describe('auditable one-command probe bootstrap', () => {
             for (const settings of [
                 options('windows'),
                 { installation: syntheticProbeInstallation(), terminal: 'windows', resume: true },
-                productionOptions('windows'),
-                productionOptions('windows', true),
             ]) {
                 const command = buildProbeBootstrapCommand(settings);
                 expect(command).not.toBe('');
