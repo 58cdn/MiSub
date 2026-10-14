@@ -8,6 +8,14 @@ import { DEFAULT_SETTINGS } from '../constants/default-settings.js';
 import { TIMING } from '../constants/timing.js';
 import { api } from '../lib/http.js';
 import { t } from '../i18n/index.js';
+import {
+    buildSubscriptionEditOperations,
+    createSubscriptionOperationId,
+    editableSubscriptionFields,
+    hasObservationConfigurationChange,
+    isSubscriptionVersion,
+    rebaseSubscriptionEdits,
+} from '../shared/subscription-edit-operations.js';
 
 const isDev = import.meta.env.DEV;
 
@@ -39,8 +47,31 @@ function validCollections(data) {
 }
 
 function validLoadedData(data) {
-    return validCollections(data) && isCollection(data.ruleTemplates) && isRecord(data.config);
+    return (
+        validCollections(data) &&
+        isCollection(data.ruleTemplates) &&
+        isRecord(data.config) &&
+        (data.subscriptionProtocol === undefined ||
+            data.subscriptionProtocol === 'legacy' ||
+            (data.subscriptionProtocol === 'd1-v1' && isSubscriptionVersion(data.version)))
+    );
 }
+
+function validAcknowledgement(result, request) {
+    const receiptVersion = result.receipt?.version;
+    const version = result.data?.version;
+    return (
+        result.receipt?.operationId === request.operationId &&
+        isSubscriptionVersion(receiptVersion) &&
+        isSubscriptionVersion(version) &&
+        receiptVersion.epoch === request.baseVersion.epoch &&
+        version.epoch === receiptVersion.epoch &&
+        receiptVersion.revision > request.baseVersion.revision &&
+        version.revision >= receiptVersion.revision
+    );
+}
+
+const asSnapshot = (data) => ({ subscriptions: data.misubs, profiles: data.profiles });
 
 export const useDataStore = defineStore('data', () => {
     const { showToast } = useToastStore();
@@ -56,6 +87,8 @@ export const useDataStore = defineStore('data', () => {
     // Store Status
     const isLoading = ref(false);
     const saveState = ref('idle');
+    const subscriptionProtocol = ref('legacy');
+    const subscriptionConflict = ref(false);
     const lastUpdated = ref(null);
     const hasDataLoaded = computed(() => !!lastUpdated.value);
 
@@ -78,6 +111,8 @@ export const useDataStore = defineStore('data', () => {
     let editVersion = 0;
     let saveSequence = 0;
     let saving = false;
+    let snapshotVersion = null;
+    let pendingSubmission = null;
 
     // --- Actions ---
 
@@ -102,6 +137,12 @@ export const useDataStore = defineStore('data', () => {
                 lifecycle += 1;
                 lastSavedData = snapshot;
                 hasAuthoritativeBaseline = true;
+                subscriptionProtocol.value =
+                    next.subscriptionProtocol === 'd1-v1' ? 'd1-v1' : 'legacy';
+                snapshotVersion =
+                    subscriptionProtocol.value === 'd1-v1' ? cloneData(next.version) : null;
+                pendingSubmission = null;
+                subscriptionConflict.value = false;
                 lastUpdated.value = new Date();
                 dataCache.set(next);
             }
@@ -176,6 +217,10 @@ export const useDataStore = defineStore('data', () => {
             showToast(t('store.saveDataFailed', { message: t('store.loadBeforeSave') }), 'error');
             return false;
         }
+        if (subscriptionConflict.value) {
+            showToast(t('store.subscriptionConflict'), 'error');
+            return false;
+        }
 
         saving = true;
         isLoading.value = true;
@@ -184,9 +229,11 @@ export const useDataStore = defineStore('data', () => {
         const requestEditVersion = editVersion;
         const requestSequence = ++saveSequence;
         try {
-            const submitted = captureEditorData();
-            const startingEditorData = JSON.stringify(submitted);
-            const payload = {
+            let submitted = captureEditorData();
+            let startingEditorData = JSON.stringify(submitted);
+            let submittedEditVersion = requestEditVersion;
+            const strict = subscriptionProtocol.value === 'd1-v1';
+            let payload = {
                 misubs: submitted.misubs,
                 profiles: submitted.profiles.map((profile) => {
                     const normalizedProfile = { ...profile };
@@ -196,20 +243,76 @@ export const useDataStore = defineStore('data', () => {
                     return normalizedProfile;
                 }),
             };
-            pruneInvalidReferences(payload.profiles, payload.misubs);
+            if (strict) {
+                if (!pendingSubmission) {
+                    const operations = buildSubscriptionEditOperations(
+                        lastSavedData,
+                        asSnapshot(submitted)
+                    );
+                    if (!operations.length) {
+                        clearDirty();
+                        return true;
+                    }
+                    pendingSubmission = {
+                        request: {
+                            operationId: createSubscriptionOperationId(),
+                            baseVersion: cloneData(snapshotVersion),
+                            operations,
+                        },
+                        submitted,
+                        serialized: startingEditorData,
+                        editVersion: requestEditVersion,
+                    };
+                }
+                submitted = pendingSubmission.submitted;
+                startingEditorData = pendingSubmission.serialized;
+                submittedEditVersion = pendingSubmission.editVersion;
+                payload = cloneData(pendingSubmission.request);
+            } else {
+                pruneInvalidReferences(payload.profiles, payload.misubs);
+            }
             const result = await api.post('/api/misubs', payload);
             if (requestLifecycle !== lifecycle) return false;
             if (result?.success !== true) {
+                if (strict && (result?.status === 409 || result?.code?.includes('conflict'))) {
+                    subscriptionConflict.value = true;
+                }
                 throw new Error(result?.message || t('store.saveFailed'));
             }
             if (!validCollections(result.data)) throw new Error(t('store.invalidSaveResponse'));
             const confirmed = cloneData(result.data);
             if (!validCollections(confirmed)) throw new Error(t('store.invalidSaveResponse'));
 
-            const editedDuringSave = editorChangedSince(startingEditorData, requestEditVersion);
+            let rebased;
+            if (strict) {
+                if (!validAcknowledgement(result, payload))
+                    throw new Error(t('store.invalidSaveResponse'));
+                rebased = rebaseSubscriptionEdits(
+                    asSnapshot(submitted),
+                    asSnapshot(captureEditorData()),
+                    {
+                        subscriptions: confirmed.misubs,
+                        profiles: confirmed.profiles,
+                    },
+                    { checkConflicts: confirmed.version.revision > result.receipt.version.revision }
+                );
+                snapshotVersion = cloneData(confirmed.version);
+                pendingSubmission = null;
+            }
+
+            const editedDuringSave = editorChangedSince(startingEditorData, submittedEditVersion);
             lastSavedData.subscriptions = cloneData(confirmed.misubs);
             lastSavedData.profiles = cloneData(confirmed.profiles);
-            if (editedDuringSave) {
+            if (strict && !rebased) {
+                subscriptionConflict.value = true;
+                markDirty();
+                saveState.value = 'idle';
+                showToast(t('store.subscriptionConflict'), 'error');
+            } else if (editedDuringSave) {
+                if (strict) {
+                    subscriptions.value = rebased.subscriptions;
+                    profiles.value = rebased.profiles;
+                }
                 markDirty();
                 saveState.value = 'idle';
             } else {
@@ -221,7 +324,7 @@ export const useDataStore = defineStore('data', () => {
                 clearDirty();
                 saveState.value = 'success';
             }
-            showToast(t('store.dataSaved'), 'success');
+            if (!subscriptionConflict.value) showToast(t('store.dataSaved'), 'success');
             lastUpdated.value = new Date();
             setTimeout(() => {
                 if (
@@ -234,18 +337,21 @@ export const useDataStore = defineStore('data', () => {
             }, 2000);
 
             // Cache only acknowledged collections, independently of the current editor.
-            dataCache.set({
-                misubs: lastSavedData.subscriptions,
-                profiles: lastSavedData.profiles,
-                ruleTemplates: lastSavedData.ruleTemplates,
-                config: lastSavedData.config,
-            });
-            return true;
+            cacheConfirmedData();
+            return !subscriptionConflict.value;
         } catch (error) {
             if (requestLifecycle !== lifecycle) return false;
+            if (subscriptionProtocol.value === 'd1-v1' && error?.status === 409) {
+                subscriptionConflict.value = true;
+            }
             markDirty();
             console.error('[Store] Failed to save data:', error);
-            showToast(t('store.saveDataFailed', { message: error.message }), 'error');
+            showToast(
+                subscriptionConflict.value
+                    ? t('store.subscriptionConflict')
+                    : t('store.saveDataFailed', { message: error.message }),
+                'error'
+            );
             saveState.value = 'idle';
             return false;
         } finally {
@@ -301,6 +407,120 @@ export const useDataStore = defineStore('data', () => {
         }
     }
 
+    async function refreshSubscriptionRuntime(id) {
+        const saved = lastSavedData.subscriptions.find((item) => item.id === id);
+        const current = subscriptions.value.find((item) => item.id === id);
+        if (
+            subscriptionProtocol.value !== 'd1-v1' ||
+            !hasAuthoritativeBaseline ||
+            isLoading.value ||
+            pendingSubmission ||
+            subscriptionConflict.value ||
+            !saved ||
+            !current ||
+            JSON.stringify(editableSubscriptionFields('subscriptions', saved)) !==
+                JSON.stringify(editableSubscriptionFields('subscriptions', current))
+        ) {
+            return {
+                success: false,
+                error: t('store.runtimeNeedsSavedData'),
+                errorType: 'validation',
+            };
+        }
+        const requestLifecycle = lifecycle;
+        saving = true;
+        isLoading.value = true;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), TIMING.REQUEST_TIMEOUT_MS);
+        try {
+            const result = await api.post(
+                '/api/node_count',
+                {
+                    subscriptionId: id,
+                    baseVersion: cloneData(snapshotVersion),
+                    operationId: createSubscriptionOperationId(),
+                },
+                { signal: controller.signal }
+            );
+            if (requestLifecycle !== lifecycle)
+                return { success: false, error: t('store.runtimeNeedsSavedData') };
+            if (!result?.success || result.applied !== true) {
+                return {
+                    success: false,
+                    error: result?.message || t('store.runtimeNotApplied'),
+                    errorType: 'server',
+                };
+            }
+            const confirmed = result.subscriptionSnapshot;
+            if (
+                !confirmed ||
+                !validCollections({
+                    misubs: confirmed.subscriptions,
+                    profiles: confirmed.profiles,
+                }) ||
+                !isSubscriptionVersion(confirmed.version) ||
+                confirmed.version.epoch !== snapshotVersion.epoch ||
+                confirmed.version.revision < snapshotVersion.revision
+            ) {
+                throw new Error(t('store.invalidDataResponse'));
+            }
+            const edited = asSnapshot(captureEditorData());
+            const targetChanged = hasObservationConfigurationChange(
+                saved,
+                edited.subscriptions.find((item) => item.id === id)
+            );
+            const hasEdits = buildSubscriptionEditOperations(lastSavedData, edited).length > 0;
+            const rebased = rebaseSubscriptionEdits(lastSavedData, edited, confirmed);
+            lastSavedData.subscriptions = cloneData(confirmed.subscriptions);
+            lastSavedData.profiles = cloneData(confirmed.profiles);
+            snapshotVersion = cloneData(confirmed.version);
+            cacheConfirmedData();
+            if (!rebased) {
+                subscriptionConflict.value = true;
+                markDirty();
+                return {
+                    success: false,
+                    error: t('store.subscriptionConflict'),
+                    errorType: 'conflict',
+                };
+            }
+            subscriptions.value = rebased.subscriptions;
+            profiles.value = rebased.profiles;
+            lastUpdated.value = new Date();
+            if (hasEdits) markDirty();
+            if (targetChanged)
+                return {
+                    success: false,
+                    error: t('store.runtimeNotApplied'),
+                    errorType: 'validation',
+                };
+            const observed = confirmed.subscriptions.find((item) => item.id === id);
+            if (!observed)
+                return {
+                    success: false,
+                    error: t('store.runtimeNeedsSavedData'),
+                    errorType: 'conflict',
+                };
+            return {
+                success: true,
+                data: { count: observed.nodeCount || 0, userInfo: observed.userInfo || null },
+                applied: true,
+            };
+        } catch (error) {
+            if (requestLifecycle === lifecycle && error?.status === 409)
+                subscriptionConflict.value = true;
+            return {
+                success: false,
+                error: subscriptionConflict.value ? t('store.subscriptionConflict') : error.message,
+                errorType: error?.status === 409 ? 'conflict' : 'server',
+            };
+        } finally {
+            clearTimeout(timeout);
+            saving = false;
+            isLoading.value = false;
+        }
+    }
+
     async function fetchRuleTemplates() {
         const result = await api.get('/api/rule_templates');
         ruleTemplates.value = Array.isArray(result?.data) ? result.data : [];
@@ -353,8 +573,27 @@ export const useDataStore = defineStore('data', () => {
     function clearCachedData() {
         lifecycle += 1;
         hasAuthoritativeBaseline = false;
+        subscriptionProtocol.value = 'legacy';
+        subscriptionConflict.value = false;
+        snapshotVersion = null;
+        pendingSubmission = null;
         lastUpdated.value = null;
         dataCache.clear();
+    }
+
+    function cacheConfirmedData() {
+        dataCache.set({
+            misubs: lastSavedData.subscriptions,
+            profiles: lastSavedData.profiles,
+            ruleTemplates: lastSavedData.ruleTemplates,
+            config: lastSavedData.config,
+            ...(subscriptionProtocol.value === 'd1-v1'
+                ? {
+                      subscriptionProtocol: 'd1-v1',
+                      version: cloneData(snapshotVersion),
+                  }
+                : {}),
+        });
     }
 
     function isSavedNode(node) {
@@ -507,6 +746,8 @@ export const useDataStore = defineStore('data', () => {
         settings,
         isLoading,
         saveState,
+        subscriptionProtocol,
+        subscriptionConflict,
         lastUpdated,
         hasDataLoaded,
         isDirty,
@@ -518,6 +759,7 @@ export const useDataStore = defineStore('data', () => {
         // Actions
         fetchData,
         saveData,
+        refreshSubscriptionRuntime,
         saveSettings,
         fetchRuleTemplates,
         saveRuleTemplates,

@@ -136,13 +136,20 @@ export async function saveMisubs(misubs, profiles) {
     }
 }
 
-export async function fetchNodeCount(subUrl, fetchProxy = '', plusAsSpace = false, userAgent = '') {
+export async function fetchNodeCount(
+    subUrl,
+    fetchProxy = '',
+    plusAsSpace = false,
+    userAgent = '',
+    { inspectOnly = false } = {}
+) {
     let timeoutId;
     try {
         const controller = new AbortController();
         timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒超时
 
         const payload = { url: subUrl };
+        if (inspectOnly) payload.inspectOnly = true;
         if (fetchProxy) {
             payload.fetchProxy = fetchProxy;
         }
@@ -159,7 +166,7 @@ export async function fetchNodeCount(subUrl, fetchProxy = '', plusAsSpace = fals
             return normalizeApiFailure(data, t('settings.updateNodeInfoFailed'));
         }
 
-        return { success: true, data }; // data 包含 { count, userInfo }
+        return { success: true, data: data?.success === true ? data.data : data };
     } catch (error) {
         return handleApiError(error, 'fetchNodeCount');
     } finally {

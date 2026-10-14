@@ -4,6 +4,11 @@
  */
 
 import { StorageFactory, DataMigrator } from '../storage-adapter.js';
+import {
+    isAtomicSubscriptionRequested,
+    getProtocolError,
+    protocolError,
+} from '../services/subscription-protocol/index.js';
 import { KV_KEY_SUBS } from './config.js';
 import {
     createJsonResponse,
@@ -73,6 +78,7 @@ import { normalizeSubconverterBackend } from './subscription/main-handler.js';
 import { maybeRunScheduledTasks } from './scheduled-task-runner.js';
 import { handleExternalNodesCallbackRequest } from '../services/external-nodes-callback-service.js';
 import { handleExternalApiRequest } from './external-api-router.js';
+import { createExternalProtocolError } from './external-api-utils.js';
 import {
     handleDiagnosticsCapabilities,
     handleNodeDiagnostics,
@@ -100,7 +106,25 @@ export async function handleApiRequest(request, env, context = null) {
     }
 
     if (path.startsWith('/ext/v1')) {
-        return await handleExternalApiRequest(request, env);
+        try {
+            return await handleExternalApiRequest(request, env);
+        } catch (error) {
+            if (isAtomicSubscriptionRequested(env)) return createExternalProtocolError(error);
+            throw error;
+        }
+    }
+
+    if (
+        isAtomicSubscriptionRequested(env) &&
+        ['/migrate_to_d1', '/migrate_legacy_d1', '/migrate'].includes(path)
+    ) {
+        if (!(await authMiddleware(request, env)))
+            return createJsonResponse({ error: 'Unauthorized' }, 401);
+        const failure = getProtocolError(protocolError('legacy_write_blocked'));
+        return createJsonResponse(
+            { success: false, code: failure.code, message: failure.message },
+            failure.status
+        );
     }
 
     // [新增] 数据存储迁移接口 (KV -> D1)

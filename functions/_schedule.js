@@ -3,6 +3,13 @@
  * 使用 Cloudflare Pages Functions 的 Cron Triggers 功能
  */
 
+import {
+    isAtomicSubscriptionRequested,
+    protocolError,
+    resolveSubscriptionProtocol,
+    getProtocolError,
+} from './services/subscription-protocol/index.js';
+
 export async function onRequest(context) {
     // 只有在 Cron 触发时才执行
     if (context.request.headers.get('CF-Cron') !== 'true') {
@@ -18,6 +25,13 @@ export async function onRequest(context) {
         // 执行订阅同步逻辑
         results.subscriptionSync = await performSubscriptionSync(context.env);
     } catch (error) {
+        if (error?.code) {
+            const failure = getProtocolError(error);
+            return new Response(JSON.stringify({ error: failure.code }), {
+                status: failure.status,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        }
         console.error('Cron subscription sync failed:', error);
         results.subscriptionSync = { error: error.message };
     }
@@ -31,6 +45,10 @@ export async function onRequest(context) {
  * 执行订阅同步
  */
 export async function performSubscriptionSync(env, config = {}) {
+    if (isAtomicSubscriptionRequested(env)) {
+        resolveSubscriptionProtocol(env);
+        throw protocolError('legacy_write_blocked');
+    }
     const { maxSyncCount = 50, timeout = 30000, concurrency = 5 } = config;
 
     const results = {

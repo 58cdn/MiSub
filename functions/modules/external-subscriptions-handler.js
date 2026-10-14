@@ -9,6 +9,10 @@ import {
     parsePagination,
     readExternalJson,
     sortBySortIndex,
+    isAtomicSubscriptionStorage,
+    isAtomicSubscriptionRequested,
+    handleAtomicExternalCollection,
+    createExternalProtocolError,
 } from './external-api-utils.js';
 import { isRemoteSubscription, toExternalSubscription } from './external-api-mappers.js';
 import { handleNodeCountRequest } from './handlers/node-handler.js';
@@ -74,8 +78,16 @@ function normalizeSubscriptionRuntimeFields(item = {}) {
     };
 }
 
-export async function inspectRemoteSubscription(env, payload = {}) {
-    const requestedUrl = String(payload.url || '').trim();
+export async function inspectRemoteSubscription(
+    env,
+    payload = {},
+    { inspectOnly = false, requestPolicy, canonicalRuntime = false } = {}
+) {
+    const requestedUrl = canonicalRuntime
+        ? typeof payload.url === 'string'
+            ? payload.url
+            : ''
+        : String(payload.url || '').trim();
     if (!requestedUrl)
         return {
             ok: false,
@@ -91,17 +103,29 @@ export async function inspectRemoteSubscription(env, payload = {}) {
             status: 400,
         };
 
-    const runtime = normalizeSubscriptionRuntimeFields(payload);
+    const runtime = canonicalRuntime
+        ? {
+              userAgent: payload.customUserAgent,
+              fetchProxy: payload.fetchProxy,
+              plusAsSpace: payload.plusAsSpace,
+          }
+        : normalizeSubscriptionRuntimeFields(payload);
     const effectiveUserAgent =
-        runtime.userAgent || getProcessedUserAgent('MiSub-External-Validate/1.0', requestedUrl);
+        (typeof runtime.userAgent === 'string' && runtime.userAgent.trim()) ||
+        getProcessedUserAgent(
+            canonicalRuntime ? 'v2rayN/7.23' : 'MiSub-External-Validate/1.0',
+            requestedUrl
+        );
     const response = await handleNodeCountRequest(
         createNodeCountRequest({
             url: requestedUrl,
-            userAgent: effectiveUserAgent,
+            userAgent: canonicalRuntime ? runtime.userAgent : effectiveUserAgent,
             fetchProxy: runtime.fetchProxy,
             plusAsSpace: runtime.plusAsSpace,
+            ...(inspectOnly ? { inspectOnly: true } : {}),
         }),
-        env
+        env,
+        { requestPolicy }
     );
     const body = await response.json();
 
@@ -126,7 +150,9 @@ export async function inspectRemoteSubscription(env, payload = {}) {
         nodeCount: Number(body?.count) || 0,
         userInfo: body?.userInfo || null,
         errorCode: 'subscription_refresh_failed',
-        message: body?.error || 'Subscription refresh failed',
+        message: inspectOnly
+            ? 'Subscription inspection failed'
+            : body?.error || 'Subscription refresh failed',
         status: Number(body?.status) || 502,
     };
 }
@@ -146,63 +172,118 @@ async function persistSubscriptionRefresh(storageAdapter, current, inspection) {
 }
 
 export async function handleExternalSubscriptionsRequest(request, env, selector = null) {
-    const storageAdapter = await getExternalStorageAdapter(env);
-    const url = new URL(request.url);
-    const action = typeof selector === 'object' && selector ? selector.action || null : null;
-    const id = typeof selector === 'object' && selector ? selector.id || null : selector;
-
-    if (action === 'validate') {
-        if (request.method !== 'POST')
-            return createExternalError('method_not_allowed', 'Method Not Allowed', 405);
-        const payload = await readExternalJson(request);
-        const inspection = await inspectRemoteSubscription(env, payload);
-        if (!inspection.ok) {
-            return createExternalError(
-                inspection.errorCode || 'subscription_validation_failed',
-                inspection.message || 'Subscription validation failed',
-                inspection.status || 400,
-                {
-                    requestedUrl: inspection.requestedUrl || String(payload?.url || '').trim(),
-                    effectiveUserAgent: inspection.effectiveUserAgent || '',
-                    nodeCount: inspection.nodeCount || 0,
-                    userInfo: inspection.userInfo || null,
-                }
-            );
+    try {
+        const storageAdapter = await getExternalStorageAdapter(env);
+        const url = new URL(request.url);
+        const action = typeof selector === 'object' && selector ? selector.action || null : null;
+        const id = typeof selector === 'object' && selector ? selector.id || null : selector;
+        if (isAtomicSubscriptionStorage(storageAdapter) && action !== 'validate') {
+            return await handleAtomicExternalCollection(request, storageAdapter, {
+                kind: 'subscription',
+                id,
+                action,
+                inspect: (item, options) =>
+                    inspectRemoteSubscription(env, item, { ...options, inspectOnly: true }),
+            });
         }
-        return createExternalSuccess({
-            valid: true,
-            requestedUrl: inspection.requestedUrl,
-            effectiveUserAgent: inspection.effectiveUserAgent,
-            fetchProxyUsed: inspection.fetchProxyUsed,
-            plusAsSpace: inspection.plusAsSpace,
-            nodeCount: inspection.nodeCount,
-            userInfo: inspection.userInfo,
-            checkedAt: nowIso(),
-        });
-    }
 
-    if (action === 'batch_refresh') {
-        if (request.method !== 'POST')
-            return createExternalError('method_not_allowed', 'Method Not Allowed', 405);
-        const payload = await readExternalJson(request);
-        const subscriptionIds = normalizeStringArray(payload?.subscriptionIds);
-        if (!subscriptionIds.length)
-            return createExternalError(
-                'subscription_ids_required',
-                'subscriptionIds is required',
-                400
-            );
+        if (action === 'validate') {
+            if (request.method !== 'POST')
+                return createExternalError('method_not_allowed', 'Method Not Allowed', 405);
+            const payload = await readExternalJson(request);
+            const inspection = await inspectRemoteSubscription(env, payload, {
+                inspectOnly: isAtomicSubscriptionStorage(storageAdapter),
+            });
+            if (!inspection.ok) {
+                if (isAtomicSubscriptionStorage(storageAdapter)) {
+                    return createExternalError(
+                        inspection.errorCode || 'subscription_validation_failed',
+                        'Subscription inspection failed',
+                        inspection.status || 400
+                    );
+                }
+                return createExternalError(
+                    inspection.errorCode || 'subscription_validation_failed',
+                    inspection.message || 'Subscription validation failed',
+                    inspection.status || 400,
+                    {
+                        requestedUrl: inspection.requestedUrl || String(payload?.url || '').trim(),
+                        effectiveUserAgent: inspection.effectiveUserAgent || '',
+                        nodeCount: inspection.nodeCount || 0,
+                        userInfo: inspection.userInfo || null,
+                    }
+                );
+            }
+            return createExternalSuccess({
+                valid: true,
+                requestedUrl: inspection.requestedUrl,
+                effectiveUserAgent: inspection.effectiveUserAgent,
+                fetchProxyUsed: inspection.fetchProxyUsed,
+                plusAsSpace: inspection.plusAsSpace,
+                nodeCount: inspection.nodeCount,
+                userInfo: inspection.userInfo,
+                checkedAt: nowIso(),
+            });
+        }
 
-        const all = await loadRemoteSubscriptions(storageAdapter);
-        const targets = all.filter((item) => subscriptionIds.includes(item.id));
-        if (!targets.length)
-            return createExternalError('subscription_not_found', 'Subscription not found', 404);
+        if (action === 'batch_refresh') {
+            if (request.method !== 'POST')
+                return createExternalError('method_not_allowed', 'Method Not Allowed', 405);
+            const payload = await readExternalJson(request);
+            const subscriptionIds = normalizeStringArray(payload?.subscriptionIds);
+            if (!subscriptionIds.length)
+                return createExternalError(
+                    'subscription_ids_required',
+                    'subscriptionIds is required',
+                    400
+                );
 
-        const results = [];
-        for (const current of targets) {
+            const all = await loadRemoteSubscriptions(storageAdapter);
+            const targets = all.filter((item) => subscriptionIds.includes(item.id));
+            if (!targets.length)
+                return createExternalError('subscription_not_found', 'Subscription not found', 404);
+
+            const results = [];
+            for (const current of targets) {
+                const inspection = await inspectRemoteSubscription(env, current);
+                const updated = await persistSubscriptionRefresh(
+                    storageAdapter,
+                    current,
+                    inspection
+                );
+                results.push({
+                    id: updated.id,
+                    name: updated.name || '',
+                    success: inspection.ok,
+                    nodeCount: Number(updated.nodeCount) || 0,
+                    userInfo: updated.userInfo || null,
+                    lastError: updated.lastError || '',
+                    lastUpdated: updated.lastUpdate || null,
+                });
+            }
+
+            return createExternalSuccess({
+                results,
+                summary: {
+                    total: results.length,
+                    succeeded: results.filter((item) => item.success).length,
+                    failed: results.filter((item) => !item.success).length,
+                    totalNodes: results
+                        .filter((item) => item.success)
+                        .reduce((sum, item) => sum + (Number(item.nodeCount) || 0), 0),
+                },
+            });
+        }
+
+        if (action === 'refresh') {
+            if (request.method !== 'POST')
+                return createExternalError('method_not_allowed', 'Method Not Allowed', 405);
+            const current = await getSubscriptionById(storageAdapter, id);
+            if (!current)
+                return createExternalError('subscription_not_found', 'Subscription not found', 404);
             const inspection = await inspectRemoteSubscription(env, current);
             const updated = await persistSubscriptionRefresh(storageAdapter, current, inspection);
-            results.push({
+            return createExternalSuccess({
                 id: updated.id,
                 name: updated.name || '',
                 success: inspection.ok,
@@ -213,171 +294,145 @@ export async function handleExternalSubscriptionsRequest(request, env, selector 
             });
         }
 
-        return createExternalSuccess({
-            results,
-            summary: {
-                total: results.length,
-                succeeded: results.filter((item) => item.success).length,
-                failed: results.filter((item) => !item.success).length,
-                totalNodes: results
-                    .filter((item) => item.success)
-                    .reduce((sum, item) => sum + (Number(item.nodeCount) || 0), 0),
-            },
-        });
-    }
-
-    if (action === 'refresh') {
-        if (request.method !== 'POST')
-            return createExternalError('method_not_allowed', 'Method Not Allowed', 405);
-        const current = await getSubscriptionById(storageAdapter, id);
-        if (!current)
-            return createExternalError('subscription_not_found', 'Subscription not found', 404);
-        const inspection = await inspectRemoteSubscription(env, current);
-        const updated = await persistSubscriptionRefresh(storageAdapter, current, inspection);
-        return createExternalSuccess({
-            id: updated.id,
-            name: updated.name || '',
-            success: inspection.ok,
-            nodeCount: Number(updated.nodeCount) || 0,
-            userInfo: updated.userInfo || null,
-            lastError: updated.lastError || '',
-            lastUpdated: updated.lastUpdate || null,
-        });
-    }
-
-    if (request.method === 'GET' && !id) {
-        const all = await loadRemoteSubscriptions(storageAdapter);
-        const enabledFilter = parseBooleanParam(url.searchParams.get('enabled'));
-        const groupFilter = (url.searchParams.get('group') || '').trim();
-        const keyword = (url.searchParams.get('keyword') || '').trim().toLowerCase();
-        const filtered = all.filter((item) => {
-            if (enabledFilter !== undefined && (item.enabled !== false) !== enabledFilter)
-                return false;
-            if (groupFilter && String(item.group || '') !== groupFilter) return false;
-            if (keyword) {
-                const haystack = `${item.name || ''}\n${item.url || ''}`.toLowerCase();
-                if (!haystack.includes(keyword)) return false;
-            }
-            return true;
-        });
-        const { page, pageSize } = parsePagination(url);
-        return createExternalSuccess(
-            paginate(filtered.map(toExternalSubscription), page, pageSize),
-            200,
-            buildListMeta({ page, pageSize, total: filtered.length })
-        );
-    }
-
-    if (request.method === 'GET' && id) {
-        const item = await getSubscriptionById(storageAdapter, id);
-        if (!item)
-            return createExternalError('subscription_not_found', 'Subscription not found', 404);
-        return createExternalSuccess(toExternalSubscription(item));
-    }
-
-    if (request.method === 'POST' && !id) {
-        const payload = await readExternalJson(request);
-        if (!String(payload?.name || '').trim())
-            return createExternalError(
-                'subscription_name_required',
-                'Subscription name is required',
-                400
+        if (request.method === 'GET' && !id) {
+            const all = await loadRemoteSubscriptions(storageAdapter);
+            const enabledFilter = parseBooleanParam(url.searchParams.get('enabled'));
+            const groupFilter = (url.searchParams.get('group') || '').trim();
+            const keyword = (url.searchParams.get('keyword') || '').trim().toLowerCase();
+            const filtered = all.filter((item) => {
+                if (enabledFilter !== undefined && (item.enabled !== false) !== enabledFilter)
+                    return false;
+                if (groupFilter && String(item.group || '') !== groupFilter) return false;
+                if (keyword) {
+                    const haystack = `${item.name || ''}\n${item.url || ''}`.toLowerCase();
+                    if (!haystack.includes(keyword)) return false;
+                }
+                return true;
+            });
+            const { page, pageSize } = parsePagination(url);
+            return createExternalSuccess(
+                paginate(filtered.map(toExternalSubscription), page, pageSize),
+                200,
+                buildListMeta({ page, pageSize, total: filtered.length })
             );
-        if (!String(payload?.url || '').trim())
-            return createExternalError(
-                'subscription_url_required',
-                'Subscription URL is required',
-                400
-            );
-        if (!isRemoteSubscription(payload))
-            return createExternalError(
-                'invalid_subscription_url',
-                'Subscription URL must use http or https',
-                400
-            );
+        }
 
-        const all = await storageAdapter.getAllSubscriptions();
-        const timestamp = nowIso();
-        const item = {
-            id: generateId('sub'),
-            name: String(payload.name).trim(),
-            url: String(payload.url).trim(),
-            enabled: payload.enabled !== false,
-            group: String(payload.group || '').trim(),
-            tags: normalizeStringArray(payload.tags),
-            userAgent: String(payload.userAgent || '').trim(),
-            customUserAgent: String(payload.userAgent || '').trim(),
-            proxy: String(payload.proxy || '').trim(),
-            fetchProxy: String(payload.proxy || '').trim(),
-            sortIndex: Number.isFinite(Number(payload.sortIndex))
-                ? Number(payload.sortIndex)
-                : nextSortIndex(all),
-            createdAt: timestamp,
-            updatedAt: timestamp,
-        };
-        await storageAdapter.putSubscription(item);
-        return createExternalSuccess(toExternalSubscription(item), 201);
+        if (request.method === 'GET' && id) {
+            const item = await getSubscriptionById(storageAdapter, id);
+            if (!item)
+                return createExternalError('subscription_not_found', 'Subscription not found', 404);
+            return createExternalSuccess(toExternalSubscription(item));
+        }
+
+        if (request.method === 'POST' && !id) {
+            const payload = await readExternalJson(request);
+            if (!String(payload?.name || '').trim())
+                return createExternalError(
+                    'subscription_name_required',
+                    'Subscription name is required',
+                    400
+                );
+            if (!String(payload?.url || '').trim())
+                return createExternalError(
+                    'subscription_url_required',
+                    'Subscription URL is required',
+                    400
+                );
+            if (!isRemoteSubscription(payload))
+                return createExternalError(
+                    'invalid_subscription_url',
+                    'Subscription URL must use http or https',
+                    400
+                );
+
+            const all = await storageAdapter.getAllSubscriptions();
+            const timestamp = nowIso();
+            const item = {
+                id: generateId('sub'),
+                name: String(payload.name).trim(),
+                url: String(payload.url).trim(),
+                enabled: payload.enabled !== false,
+                group: String(payload.group || '').trim(),
+                tags: normalizeStringArray(payload.tags),
+                userAgent: String(payload.userAgent || '').trim(),
+                customUserAgent: String(payload.userAgent || '').trim(),
+                proxy: String(payload.proxy || '').trim(),
+                fetchProxy: String(payload.proxy || '').trim(),
+                sortIndex: Number.isFinite(Number(payload.sortIndex))
+                    ? Number(payload.sortIndex)
+                    : nextSortIndex(all),
+                createdAt: timestamp,
+                updatedAt: timestamp,
+            };
+            await storageAdapter.putSubscription(item);
+            return createExternalSuccess(toExternalSubscription(item), 201);
+        }
+
+        if (request.method === 'PATCH' && id) {
+            const current = await getSubscriptionById(storageAdapter, id);
+            if (!current)
+                return createExternalError('subscription_not_found', 'Subscription not found', 404);
+            const payload = await readExternalJson(request);
+            const updated = {
+                ...current,
+                ...(payload.name !== undefined ? { name: String(payload.name || '').trim() } : {}),
+                ...(payload.url !== undefined ? { url: String(payload.url || '').trim() } : {}),
+                ...(payload.enabled !== undefined ? { enabled: payload.enabled !== false } : {}),
+                ...(payload.group !== undefined
+                    ? { group: String(payload.group || '').trim() }
+                    : {}),
+                ...(payload.tags !== undefined ? { tags: normalizeStringArray(payload.tags) } : {}),
+                ...(payload.userAgent !== undefined
+                    ? {
+                          userAgent: String(payload.userAgent || '').trim(),
+                          customUserAgent: String(payload.userAgent || '').trim(),
+                      }
+                    : {}),
+                ...(payload.proxy !== undefined
+                    ? {
+                          proxy: String(payload.proxy || '').trim(),
+                          fetchProxy: String(payload.proxy || '').trim(),
+                      }
+                    : {}),
+                ...(payload.sortIndex !== undefined
+                    ? { sortIndex: Number(payload.sortIndex) || 0 }
+                    : {}),
+                updatedAt: nowIso(),
+            };
+            if (!String(updated.name || '').trim())
+                return createExternalError(
+                    'subscription_name_required',
+                    'Subscription name is required',
+                    400
+                );
+            if (!String(updated.url || '').trim())
+                return createExternalError(
+                    'subscription_url_required',
+                    'Subscription URL is required',
+                    400
+                );
+            if (!isRemoteSubscription(updated))
+                return createExternalError(
+                    'invalid_subscription_url',
+                    'Subscription URL must use http or https',
+                    400
+                );
+            await storageAdapter.putSubscription(updated);
+            return createExternalSuccess(toExternalSubscription(updated));
+        }
+
+        if (request.method === 'DELETE' && id) {
+            const current = await getSubscriptionById(storageAdapter, id);
+            if (!current)
+                return createExternalError('subscription_not_found', 'Subscription not found', 404);
+            await storageAdapter.deleteSubscriptionById(id);
+            const removedFromProfiles = await removeSubscriptionIdFromProfiles(storageAdapter, id);
+            return createExternalSuccess({ deleted: true, id, removedFromProfiles });
+        }
+
+        return createExternalError('method_not_allowed', 'Method Not Allowed', 405);
+    } catch (error) {
+        if (isAtomicSubscriptionRequested(env)) return createExternalProtocolError(error);
+        throw error;
     }
-
-    if (request.method === 'PATCH' && id) {
-        const current = await getSubscriptionById(storageAdapter, id);
-        if (!current)
-            return createExternalError('subscription_not_found', 'Subscription not found', 404);
-        const payload = await readExternalJson(request);
-        const updated = {
-            ...current,
-            ...(payload.name !== undefined ? { name: String(payload.name || '').trim() } : {}),
-            ...(payload.url !== undefined ? { url: String(payload.url || '').trim() } : {}),
-            ...(payload.enabled !== undefined ? { enabled: payload.enabled !== false } : {}),
-            ...(payload.group !== undefined ? { group: String(payload.group || '').trim() } : {}),
-            ...(payload.tags !== undefined ? { tags: normalizeStringArray(payload.tags) } : {}),
-            ...(payload.userAgent !== undefined
-                ? {
-                      userAgent: String(payload.userAgent || '').trim(),
-                      customUserAgent: String(payload.userAgent || '').trim(),
-                  }
-                : {}),
-            ...(payload.proxy !== undefined
-                ? {
-                      proxy: String(payload.proxy || '').trim(),
-                      fetchProxy: String(payload.proxy || '').trim(),
-                  }
-                : {}),
-            ...(payload.sortIndex !== undefined
-                ? { sortIndex: Number(payload.sortIndex) || 0 }
-                : {}),
-            updatedAt: nowIso(),
-        };
-        if (!String(updated.name || '').trim())
-            return createExternalError(
-                'subscription_name_required',
-                'Subscription name is required',
-                400
-            );
-        if (!String(updated.url || '').trim())
-            return createExternalError(
-                'subscription_url_required',
-                'Subscription URL is required',
-                400
-            );
-        if (!isRemoteSubscription(updated))
-            return createExternalError(
-                'invalid_subscription_url',
-                'Subscription URL must use http or https',
-                400
-            );
-        await storageAdapter.putSubscription(updated);
-        return createExternalSuccess(toExternalSubscription(updated));
-    }
-
-    if (request.method === 'DELETE' && id) {
-        const current = await getSubscriptionById(storageAdapter, id);
-        if (!current)
-            return createExternalError('subscription_not_found', 'Subscription not found', 404);
-        await storageAdapter.deleteSubscriptionById(id);
-        const removedFromProfiles = await removeSubscriptionIdFromProfiles(storageAdapter, id);
-        return createExternalSuccess({ deleted: true, id, removedFromProfiles });
-    }
-
-    return createExternalError('method_not_allowed', 'Method Not Allowed', 405);
 }

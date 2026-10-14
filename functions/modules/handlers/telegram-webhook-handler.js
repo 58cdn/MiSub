@@ -27,6 +27,7 @@ import { clearAllNodeCaches } from '../../services/node-cache-service.js';
 import { createJsonResponse, escapeHtml, JSON_BODY_LIMITS, readJsonWithLimit } from '../utils.js';
 import { KV_KEY_SUBS, KV_KEY_PROFILES, KV_KEY_SETTINGS } from '../config.js';
 import { extractValidNodes } from '../utils/node-parser.js';
+import { isAtomicSubscriptionStorage } from '../../services/subscription-protocol/index.js';
 
 // ==================== 存储与配置 ====================
 
@@ -65,6 +66,12 @@ async function getCachedSettings(env, cache) {
 async function getCachedSubscriptions(env, cache) {
     if (cache.subscriptions !== undefined) return cache.subscriptions;
     const storageAdapter = await getCachedStorageAdapter(env, cache);
+    if (isAtomicSubscriptionStorage(storageAdapter)) {
+        const snapshot = await storageAdapter.readSubscriptionSnapshot();
+        cache.subscriptions = snapshot.subscriptions;
+        cache.profiles = snapshot.profiles;
+        return cache.subscriptions;
+    }
     cache.subscriptions = await storageAdapter.getAllSubscriptions();
     return cache.subscriptions;
 }
@@ -72,6 +79,10 @@ async function getCachedSubscriptions(env, cache) {
 async function getCachedProfiles(env, cache) {
     if (cache.profiles !== undefined) return cache.profiles;
     const storageAdapter = await getCachedStorageAdapter(env, cache);
+    if (isAtomicSubscriptionStorage(storageAdapter)) {
+        await getCachedSubscriptions(env, cache);
+        return cache.profiles;
+    }
     cache.profiles = await storageAdapter.getAllProfiles();
     return cache.profiles;
 }
@@ -850,7 +861,9 @@ async function checkRateLimit(userId, env, config) {
  */
 async function getUserNodes(userId, env) {
     const storageAdapter = await getStorageAdapter(env);
-    const allSubscriptions = await storageAdapter.getAllSubscriptions();
+    const allSubscriptions = isAtomicSubscriptionStorage(storageAdapter)
+        ? (await storageAdapter.readSubscriptionSnapshot()).subscriptions
+        : await storageAdapter.getAllSubscriptions();
 
     // 检查用户是否在白名单中
     const config = await getTelegramPushConfig(env);
@@ -872,7 +885,9 @@ async function getUserNodes(userId, env) {
  */
 async function getNodesWithMapping(userId, env) {
     const storageAdapter = await getStorageAdapter(env);
-    const allSubscriptions = await storageAdapter.getAllSubscriptions();
+    const allSubscriptions = isAtomicSubscriptionStorage(storageAdapter)
+        ? (await storageAdapter.readSubscriptionSnapshot()).subscriptions
+        : await storageAdapter.getAllSubscriptions();
 
     const config = await getTelegramPushConfig(env);
     const permission = checkUserPermission(userId, config);
@@ -3567,6 +3582,9 @@ export async function handleTelegramWebhook(request, env) {
 
         // 解析 Telegram Update
         const update = await readJsonWithLimit(request, JSON_BODY_LIMITS.small);
+        const atomic = isAtomicSubscriptionStorage(requestCache.storageAdapter);
+        const atomicMutationMessage =
+            '当前已启用订阅版本保护。旧按钮、序号命令与 Telegram 导入暂不支持安全提交，请在网页管理中刷新数据后操作。';
 
         // 处理 Callback Query（按钮回调）
         if (update.callback_query) {
@@ -3580,6 +3598,15 @@ export async function handleTelegramWebhook(request, env) {
                     true
                 );
                 return createJsonResponse({ ok: true });
+            }
+            if (atomic) {
+                await answerCallbackQuery(
+                    update.callback_query.id,
+                    atomicMutationMessage,
+                    env,
+                    true
+                );
+                return createJsonResponse({ ok: true, code: 'legacy_write_blocked' });
             }
             return await handleCallbackQuery(update.callback_query, env, request, requestCache);
         }
@@ -3596,6 +3623,43 @@ export async function handleTelegramWebhook(request, env) {
             if (!permissionCheck.allowed) {
                 await sendTelegramMessage(chatId, `❌ ${permissionCheck.reason}`, env);
                 return createJsonResponse({ ok: true });
+            }
+
+            if (atomic) {
+                // These commands only display data; imports and index-based mutations require a versioned view.
+                const readCommands = new Set([
+                    '/start',
+                    '/help',
+                    '/menu',
+                    '/list',
+                    '/stats',
+                    '/search',
+                    '/find',
+                    '/sub',
+                    '/subscription',
+                    '/info',
+                    '/detail',
+                    '/copy',
+                    '/cp',
+                    '/export',
+                    '/backup',
+                    '/groups',
+                    '/group',
+                ]);
+                const command =
+                    typeof text === 'string'
+                        ? text.split(/\s+/)[0].toLowerCase().split('@')[0]
+                        : '';
+                const duplicateInspection =
+                    ['/dup', '/dedup'].includes(command) &&
+                    !text
+                        .split(/\s+/)
+                        .slice(1)
+                        .some((arg) => ['clean', 'remove'].includes(arg.toLowerCase()));
+                if (!readCommands.has(command) && !duplicateInspection) {
+                    await sendTelegramMessage(chatId, atomicMutationMessage, env);
+                    return createJsonResponse({ ok: true, code: 'legacy_write_blocked' });
+                }
             }
 
             // 文件/文档消息：下载内容后走与文本相同的导入流程

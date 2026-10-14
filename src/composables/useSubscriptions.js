@@ -122,6 +122,36 @@ export function useSubscriptions(markDirty) {
         // Double check URL just in case
         if (!subToUpdate.url.startsWith('http')) return false;
 
+        if (dataStore.subscriptionProtocol === 'd1-v1') {
+            subToUpdate.isUpdating = true;
+            try {
+                const result = await dataStore.refreshSubscriptionRuntime(subId);
+                if (!result.success) {
+                    if (!isInitialLoad)
+                        showToast(
+                            t('subscriptions.updateFailedWithMessage', {
+                                name: subToUpdate.name || t('subscriptions.fallbackName'),
+                                message: result.error || t('subscriptions.unknownError'),
+                            }),
+                            'error'
+                        );
+                    return false;
+                }
+                if (!isInitialLoad)
+                    showToast(
+                        t('subscriptions.updateSuccess', {
+                            name: subToUpdate.name || t('subscriptions.fallbackName'),
+                        }),
+                        'success'
+                    );
+                return true;
+            } finally {
+                subToUpdate.isUpdating = false;
+                const current = subscriptions.value.find((sub) => sub.id === subId);
+                if (current) current.isUpdating = false;
+            }
+        }
+
         if (!isInitialLoad) {
             subToUpdate.isUpdating = true;
         }
@@ -360,6 +390,23 @@ export function useSubscriptions(markDirty) {
         showToast(t('subscriptions.refreshing', { count: subsToUpdate.length }), 'info');
 
         try {
+            if (dataStore.subscriptionProtocol === 'd1-v1') {
+                let successCount = 0;
+                for (const sub of subsToUpdate) {
+                    if (await handleUpdateNodeCount(sub.id, true)) successCount += 1;
+                }
+                const failedCount = subsToUpdate.length - successCount;
+                refreshError.value = failedCount > 0;
+                showToast(
+                    t('subscriptions.refreshDone', {
+                        success: successCount,
+                        total: subsToUpdate.length,
+                        failed: failedCount,
+                    }),
+                    failedCount > 0 ? 'warning' : 'success'
+                );
+                return;
+            }
             const result = await batchUpdateNodes(subsToUpdate.map((sub) => sub.id));
 
             if (result && result.success) {

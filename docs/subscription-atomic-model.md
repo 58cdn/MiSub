@@ -1,6 +1,6 @@
 # 订阅原子写入：离线模型与迁移门槛
 
-关联 [Issue #33](https://github.com/58cdn/MiSub/issues/33)，依赖 PR #37、#41、#42。本文细化[版本与迁移协议](subscription-write-protocol.md)。[SQL 模型](../experiments/subscription-transactions/model.js)仅由测试导入；应用路由、存储适配器和生产 schema 尚未接入此协议。
+关联 [Issue #33](https://github.com/58cdn/MiSub/issues/33)，依赖 PR #37、#41、#42。本文细化[版本与迁移协议](subscription-write-protocol.md)，记录 PR #43 的独立离线模型。[SQL 模型](../experiments/subscription-transactions/model.js)仅由测试导入；默认关闭的应用接入、能力限制和迁移门控见 [PR #44 运行时约定](subscription-runtime-contract.md)。生产 schema 不会自动启用。
 
 ## 后端选择
 

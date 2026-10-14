@@ -19,6 +19,7 @@ import { runOperatorChain } from '../utils/operator-runner.js';
 import { createTimeoutFetch } from '../modules/utils.js';
 import { assertPublicNetworkUrl } from '../modules/security-utils.js';
 import { isSuspiciousNodeCountDrop } from './node-cache-service.js';
+import { isAtomicSubscriptionStorage } from './subscription-protocol/index.js';
 
 /**
  * 订阅获取配置常量
@@ -385,6 +386,8 @@ async function writeSubscriptionNodeCache(storage, sub, nodes) {
 
 async function writeSubscriptionRuntimeInfo(storage, sub, runtimeInfo = {}) {
     if (!storage || !sub?.id) return false;
+    // Download observations depend on client/profile scope and do not update canonical runtime fields.
+    if (isAtomicSubscriptionStorage(storage)) return false;
     const { nodeCount, userInfo, lastGoodNodeCount, detectedName } = runtimeInfo;
     const hasUserInfo = Object.prototype.hasOwnProperty.call(runtimeInfo, 'userInfo');
     const hasLastGoodNodeCount = Object.prototype.hasOwnProperty.call(
@@ -713,7 +716,11 @@ export async function generateCombinedNodeList(
     const processedManualNodeList = manualProcessedLines.join('\n');
 
     const httpSubs = misubs.filter(
-        (sub) => sub && sub.url && /^https?:\/\//i.test(sub.url) && !/^https?:\/\/[^/?#]+:\d+\/?#/i.test(sub.url)
+        (sub) =>
+            sub &&
+            sub.url &&
+            /^https?:\/\//i.test(sub.url) &&
+            !/^https?:\/\/[^/?#]+:\d+\/?#/i.test(sub.url)
     );
     const limiter = createConcurrencyLimiter(FETCH_CONFIG.CONCURRENCY);
     let upstreamSuccessCount = 0; // 追踪真正从远程拉取成功的订阅数（不含 per-sub 缓存回退）

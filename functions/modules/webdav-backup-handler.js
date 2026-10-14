@@ -8,6 +8,13 @@
  */
 
 import { StorageFactory, SettingsCache, STORAGE_TYPES } from '../storage-adapter.js';
+import {
+    isAtomicSubscriptionStorage,
+    isAtomicSubscriptionRequested,
+    getProtocolError,
+    protocolError,
+    requireMutationMetadata,
+} from '../services/subscription-protocol/index.js';
 import { KV_KEY_SUBS, KV_KEY_PROFILES, KV_KEY_SETTINGS } from './config.js';
 import { KV_KEY_RULE_TEMPLATES, listRuleTemplates } from './rule-template-handler.js';
 import {
@@ -47,6 +54,20 @@ const DEFAULT_WEBDAV_CONFIG = {
 
 function cloneJson(value) {
     return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function subscriptionBackupFailure(error) {
+    const failure = getProtocolError(
+        error instanceof SyntaxError
+            ? protocolError('invalid_data')
+            : error?.status === 413
+              ? protocolError('capacity_exceeded')
+              : error
+    );
+    return createJsonResponse(
+        { success: false, code: failure.code, message: failure.message },
+        failure.status
+    );
 }
 
 function normalizeScope(scope) {
@@ -92,6 +113,16 @@ async function getStorage(env) {
 }
 
 async function readBusinessData(storageAdapter) {
+    if (isAtomicSubscriptionStorage(storageAdapter)) {
+        const snapshot = await storageAdapter.readSubscriptionSnapshot();
+        const ruleTemplates = await listRuleTemplates(storageAdapter);
+        return {
+            subscriptions: snapshot.subscriptions,
+            profiles: snapshot.profiles,
+            ruleTemplates,
+            subscriptionVersion: snapshot.version,
+        };
+    }
     const [subscriptions, profiles, ruleTemplates] = await Promise.all([
         typeof storageAdapter.getAllSubscriptions === 'function'
             ? storageAdapter.getAllSubscriptions()
@@ -126,6 +157,12 @@ export async function buildBackupPayload(env, options = {}) {
         source: {
             storageType,
             trigger: options.trigger || 'manual',
+            ...(businessData.subscriptionVersion
+                ? {
+                      subscriptionProtocol: 'd1-v1',
+                      subscriptionVersion: businessData.subscriptionVersion,
+                  }
+                : {}),
         },
         data: {
             subscriptions: cloneJson(businessData.subscriptions),
@@ -246,9 +283,41 @@ async function createPreRestoreSnapshot(env, storageAdapter, scope) {
 }
 
 export async function restoreBackupPayload(env, rawPayload, options = {}) {
+    const { storageAdapter } = await getStorage(env);
+    if (isAtomicSubscriptionStorage(storageAdapter)) {
+        if (options.scope !== 'subscriptions-only')
+            throw protocolError('unsupported_restore_scope');
+        const data = rawPayload?.data || rawPayload;
+        if (
+            !data ||
+            typeof data !== 'object' ||
+            Array.isArray(data) ||
+            !Array.isArray(data.subscriptions) ||
+            !Array.isArray(data.profiles) ||
+            Object.keys(data).some((key) => !['subscriptions', 'profiles'].includes(key))
+        )
+            throw protocolError('invalid_data');
+        const metadata = requireMutationMetadata(options, options.request);
+        const result = await storageAdapter.restoreSubscriptionSnapshot({
+            ...metadata,
+            nextEpoch: options.nextEpoch,
+            subscriptions: data.subscriptions,
+            profiles: data.profiles,
+        });
+        return {
+            success: true,
+            scope: 'subscriptions-only',
+            data: {
+                misubs: result.snapshot.subscriptions,
+                profiles: result.snapshot.profiles,
+                version: result.snapshot.version,
+            },
+            receipt: result.receipt,
+            replayed: result.replayed,
+        };
+    }
     const payload = normalizeBackupPayload(rawPayload);
     const scope = normalizeScope(options.scope || payload.scope);
-    const { storageAdapter } = await getStorage(env);
 
     if (options.createSnapshot !== false) {
         await createPreRestoreSnapshot(env, storageAdapter, scope);
@@ -431,11 +500,16 @@ export async function performWebdavBackup(env, options = {}) {
 }
 
 export async function handleWebdavBackupStatus(env) {
-    const { storageAdapter } = await getStorage(env);
-    const settings = (await storageAdapter.get(KV_KEY_SETTINGS)) || {};
-    const config = normalizeWebdavConfig(settings);
-    const { password, ...safeConfig } = config;
-    return createJsonResponse({ success: true, data: safeConfig });
+    try {
+        const { storageAdapter } = await getStorage(env);
+        const settings = (await storageAdapter.get(KV_KEY_SETTINGS)) || {};
+        const config = normalizeWebdavConfig(settings);
+        const { password, ...safeConfig } = config;
+        return createJsonResponse({ success: true, data: safeConfig });
+    } catch (error) {
+        if (isAtomicSubscriptionRequested(env)) return subscriptionBackupFailure(error);
+        throw error;
+    }
 }
 
 export async function handleWebdavBackupTest(request, env) {
@@ -455,6 +529,7 @@ export async function handleWebdavBackupTest(request, env) {
         await ensureRemoteDirectory(config);
         return createJsonResponse({ success: true, message: 'WebDAV 连接测试成功' });
     } catch (error) {
+        if (isAtomicSubscriptionRequested(env)) return subscriptionBackupFailure(error);
         return createJsonResponse(
             { success: false, message: error.message || 'WebDAV 连接测试失败' },
             error.status || 400
@@ -472,6 +547,7 @@ export async function handleManualWebdavBackup(request, env) {
         const result = await performWebdavBackup(env, { scope: body.scope, trigger: 'manual' });
         return createJsonResponse(result);
     } catch (error) {
+        if (isAtomicSubscriptionRequested(env)) return subscriptionBackupFailure(error);
         return createJsonResponse(
             { success: false, message: error.message || '备份失败' },
             error.status || 500
@@ -492,6 +568,7 @@ export async function handleBackupExport(request, env) {
         });
         return createJsonResponse({ success: true, exportData: payload });
     } catch (error) {
+        if (isAtomicSubscriptionRequested(env)) return subscriptionBackupFailure(error);
         return createJsonResponse(
             { success: false, message: error.message || '导出失败' },
             error.status || 500
@@ -504,9 +581,16 @@ export async function handleBackupRestore(request, env) {
     try {
         const body = await readJsonWithLimit(request, JSON_BODY_LIMITS.large);
         const payload = body?.payload || body?.backup || body;
-        const result = await restoreBackupPayload(env, payload, { scope: body?.scope });
+        const result = await restoreBackupPayload(env, payload, {
+            scope: body?.scope,
+            baseVersion: body?.baseVersion,
+            operationId: body?.operationId,
+            nextEpoch: body?.nextEpoch,
+            request,
+        });
         return createJsonResponse(result);
     } catch (error) {
+        if (isAtomicSubscriptionRequested(env)) return subscriptionBackupFailure(error);
         return createJsonResponse(
             { success: false, message: error.message || '恢复失败' },
             error.status || 400
@@ -546,6 +630,7 @@ export async function handleWebdavBackupList(request, env) {
         const files = await listWebdavBackupFiles(env);
         return createJsonResponse({ success: true, data: files });
     } catch (error) {
+        if (isAtomicSubscriptionRequested(env)) return subscriptionBackupFailure(error);
         return createJsonResponse(
             { success: false, message: error.message || '获取备份列表失败', data: [] },
             400
@@ -566,11 +651,21 @@ export async function handleWebdavRestore(request, env) {
     if (request.method !== 'POST') return createErrorResponse('Method Not Allowed', 405);
     try {
         const body = await readJsonWithLimit(request, JSON_BODY_LIMITS.large);
+        if (isAtomicSubscriptionRequested(env) && body.scope !== 'subscriptions-only')
+            throw protocolError('unsupported_restore_scope');
+        if (isAtomicSubscriptionRequested(env)) requireMutationMetadata(body, request);
         const payload =
             body.payload || (body.file ? await fetchWebdavBackupFile(env, body.file) : null);
-        const result = await restoreBackupPayload(env, payload, { scope: body.scope });
+        const result = await restoreBackupPayload(env, payload, {
+            scope: body.scope,
+            baseVersion: body.baseVersion,
+            operationId: body.operationId,
+            nextEpoch: body.nextEpoch,
+            request,
+        });
         return createJsonResponse(result);
     } catch (error) {
+        if (isAtomicSubscriptionRequested(env)) return subscriptionBackupFailure(error);
         return createJsonResponse(
             { success: false, message: error.message || '恢复失败' },
             error.status || 400

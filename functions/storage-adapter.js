@@ -4,6 +4,13 @@
  * 根据设置自动选择存储类型
  */
 
+import {
+    isAtomicSubscriptionRequested,
+    resolveSubscriptionProtocol,
+    wrapAtomicSubscriptionAdapter,
+    protocolError,
+} from './services/subscription-protocol/index.js';
+
 // 存储类型常量
 export const STORAGE_TYPES = {
     KV: 'kv',
@@ -743,6 +750,12 @@ export class SettingsCache {
      * 带内存缓存的设置读取
      */
     static async get(env) {
+        if (isAtomicSubscriptionRequested(env)) {
+            resolveSubscriptionProtocol(env);
+            return wrapAtomicSubscriptionAdapter(new D1StorageAdapter(env.MISUB_DB), env).get(
+                DATA_KEYS.SETTINGS
+            );
+        }
         const now = Date.now();
         if (
             _globalSettingsCache.data &&
@@ -811,6 +824,9 @@ export class StorageFactory {
      * @returns {KVStorageAdapter|D1StorageAdapter}
      */
     static createAdapter(env, storageType = STORAGE_TYPES.KV) {
+        const protocol = resolveSubscriptionProtocol(env);
+        const protect = (adapter) =>
+            protocol ? wrapAtomicSubscriptionAdapter(adapter, env) : adapter;
         switch (storageType) {
             case STORAGE_TYPES.D1:
                 if (!env.MISUB_DB) {
@@ -818,20 +834,20 @@ export class StorageFactory {
                     const kvFallback = StorageFactory.resolveKV(env);
                     if (!kvFallback) {
                         console.warn('[Storage] KV not available either, using noop adapter');
-                        return new NoopStorageAdapter();
+                        return protect(new NoopStorageAdapter());
                     }
-                    return new KVStorageAdapter(kvFallback);
+                    return protect(new KVStorageAdapter(kvFallback));
                 }
-                return new D1StorageAdapter(env.MISUB_DB);
+                return protect(new D1StorageAdapter(env.MISUB_DB));
 
             case STORAGE_TYPES.KV:
             default: {
                 const kv = StorageFactory.resolveKV(env);
                 if (!kv) {
                     console.warn('[Storage] No KV binding found, using noop adapter');
-                    return new NoopStorageAdapter();
+                    return protect(new NoopStorageAdapter());
                 }
-                return new KVStorageAdapter(kv);
+                return protect(new KVStorageAdapter(kv));
             }
         }
     }
@@ -842,6 +858,7 @@ export class StorageFactory {
      * @returns {Promise<string>} 存储类型
      */
     static async getStorageType(env) {
+        if (resolveSubscriptionProtocol(env)) return STORAGE_TYPES.D1;
         try {
             const settings = await SettingsCache.get(env);
             if (settings?.storageType) {
@@ -858,6 +875,7 @@ export class StorageFactory {
      * 将 KV Settings 同步到 D1（当 D1 为空时）
      */
     static async ensureD1Settings(env) {
+        if (isAtomicSubscriptionRequested(env)) throw protocolError('migration_required');
         if (!env?.MISUB_DB) return false;
         try {
             const d1Adapter = new D1StorageAdapter(env.MISUB_DB);
@@ -928,6 +946,7 @@ export class DataMigrator {
      * @returns {Promise<Object>} 迁移结果
      */
     static async migrateKVToD1(env) {
+        if (isAtomicSubscriptionRequested(env)) throw protocolError('migration_required');
         try {
             const kvNs = resolveKV(env);
             if (!kvNs) throw new Error('No KV binding found');
@@ -1005,6 +1024,7 @@ export class DataMigrator {
     }
 
     static async migrateLegacyD1MainRows(env) {
+        if (isAtomicSubscriptionRequested(env)) throw protocolError('migration_required');
         if (!env?.MISUB_DB) throw new Error('D1 database not available');
 
         const d1Adapter = new D1StorageAdapter(env.MISUB_DB);

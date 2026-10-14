@@ -548,15 +548,21 @@ export async function handleMisubRequest(context) {
         await StorageFactory.getStorageType(env)
     );
     context.storage = storageAdapter;
-    const [settingsData, allMisubs, allProfiles] = await Promise.all([
+    const atomic = storageAdapter.subscriptionProtocol === 'd1-v1';
+    const [settingsData, collections] = await Promise.all([
         storageAdapter.get(KV_KEY_SETTINGS),
-        storageAdapter.getAllSubscriptions(),
-        storageAdapter.getAllProfiles(),
+        atomic
+            ? storageAdapter.readSubscriptionSnapshot()
+            : Promise.all([
+                  storageAdapter.getAllSubscriptions(),
+                  storageAdapter.getAllProfiles(),
+              ]).then(([subscriptions, profiles]) => ({ subscriptions, profiles })),
     ]);
+    const { subscriptions: allMisubs, profiles: allProfiles } = collections;
     const settings = settingsData || {};
 
     // 自动迁移旧版 profile ID（去除 'profile_' 前缀）
-    if (migrateProfileIds(allProfiles)) {
+    if (!atomic && migrateProfileIds(allProfiles)) {
         storageAdapter
             .put(KV_KEY_PROFILES, allProfiles)
             .catch((err) =>
@@ -661,7 +667,7 @@ export async function handleMisubRequest(context) {
                     ...(Array.isArray(profile.manualNodes) ? profile.manualNodes : []),
                 ].filter(Boolean);
                 const relatedSubs =
-                    typeof storageAdapter.getSubscriptionsByIds === 'function'
+                    !atomic && typeof storageAdapter.getSubscriptionsByIds === 'function'
                         ? await storageAdapter.getSubscriptionsByIds(
                               Array.from(new Set(relatedIds))
                           )
