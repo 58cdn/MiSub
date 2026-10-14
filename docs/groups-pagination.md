@@ -35,10 +35,10 @@ Covered cases include 2,585 sources, the final partial page, empty data/search, 
 
 ## Coordination with subscription integrity changes
 
-Base inspected: `b752b16d1d6b5650a3d8616e506b8acb3fdbb398`.
+Initial base inspected: `b752b16d1d6b5650a3d8616e506b8acb3fdbb398`. The branch now includes main through `f5c104c` (PRs #46, #37 and #41). The merge completed without textual conflicts; #37's subset reorder protection and #41's authoritative read checks are retained.
 
 - PR #37 (`917588a`) also changes `src/composables/useSubscriptions.js`; its subset reorder protection is in a different section from this pagination change. Preserve that protection when combining the branches.
 - PR #42 (`ed662e2`, including #37/#41) also touches `functions/modules/api-handler.js`, `src/composables/useSubscriptions.js`, `src/i18n/messages.js`, and `src/stores/useDataStore.js`. The reviewed patches do not overlap within those files. Preserve #42's authoritative snapshot/save logic and its `syncCachedConfig` update to `lastSavedData.config`.
 - Independent review ran the four-source flow against this branch and an in-memory combination with #42. Both preserved all sources and profile references. The combined version also preserved hidden records when given a direct reorder subset. This pagination branch does not replace the underlying #37/#42 integrity work.
 
-Merge order remains with the coordinating task; this task does not merge main.
+Merge order remains with the coordinating task; this task does not merge its PR into main.
