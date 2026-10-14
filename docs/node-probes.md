@@ -48,6 +48,8 @@
 
 [OpenAPI 3.1](./node-probes.openapi.yaml) 是本功能接口文档，命名空间 `/api/probes/v1`，不复用 External Management API 的全局权限 Token，也不替换 `/api/nodes/diagnostics` 的单节点诊断接口。
 
+任务结果与历史接口可返回[执行声明快照](probe-execution-metadata.md)，标明该次完成时检测器声明的构建、平台、内核锁和规则集版本。旧结果保持未知；声明不证明实际内核执行，也不用于推断当前能力。
+
 管理端使用现有 `auth_session` Cookie；所有写请求必须携带精确同源 Origin。检测器只持有自己可撤销的 Bearer Token，不能调用管理端接口；检测器请求不允许 Cookie 或 Origin。不要把 Token 放进查询字符串、命令行参数、浏览器持久存储或日志。
 
 管理端：`GET capabilities`、`POST format`、`GET/POST agents`、`GET agents/overview?offset=0&limit=20`、`GET agents/:id/history?offset=0&limit=20`、`DELETE agents/:id`、`GET/POST jobs`、`GET jobs/:id?offset=0`、`POST jobs/:id/cancel`。
