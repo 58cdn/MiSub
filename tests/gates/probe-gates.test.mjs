@@ -59,6 +59,24 @@ test('manifest registers every entry and helper once', async (t) => {
     const { root, manifest } = await fixture(t);
     assert.deepEqual(await inventory(root), manifest);
 });
+test('manifest accepts explicit checks reports for application browser scenarios', async (t) => {
+    const { root, manifest, save } = await fixture(t);
+    manifest.browser[0] = { ...browser, cases: 'checks' };
+    await save();
+    assert.deepEqual(await inventory(root), manifest);
+});
+test('checks reports require distinct nonempty scenario labels and no errors', () => {
+    const entry = { ...browser, cases: 'checks', errors: ['errors'] };
+    assert.equal(
+        validateBrowserReport(entry, { checks: ['Saved default', 'Reloaded default'], errors: [] }),
+        2
+    );
+    for (const checks of [[], ['Duplicate', 'Duplicate'], [''], [null]])
+        assert.throws(() => validateBrowserReport(entry, { checks, errors: [] }));
+    assert.throws(() =>
+        validateBrowserReport(entry, { checks: ['Saved default'], errors: ['Page failure'] })
+    );
+});
 test('missing entry fails inventory', async (t) => {
     const { root } = await fixture(t);
     await rm(resolve(root, browser.file));

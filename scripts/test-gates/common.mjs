@@ -42,7 +42,7 @@ export async function inventory(base = root, manifest) {
         assert.match(entry.file, /^tests\/browser\/[\w/-]+\.mjs$/);
         assert.match(entry.report, /^[\w-]+\.json$/);
         assert.ok(
-            ['tests', 'layouts', 'cases'].includes(entry.cases),
+            ['tests', 'layouts', 'cases', 'checks'].includes(entry.cases),
             'Unknown browser report cases'
         );
         assert.ok(

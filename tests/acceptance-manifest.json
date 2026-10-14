@@ -32,6 +32,12 @@
             "passed": true
         },
         {
+            "file": "tests/browser/groups-pagination.mjs",
+            "report": "results.json",
+            "cases": "checks",
+            "errors": ["errors"]
+        },
+        {
             "file": "tests/browser/node-connectivity.mjs",
             "report": "report.json",
             "cases": "cases",

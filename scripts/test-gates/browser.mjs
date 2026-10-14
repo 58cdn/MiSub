@@ -29,11 +29,13 @@ export function validateBrowserReport(entry, report) {
         'Duplicate browser scenarios'
     );
     if (entry.passed) assert.equal(report.passed, true, 'Browser success marker missing');
-    if (entry.cases === 'tests') {
+    if (entry.cases === 'tests' || entry.cases === 'checks') {
         assert.ok(
             cases.every((item) => typeof item === 'string' && item.length > 0),
             'Invalid browser scenario labels'
         );
+    }
+    if (entry.cases === 'tests') {
         assert.ok(
             Array.isArray(report.overflow) && report.overflow.length > 0,
             'Missing browser layout results'
