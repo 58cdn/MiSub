@@ -416,7 +416,7 @@ describe('authoritative versioned subscription saves', () => {
             },
         });
         expect((await refresh).success).toBe(false);
-        expect(store.subscriptions[0].nodeCount).toBeUndefined();
+        expect(store.subscriptions).toEqual([]);
         expect(sessionStorage.getItem('misub_data_cache')).toBeNull();
     });
     it('keeps a runtime conflict local and never retries it through configuration save', async () => {

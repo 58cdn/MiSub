@@ -149,8 +149,7 @@ export const useDataStore = defineStore('data', () => {
             ruleTemplates.value = next.ruleTemplates;
             settingsStore.setConfig({ ...DEFAULT_SETTINGS, ...next.config });
             if (!fromCache) {
-                lifecycle += 1;
-                invalidateDomainRequests();
+                invalidateRequests();
                 lastSavedData = snapshot;
                 hasAuthoritativeBaseline = true;
                 subscriptionProtocol.value =
@@ -163,6 +162,7 @@ export const useDataStore = defineStore('data', () => {
                 pendingSubmission = null;
                 subscriptionConflict.value = false;
                 lastUpdated.value = new Date();
+                clearDirty();
                 dataCache.set(next);
             }
             return true;
@@ -216,7 +216,7 @@ export const useDataStore = defineStore('data', () => {
                 showToast(t('store.fetchDataFailed', { message: error.message }), 'error');
                 return false;
             } finally {
-                isLoading.value = false;
+                if (requestLifecycle === lifecycle) isLoading.value = false;
             }
         })();
         fetchDataPromise = request;
@@ -374,9 +374,11 @@ export const useDataStore = defineStore('data', () => {
             saveState.value = 'idle';
             return false;
         } finally {
-            saving = false;
-            isLoading.value = false;
-            if (saveState.value === 'saving') saveState.value = 'idle';
+            if (requestLifecycle === lifecycle) {
+                saving = false;
+                isLoading.value = false;
+                if (saveState.value === 'saving') saveState.value = 'idle';
+            }
         }
     }
 
@@ -560,8 +562,10 @@ export const useDataStore = defineStore('data', () => {
             };
         } finally {
             clearTimeout(timeout);
-            saving = false;
-            isLoading.value = false;
+            if (requestLifecycle === lifecycle) {
+                saving = false;
+                isLoading.value = false;
+            }
         }
     }
 
@@ -686,9 +690,25 @@ export const useDataStore = defineStore('data', () => {
         }
     }
 
-    function clearCachedData() {
+    function invalidateRequests() {
         lifecycle += 1;
         invalidateDomainRequests();
+        fetchDataPromise = null;
+        saveSequence += 1;
+        saving = false;
+        isLoading.value = false;
+        saveState.value = 'idle';
+    }
+
+    function clearCachedData() {
+        invalidateRequests();
+        subscriptions.value = [];
+        profiles.value = [];
+        ruleTemplates.value = [];
+        settingsStore.setConfig({ ...DEFAULT_SETTINGS });
+        lastSavedData = { subscriptions: [], profiles: [], ruleTemplates: [], config: {} };
+        clearDirty();
+        editorStore.setLastUpdated(null);
         hasAuthoritativeBaseline = false;
         subscriptionProtocol.value = 'legacy';
         subscriptionConflict.value = false;
