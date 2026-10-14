@@ -14,8 +14,11 @@ function permutations(values) {
         : [[]];
 }
 let model, clock;
-const login = (ticket, cookie = '', options = {}) =>
-    model.login({ ticket, cookie, password: 'synthetic-password', ...options });
+const login = (ticket, cookie = '', options = {}) => {
+    const response = model.login({ ticket, cookie, password: 'synthetic-password', ...options });
+    if (response.setCookie) model.acknowledge(ticket, header(response));
+    return response;
+};
 const header = (response) => response.setCookie.split(';')[0];
 beforeEach(() => {
     clock = 10_000;
@@ -30,12 +33,13 @@ describe('offline revocable session and unique cookie protocol', () => {
             const ticket = model.issueTicket();
             const responses = { login: login(ticket) };
             responses.renew = model.renew(header(responses.login));
-            responses.logout = model.logout({ tickets: [ticket] });
+            responses.logout = model.revokeTargets({ tickets: [ticket] });
             const jar = new Map();
             for (const key of order) applyFixtureCookie(jar, responses[key]);
             expect(model.authenticate(fixtureCookieHeader(jar)).authenticated).toBe(false);
             expect(model.authenticate(header(responses.login)).authenticated).toBe(false);
-            expect(() => model.renew(header(responses.renew))).toThrow('session_invalid');
+            expect(responses.renew.setCookie).toBeNull();
+            expect(() => model.renew(header(responses.login))).toThrow('session_invalid');
         }
     );
     it.each(
@@ -49,7 +53,7 @@ describe('offline revocable session and unique cookie protocol', () => {
             const ticket = model.issueTicket();
             const responses = { login: login(ticket) };
             responses.renew = model.renew(header(responses.login));
-            responses.logout = model.logout({ tickets: [ticket] });
+            responses.logout = model.revokeTargets({ tickets: [ticket] });
             responses.newLogin = login(model.issueTicket());
             const jar = new Map();
             for (const key of order) applyFixtureCookie(jar, responses[key]);
@@ -61,7 +65,7 @@ describe('offline revocable session and unique cookie protocol', () => {
     );
     it('cancels a ticket before password processing and never admits its delayed login', () => {
         const ticket = model.issueTicket();
-        model.logout({ tickets: [ticket] });
+        model.revokeTargets({ tickets: [ticket] });
         expect(() => login(ticket)).toThrow('login_cancelled');
         expect(model.sql.prepare('SELECT count(*) AS n FROM sessions').get().n).toBe(0);
     });
@@ -71,7 +75,7 @@ describe('offline revocable session and unique cookie protocol', () => {
             cookie = header(response);
         expect(model.acknowledge(ticket, cookie)).toBe(true);
         expect(model.authenticate(cookie).authenticated).toBe(true);
-        model.logout({ cookie, ids: [response.id] });
+        model.revokeTargets({ cookie, ids: [response.id] });
         expect(model.authenticate(cookie).authenticated).toBe(false);
         const retry = login(ticket);
         expect(retry).toMatchObject({ committed: true, active: false, setCookie: null });
@@ -80,9 +84,9 @@ describe('offline revocable session and unique cookie protocol', () => {
         const ticket = model.issueTicket(),
             old = login(ticket);
         const captured = { tickets: [ticket], ids: [old.id], cookie: header(old) };
-        model.logout(captured);
+        model.revokeTargets(captured);
         const next = login(model.issueTicket());
-        model.logout({ ...captured, cookie: `${header(old)}; ${header(next)}` });
+        model.revokeTargets({ ...captured, cookie: `${header(old)}; ${header(next)}` });
         expect(model.authenticate(header(next)).authenticated).toBe(true);
         expect(model.authenticate(header(old)).authenticated).toBe(false);
     });
@@ -98,7 +102,7 @@ describe('offline revocable session and unique cookie protocol', () => {
             setCookie: null,
         });
         expect(model.acknowledge(ticket, '')).toBe(false);
-        model.logout({ tickets: [ticket] });
+        model.revokeTargets({ tickets: [ticket] });
         expect(() => login(ticket)).toThrow('login_cancelled');
         expect(model.authenticate(header(login(model.issueTicket()))).authenticated).toBe(true);
     });
@@ -106,9 +110,9 @@ describe('offline revocable session and unique cookie protocol', () => {
         const ticket = model.issueTicket(),
             response = login(ticket);
         expect(() => model.login({ ticket, password: 'wrong' })).toThrow('wrong_password');
-        expect(() => model.logout({ tickets: [{ ...ticket, cancelToken: 'guess' }] })).toThrow(
-            'invalid_cancel_proof'
-        );
+        expect(() =>
+            model.revokeTargets({ tickets: [{ ...ticket, cancelToken: 'guess' }] })
+        ).toThrow('invalid_cancel_proof');
         expect(model.authenticate(`scope=${ticket.id}`).authenticated).toBe(false);
         expect(model.authenticate(header(response).replace(/=.*/, '=guess')).authenticated).toBe(
             false
@@ -120,7 +124,7 @@ describe('offline revocable session and unique cookie protocol', () => {
             response = login(ticket);
         const other = model.issueTicket();
         expect(() =>
-            model.logout({
+            model.revokeTargets({
                 cookie: header(response),
                 tickets: [ticket, { ...other, cancelToken: 'wrong' }],
             })
@@ -133,26 +137,30 @@ describe('offline revocable session and unique cookie protocol', () => {
             response = login(ticket);
         model.unavailable = true;
         expect(() => model.authenticate(header(response))).toThrow('session_store_unavailable');
-        expect(() => model.logout({ tickets: [ticket] })).toThrow('session_store_unavailable');
+        expect(() => model.revokeTargets({ tickets: [ticket] })).toThrow(
+            'session_store_unavailable'
+        );
         model.unavailable = false;
         expect(model.authenticate(header(response)).authenticated).toBe(true);
-        model.logout({ tickets: [ticket] });
+        model.revokeTargets({ tickets: [ticket] });
         expect(model.authenticate(header(response)).authenticated).toBe(false);
     });
     it('rolls back every revocation and ticket cancellation when commit fails', () => {
         const ticket = model.issueTicket(),
             response = login(ticket);
         model.failBeforeCommit = true;
-        expect(() => model.logout({ tickets: [ticket] })).toThrow('fixture_transaction_failure');
+        expect(() => model.revokeTargets({ tickets: [ticket] })).toThrow(
+            'fixture_transaction_failure'
+        );
         model.failBeforeCommit = false;
         expect(model.ticket(ticket).state).toBe('committed');
         expect(model.authenticate(header(response)).authenticated).toBe(true);
-        model.logout({ tickets: [ticket] });
+        model.revokeTargets({ tickets: [ticket] });
         expect(model.authenticate(header(response)).authenticated).toBe(false);
     });
     it('does not revive a cancelled or expired ticket after tombstone pruning', () => {
         const ticket = model.issueTicket();
-        model.logout({ tickets: [ticket] });
+        model.revokeTargets({ tickets: [ticket] });
         clock = ticket.deadline + 1;
         model.sql.prepare('DELETE FROM tickets WHERE id=?').run(ticket.id);
         expect(() => login(ticket)).toThrow('unknown_ticket');
@@ -177,7 +185,7 @@ describe('offline revocable session and unique cookie protocol', () => {
     it('delayed cleanup only deletes a permanently invalid old SID', () => {
         const old = login(model.issueTicket());
         expect(() => model.cleanup(header(old), old.id)).toThrow('session_still_active');
-        model.logout({ cookie: header(old), ids: [old.id] });
+        model.revokeTargets({ cookie: header(old), ids: [old.id] });
         const cleanup = model.cleanup(header(old), old.id),
             next = login(model.issueTicket());
         const jar = new Map();
@@ -224,19 +232,19 @@ describe('offline revocable session and unique cookie protocol', () => {
             response = login(ticket);
         clock = ticket.deadline + 1;
         expect(model.authenticate(header(response)).authenticated).toBe(true);
-        model.logout({ tickets: [ticket] });
+        model.revokeTargets({ tickets: [ticket] });
         expect(model.authenticate(header(response)).authenticated).toBe(false);
     });
     it('ignores future cookies automatically attached to an older logout request', () => {
         const old = login(model.issueTicket()),
             next = login(model.issueTicket());
-        model.logout({ ids: [old.id], cookie: `${header(old)}; ${header(next)}` });
+        model.revokeTargets({ ids: [old.id], cookie: `${header(old)}; ${header(next)}` });
         expect(model.authenticate(header(old)).authenticated).toBe(false);
         expect(model.authenticate(header(next)).authenticated).toBe(true);
     });
     it('refuses to acknowledge revocation of an active target without a matching proof', () => {
         const old = login(model.issueTicket());
-        expect(() => model.logout({ ids: [old.id] })).toThrow('session_proof_required');
+        expect(() => model.revokeTargets({ ids: [old.id] })).toThrow('session_proof_required');
         expect(() => login(model.issueTicket(), '', { priorIds: [old.id] })).toThrow(
             'session_proof_required'
         );
@@ -245,9 +253,9 @@ describe('offline revocable session and unique cookie protocol', () => {
     it('rolls back mixed proved and unproved target sets', () => {
         const first = login(model.issueTicket()),
             second = login(model.issueTicket());
-        expect(() => model.logout({ ids: [first.id, second.id], cookie: header(first) })).toThrow(
-            'session_proof_required'
-        );
+        expect(() =>
+            model.revokeTargets({ ids: [first.id, second.id], cookie: header(first) })
+        ).toThrow('session_proof_required');
         expect(model.authenticate(`${header(first)}; ${header(second)}`).ids).toEqual([
             first.id,
             second.id,
@@ -256,7 +264,7 @@ describe('offline revocable session and unique cookie protocol', () => {
     it('accepts the matching cancellation proof for an unreceived target credential', () => {
         const ticket = model.issueTicket(),
             response = login(ticket);
-        model.logout({ ids: [response.id], tickets: [ticket] });
+        model.revokeTargets({ ids: [response.id], tickets: [ticket] });
         expect(model.authenticate(header(response)).authenticated).toBe(false);
     });
     it('recovers nine accumulated cookies without deleting the active credential', () => {

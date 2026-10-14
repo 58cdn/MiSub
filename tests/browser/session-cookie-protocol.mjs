@@ -76,6 +76,10 @@ async function fixture() {
         const control = pendingGate?.path === url.pathname ? pendingGate : null;
         if (control) pendingGate = null;
         const args = request.postDataJSON() || {};
+        if (control?.mode === 'before') {
+            control.ready();
+            await control.held;
+        }
         let status = 200,
             result;
         try {
@@ -84,12 +88,17 @@ async function fixture() {
             const cookie = headers.cookie || '';
             if (url.pathname === '/ticket') result = model.issueTicket();
             else if (url.pathname === '/login') result = model.login({ ...args, cookie });
-            else if (url.pathname === '/logout') result = model.logout({ ...args, cookie });
+            else if (url.pathname === '/revoke-targets')
+                result = model.revokeTargets({ ...args, cookie });
+            else if (url.pathname === '/capture-recovery')
+                result = model.captureRecovery(cookie, args);
+            else if (url.pathname === '/logout-recovered') result = model.logoutRecovered(args);
             else if (url.pathname === '/renew') result = model.renew(cookie);
             else if (url.pathname === '/ack')
                 result = { confirmed: model.acknowledge(args.ticket, cookie) };
             else if (url.pathname === '/maintenance') result = model.maintenance(cookie);
             else if (url.pathname === '/cleanup') result = model.cleanup(cookie, args.id);
+            else if (url.pathname === '/cleanup-ticket') result = model.cleanupTicket(args.id);
             else if (url.pathname === '/protected') {
                 result = model.authenticate(cookie);
                 status = result.authenticated ? 200 : 401;
@@ -169,6 +178,7 @@ async function login(page) {
     const prepared = await prepare(page),
         response = await rpc(page, '/login', prepared.request);
     assert.equal(response.status, 200);
+    assert.equal(await registry(page, 'canConfirm', [prepared.intent.id]), true);
     const ack = await rpc(page, '/ack', { ticket: prepared.ticket });
     assert.equal(ack.body.confirmed, true);
     assert.equal(
@@ -183,18 +193,45 @@ async function maintenance(page) {
     assert.equal(response.status, 200);
     for (const id of response.body.staleIds)
         assert.equal((await rpc(page, '/cleanup', { id })).status, 200);
+    for (const id of response.body.staleTicketIds)
+        assert.equal((await rpc(page, '/cleanup-ticket', { id })).status, 200);
 }
 async function logout(page) {
-    const target = await registry(page, 'snapshotLogout');
-    const response = await rpc(page, '/logout', target);
-    if (response.status === 200) await registry(page, 'completeLogout', [target.id]);
-    return { target, response };
+    return recoveryLogout(page);
 }
 async function secondTab() {
     const page = await context.newPage();
     await page.goto(origin);
     await page.waitForFunction(() => window.ready);
     return page;
+}
+async function resetRegistry(page) {
+    await registry(page, 'close');
+    await page.evaluate(
+        () =>
+            new Promise((resolve, reject) => {
+                const request = indexedDB.deleteDatabase('misub-session-protocol-fixture');
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            })
+    );
+    await page.evaluate(async () => {
+        const { createPendingLoginRegistry } = await import('/registry.js');
+        window.registry = createPendingLoginRegistry(indexedDB);
+    });
+}
+async function recoveryLogout(page) {
+    const operation = await registry(page, 'beginRecovery');
+    const response = await rpc(page, '/capture-recovery', {
+        ids: operation.knownIds,
+        tickets: operation.tickets,
+    });
+    if (response.status !== 200) return { operation, response };
+    const snapshot = response.body;
+    assert.equal(await registry(page, 'bindRecovery', [operation.id, snapshot]), true);
+    const logout = await rpc(page, '/logout-recovered', snapshot);
+    if (logout.status === 200) await registry(page, 'completeRecovery', [operation.id]);
+    return { operation, snapshot, response: logout };
 }
 try {
     browser = await chromium.launch({
@@ -238,7 +275,7 @@ try {
         await renew;
         assert.equal((await rpc(page, '/protected')).status, 401);
         report.checks.push(
-            'Delayed renewal restores only a revoked credential; protected access remains 401.'
+            'Delayed renewal has no Set-Cookie; protected access remains 401 after server revocation.'
         );
     }
     for (const twoTabs of [false, true]) {
@@ -246,15 +283,15 @@ try {
             other = twoTabs ? await secondTab() : page;
         await login(page);
         const target = await registry(page, 'snapshotLogout'),
-            held = gate('/logout');
-        const oldLogout = rpc(page, '/logout', target);
+            held = gate('/revoke-targets');
+        const oldLogout = rpc(page, '/revoke-targets', target);
         await held.reached;
         const current = await login(other);
         held.release();
         await oldLogout;
         await registry(page, 'completeLogout', [target.id]);
         // A replay's real HTTP Cookie includes the future session; captured IDs still exclude it.
-        assert.equal((await rpc(page, '/logout', target)).status, 200);
+        assert.equal((await rpc(page, '/revoke-targets', target)).status, 200);
         assert.deepEqual((await rpc(other, '/protected')).body.ids, [current.response.body.id]);
         report.checks.push(
             `${twoTabs ? 'Two tabs' : 'Same tab'}: delayed logout and duplicate old logout preserve the newer session, including automatically attached future Cookie.`
@@ -283,7 +320,7 @@ try {
             held = gate('/ticket');
         const delayed = rpc(page, '/ticket');
         await held.reached;
-        await logout(other);
+        await registry(other, 'snapshotLogout');
         held.release();
         const ticket = (await delayed).body;
         assert.equal(await registry(page, 'bind', [intent.id, ticket]), false);
@@ -314,15 +351,15 @@ try {
         const page = await fixture(),
             current = await login(page),
             target = await registry(page, 'snapshotLogout');
-        const control = gate('/logout', mode),
-            response = await rpc(page, '/logout', target);
+        const control = gate('/revoke-targets', mode),
+            response = await rpc(page, '/revoke-targets', target);
         await control.finished;
         assert.equal(response.status, mode === 'drop' ? 0 : 503);
         assert.equal((await rpc(page, '/protected')).status, mode === 'drop' ? 401 : 200);
         await page.reload();
         await page.waitForFunction(() => window.ready);
         assert.deepEqual(await registry(page, 'retryLogout', [target.id]), target);
-        assert.equal((await rpc(page, '/logout', target)).status, 200);
+        assert.equal((await rpc(page, '/revoke-targets', target)).status, 200);
         await registry(page, 'completeLogout', [target.id]);
         assert.equal((await rpc(page, '/protected')).status, 401);
         assert.ok(current.response.body.id);
@@ -335,7 +372,7 @@ try {
         let current;
         for (let index = 0; index < 40; index++) current = await login(page);
         assert.deepEqual((await rpc(page, '/protected')).body.ids, [current.response.body.id]);
-        assert.equal((await context.cookies()).length, 1);
+        assert.equal((await context.cookies()).length, 2);
         assert.equal((await logout(page)).response.status, 200);
         assert.equal((await rpc(page, '/protected')).status, 401);
         report.checks.push(
@@ -344,7 +381,7 @@ try {
     }
     {
         const page = await fixture();
-        let previous;
+        let previous, previousTicket;
         for (let index = 0; index < 9; index++) {
             const ticket = (await rpc(page, '/ticket')).body;
             const response = await rpc(page, '/login', {
@@ -354,9 +391,11 @@ try {
             });
             assert.equal(response.status, 200);
             previous = response.body.id;
+            previousTicket = ticket;
         }
         assert.equal((await rpc(page, '/protected')).status, 431);
         await maintenance(page);
+        assert.equal((await rpc(page, '/ack', { ticket: previousTicket })).body.confirmed, true);
         assert.deepEqual((await rpc(page, '/protected')).body.ids, [previous]);
         assert.equal((await rpc(page, '/cleanup', { id: previous })).status, 409);
         report.checks.push(
@@ -382,7 +421,7 @@ try {
         );
         const target = await registry(page, 'snapshotLogout');
         assert.deepEqual(target.ids, [response2.body.id]);
-        assert.equal((await rpc(page, '/logout', target)).status, 200);
+        assert.equal((await rpc(page, '/revoke-targets', target)).status, 200);
         assert.equal((await rpc(page, '/protected')).status, 401);
         report.checks.push(
             'Cross-tab confirmation order removes prior-ticket SID metadata even when that SID was acknowledged after the newer intent began.'
@@ -397,7 +436,7 @@ try {
         assert.equal(await registry(page, 'bind', [prepared.intent.id, replacement]), false);
         const target = await registry(page, 'snapshotLogout');
         assert.deepEqual(target.tickets, [prepared.ticket]);
-        assert.equal((await rpc(page, '/logout', target)).status, 200);
+        assert.equal((await rpc(page, '/revoke-targets', target)).status, 200);
         assert.equal((await rpc(page, '/protected')).status, 401);
         report.checks.push(
             'Ticket retry cannot rebind an intent and orphan a committed login; duplicate identical binding stays idempotent.'
@@ -411,7 +450,7 @@ try {
         assert.equal((await rpc(page, '/protected')).status, 401);
         assert.equal(
             (
-                await rpc(page, '/logout', {
+                await rpc(page, '/revoke-targets', {
                     tickets: [{ ...prepared.ticket, cancelToken: 'guess' }],
                 })
             ).status,
@@ -423,6 +462,157 @@ try {
         model.unavailable = false;
         report.checks.push(
             'Wrong password and guessed cancellation cannot grant access or mutate the ticket; unavailable revocation storage fails closed with 503.'
+        );
+    }
+    {
+        const page = await fixture();
+        await login(page);
+        await resetRegistry(page);
+        const empty = await registry(page, 'snapshotLogout');
+        assert.equal((await rpc(page, '/revoke-targets', empty)).status, 409);
+        assert.equal((await recoveryLogout(page)).response.status, 200);
+        assert.equal((await rpc(page, '/protected')).status, 401);
+        report.checks.push(
+            'Deleted IndexedDB with active HttpOnly Cookie: empty logout rejects; recovered server snapshot revokes the actual session.'
+        );
+    }
+    {
+        const page = await fixture();
+        await login(page);
+        await resetRegistry(page);
+        await prepare(page);
+        assert.equal((await logout(page)).response.status, 200);
+        assert.equal((await rpc(page, '/protected')).status, 401);
+        report.checks.push(
+            'Recreated registry with a newer uncommitted ticket: ordinary browser logout captures and revokes both the older active SID and the pending operation.'
+        );
+    }
+    for (const mode of ['hold', 'before']) {
+        const page = await fixture(),
+            prepared = await prepare(page);
+        const response = await rpc(page, '/login', prepared.request);
+        assert.equal(response.status, 200);
+        assert.equal((await rpc(page, '/protected')).status, 401);
+        const held = gate('/ack', mode),
+            ack = rpc(page, '/ack', { ticket: prepared.ticket });
+        await held.reached;
+        await resetRegistry(page);
+        assert.equal((await recoveryLogout(page)).response.status, 200);
+        held.release();
+        const confirmed = await ack;
+        assert.equal(confirmed.body.confirmed, mode === 'hold');
+        assert.equal((await rpc(page, '/protected')).status, 401);
+        report.checks.push(
+            `Registry loss with confirm ${mode === 'hold' ? 'already committed' : 'not yet committed'}: recovery revokes both pending and active states.`
+        );
+    }
+    {
+        const page = await fixture(),
+            prepared = await prepare(page),
+            held = gate('/login');
+        const delayed = rpc(page, '/login', prepared.request);
+        await held.reached;
+        await resetRegistry(page);
+        const recovered = await recoveryLogout(page);
+        assert.equal(recovered.response.status, 200);
+        held.release();
+        await delayed;
+        assert.equal(await registry(page, 'canConfirm', [prepared.intent.id]), false);
+        assert.equal((await rpc(page, '/ack', { ticket: prepared.ticket })).body.confirmed, false);
+        assert.equal((await rpc(page, '/protected')).status, 401);
+        report.checks.push(
+            'Recovery captures the operation Cookie before a late login SID Cookie arrives; neither old confirm nor protected access succeeds.'
+        );
+    }
+    {
+        const page = await fixture(),
+            prepared = await prepare(page),
+            held = gate('/login');
+        const delayed = rpc(page, '/login', prepared.request);
+        await held.reached;
+        await context.clearCookies();
+        await resetRegistry(page);
+        const fresh = await registry(page, 'begin');
+        assert.notEqual(fresh.id, prepared.intent.id);
+        assert.equal(await registry(page, 'bind', [prepared.intent.id, prepared.ticket]), false);
+        const unknown = await recoveryLogout(page);
+        assert.equal(unknown.response.status, 409);
+        held.release();
+        await delayed;
+        assert.equal(await registry(page, 'canConfirm', [prepared.intent.id]), false);
+        assert.equal((await rpc(page, '/protected')).status, 401);
+        assert.equal((await rpc(page, '/renew')).status, 401);
+        const recovered = await recoveryLogout(page);
+        assert.equal(recovered.response.status, 200);
+        assert.equal(recovered.snapshot.ticketCount, 0);
+        assert.equal(Object.hasOwn(recovered.snapshot, 'cancelToken'), false);
+        assert.equal((await rpc(page, '/ack', { ticket: prepared.ticket })).body.confirmed, false);
+        report.checks.push(
+            'All browser proofs lost: unknown recovery stays unconfirmed; late login is pending, cannot renew, and can be revoked without restoring activation ability.'
+        );
+    }
+    for (const mode of ['unavailable', 'drop']) {
+        const page = await fixture();
+        await login(page);
+        await resetRegistry(page);
+        const held = gate('/logout-recovered', mode),
+            recovered = await recoveryLogout(page);
+        await held.finished;
+        assert.equal(recovered.response.status, mode === 'drop' ? 0 : 503);
+        const other = await secondTab();
+        const blocked = await registry(other, 'begin').then(
+            () => false,
+            () => true
+        );
+        assert.equal(blocked, true);
+        await page.reload();
+        await page.waitForFunction(() => window.ready);
+        const saved = await registry(page, 'retryRecovery', [recovered.operation.id]);
+        assert.deepEqual(saved.snapshot, recovered.snapshot);
+        assert.equal((await rpc(page, '/logout-recovered', saved.snapshot)).status, 200);
+        await registry(page, 'completeRecovery', [saved.id]);
+        const current = await login(other);
+        assert.equal((await rpc(page, '/logout-recovered', saved.snapshot)).status, 200);
+        assert.deepEqual((await rpc(other, '/protected')).body.ids, [current.response.body.id]);
+        report.checks.push(
+            `Recovery logout ${mode}: cross-tab admission stays frozen, persisted snapshot retries and never revokes a subsequent login.`
+        );
+    }
+    {
+        const page = await fixture();
+        await login(page);
+        const next = await prepare(page),
+            response = await rpc(page, '/login', next.request);
+        const held = gate('/ack', 'before'),
+            confirm = rpc(page, '/ack', { ticket: next.ticket });
+        await held.reached;
+        await context.clearCookies({ name: `__Host-misub_sid_${response.body.id}` });
+        await context.clearCookies({ name: `__Host-misub_op_${next.ticket.id}` });
+        assert.equal((await logout(page)).response.status, 200);
+        held.release();
+        assert.equal((await confirm).body.confirmed, false);
+        assert.equal((await rpc(page, '/protected')).status, 401);
+        report.checks.push(
+            'A pending confirm retains only its IndexedDB cancellation proof after selective Cookie eviction; full logout includes that proof and atomically blocks the confirm.'
+        );
+    }
+    {
+        const page = await fixture();
+        for (let i = 0; i < 16; i++) {
+            await registry(page, 'begin');
+            await rpc(page, '/ticket');
+        }
+        assert.equal(
+            await registry(page, 'begin').then(
+                () => false,
+                () => true
+            ),
+            true
+        );
+        assert.equal((await logout(page)).response.status, 200);
+        assert.ok((await registry(page, 'begin')).id);
+        report.checks.push(
+            'Unbound ticket responses count toward the 16-operation admission budget; recovery cancels their Cookie-backed server operations and releases the budget.'
         );
     }
     assert.deepEqual(report.external, []);

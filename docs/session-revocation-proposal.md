@@ -1,81 +1,47 @@
-# 会话撤销与 Cookie 响应乱序：离线协议提案
+# 会话撤销、响应乱序与浏览器状态恢复
 
-状态：2026-10-14，供 PR #40 架构决策与离线审查。`experiments/session-cookie-protocol/` 使用内存 SQLite 和可预测的合成凭据，未接入 MiSub 的登录、续期、登出或鉴权路由。现有产品的 Cookie 复活问题仍是上线阻塞项。
+状态：2026-10-14，离线候选协议。`experiments/session-cookie-protocol/` 未接入产品鉴权，使用合成凭据。产品 Cookie 复活问题仍未解决；本文不代表 Cloudflare 部署、生产迁移或实网验收通过。
 
-## 问题与保证范围
+## 后端授权边界
 
-现有 `functions/modules/auth-middleware.js` 使用带时间戳的签名 Cookie；登录和普通请求的续期响应写同名 `auth_session`，登出仅清除浏览器 Cookie。服务端缺少可撤销会话记录。已经发出的登录或续期响应若晚于登出送达，会再次写入仍可通过鉴权的凭据；反向顺序中，旧登出响应可能清掉新登录的 Cookie。前端请求代次和回调过滤不能控制浏览器处理 `Set-Cookie`。
+旧产品用时间戳签名的同名 `auth_session`，退出仅删除浏览器 Cookie。迟到登录或 GET 续期会写回有效凭据，迟到退出可能删除新 Cookie。[RFC 6265](https://www.rfc-editor.org/rfc/rfc6265) 描述了并发 Set-Cookie 竞争；过滤前端回调不能撤销服务端权限。
 
-RFC 6265 说明同名、同域、同路径 Cookie 会被替换，并明确并发 `Set-Cookie` 的响应竞争。此提案据此区分两个问题：服务端撤销旧凭据的授权，以及避免旧响应覆盖新凭据的 Cookie 存储。参见 [RFC 6265，4.1.1、4.1.2 和 5.3](https://www.rfc-editor.org/rfc/rfc6265)。
+候选协议保证退出事务提交后，固定捕获的会话和登录操作不能再次鉴权或激活，随后独立开始的新登录不受旧退出重试影响。已经完成鉴权的业务请求仍属于业务事务边界。
 
-目标保证是：一次登出事务成功提交后，后续鉴权拒绝该动作固定捕获的旧会话及待完成登录；随后独立发起的新登录仍可使用。已经完成鉴权的业务请求是否继续提交，属于业务事务边界，本提案不能撤回已准入的操作。
+1. IndexedDB 在票据 HTTP 发出前登记随机操作 ID，同源标签共用登记。最多保留 16 项操作，包括正文丢失、尚未绑定票据的操作。重建数据库不重用旧 ID。
+2. 每张票据带对应操作的取消证明，通过独立名称的 Secure、HttpOnly、SameSite=Strict、Path=/ Cookie 留下恢复证明。响应必须绑定原操作，不能被另一票据覆盖。
+3. 密码登录仅签发 **pending SID**，使用永不重用的 Cookie 名称。pending 不能鉴权或续期；服务端仅存 secret 摘要。实验顺序 ID/凭据必须由生产 CSPRNG 替代。
+4. 收到 SID Cookie 后，浏览器在当前未取消操作中发出 confirm。服务端在同一事务检查原操作证明、Cookie、撤销状态和期限后激活。confirm 不写 Cookie；恢复接口不重发激活证明。
+5. 续期只延长服务端 idle 期限，受绝对寿命约束，不发送 Set-Cookie。初次 Cookie 使用绝对寿命；登录重试只返回元数据，不重发 secret 或 Cookie。
+6. 普通退出先冻结同源新登录和确认准入，再将冻结的已知 SID、票据证明与实际 Cookie 一起交给服务端。服务器验证全部显式目标，将 active、pending SID 和票据的并集存成固定快照。仍有效但无证明的已知 SID 会拒绝整次捕获。
+7. 一个事务撤销全部快照目标。503、丢响应和重载保持未确认；重试仅使用原快照，不扩大到自动附带的新 Cookie。取消证明始终只指向旧 ID，迟到重试不能撤销新会话。
 
-## 候选协议
+`revokeTargets()` 是定点撤销原语，仅返回 `revokedTargets`，不表示整个浏览器已退出。浏览器退出统一使用 `captureRecovery()` 与 `logoutRecovered()`。空目标、无可恢复证明不当成退出成功。
 
-1. 浏览器先在同源 IndexedDB 事务中登记登录意图，再请求一次性登录票据。票据有独立取消能力，只能取消对应操作及其生成的会话，不能用于登录。登录意图只允许绑定一个票据；相同绑定可重试，另一票据不能覆盖它。
-2. 登录提交密码、票据、取消证明，以及动作开始时捕获的旧 SID 和待完成票据。服务端在一个事务内验证全部证明、撤销这些旧目标、取消这些旧操作，再签发全新 SID 和随机凭据。生产发行器必须用密码学安全随机数；实验中的顺序 ID 和字符串仅供 fixtures 使用。
-3. 每个 SID 使用唯一 Cookie 名称，例如 `__Host-misub_sid_<sid>`，带 `Secure; HttpOnly; SameSite=Strict; Path=/`。SID 永不重用，Cookie 中包含独立的 bearer secret。服务端仅保存 secret 摘要、到期时间和撤销状态。新登录必须轮换凭据，不能将匿名范围标识升级为登录凭据；参见 [OWASP Session Management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)。
-4. 浏览器收到登录结果后另行确认对应 Cookie 已能通过鉴权，再将公开 SID 记录为已确认。跨标签页共用 IndexedDB，保留 SID 与公开票据 ID 的关联，后续登录可以清理已被替换的旧记录。JS 不读取或保存会话 bearer secret。
-5. 登出先持久化固定目标快照：当时已确认的 SID，以及仍在途的票据和取消证明。服务器验证全部目标后原子撤销。显式指定的活动 SID 缺少对应 Cookie 或票据证明时返回 403，不能确认成功或只撤销其中一部分。
-6. 登出响应不写通用清除 Cookie。重试使用同一快照，忽略 HTTP 自动附带但不在快照内的新会话；因此旧登出不能撤销之后的新登录。续期只延长同一 SID 和同一凭据，不创建新的授权代次。
-7. 丢失的登录响应重试仅返回已提交状态与公开 SID，不重建 secret、不重新签发 Cookie。若没有收到 Cookie，需要用户再次明确提交密码创建新登录。网络错误或 503 不等于登出成功；快照保留供重试。
+## 恢复与容量
 
-```mermaid
-sequenceDiagram
-    participant A as 标签页 A
-    participant B as 标签页 B
-    participant S as 会话存储
-    A->>S: 票据 T + 密码，创建 SID1
-    Note over A,S: 登录 Set-Cookie 响应暂未送达
-    B->>S: 登出快照包含 T
-    S->>S: 原子取消 T 并撤销 SID1
-    S-->>B: 登出成功，不清除后续 Cookie
-    S-->>A: 迟到的 SID1 Cookie
-    A->>S: 使用 SID1 请求受保护资源
-    S-->>A: 拒绝已撤销会话
-```
+- IndexedDB 丢失：从实际 Cookie 找回 pending/active SID 和取消票据。新 registry 已有未完成票据时，仍须捕获旧的活动 Cookie。
+- Cookie 选择性丢失：仍在 IndexedDB 的取消证明进入快照；不能丢弃可撤销在途确认的证明。
+- IndexedDB 与取消 Cookie 全丢失、登录响应仍在途：迟到 SID 保持 pending；新 registry 没有旧操作的确认准入，恢复只能撤销，不能激活。
+- 所有证明丢失且 confirm 已在途：confirm 与续期都不写 Cookie，不会恢复已清空浏览器的登录；但无法证明不可关联、可能复制到其他客户端的凭据也被撤销。更大范围保证需要可恢复服务端作用域或明确的全设备撤销。
+- 普通鉴权最多 8 个 SID、4 KiB。维护限制 16 KiB、32 个 SID，最多解析 256 个操作 Cookie，每次清理最多 32 个失效票据。active/pending SID 和可用取消 Cookie 不允许清理。超过维护和平台头部上限的恢复仍待实现与实测。
+- IndexedDB 不可用、目标覆盖不足时保持未确认；页面状态不能作为退出证据。实际产品的多版本网页、崩溃、Cookie 淘汰仍需接线验收。
 
-## 存储、事务与可用性
+## D1 持久化候选边界
 
-所需逻辑表是 `sessions(sid, secret_hash, expires, revoked)` 与 `login_operations(id, cancel_hash, redeem_deadline, state, sid)`。取消票据的授权期与登录兑换期不同：已提交票据的映射必须保留到其会话不再可能授权，包含未确认和未送达响应的情况。撤销/过期记录可回收，但未知 SID 和未知票据必须始终拒绝，不能按来路重建。生产还需要绝对会话期限、操作保留期、索引和清理预算。
+`d1-state.js` 是独立持久化实验，尚未将完整协议状态机移植到 D1。每次读取和每个 CAS 重试创建新的 `first-primary` 会话；整个候选状态由一条带 revision 条件的 UPDATE 提交，冲突重新读取并重算。提交响应丢失返回未确认，不盲目重发凭据。缺表、坏格式、超过 256 KiB、未知写结果或竞争重试耗尽均为 503；请求不创建表或初始化记录。
 
-每次鉴权都依赖最新的服务端状态。会话库不可用时返回 503，不回退到旧签名 Cookie，也不缓存“仍有效”的结论。D1 文档描述 `batch()` 的事务回滚语义；未使用 Sessions API 的查询访问主实例。若使用 `withSession('first-primary')`，只有该会话的首次查询明确访问主实例，不能将其误认为此后每次读取都访问主实例。生产适配器必须证明每个鉴权请求的最新读取，以及条件校验、旧状态撤销和新会话创建的同一事务边界。当前 Node SQLite 的同步 `BEGIN IMMEDIATE` **不是 D1 适配器验收**。参见 [D1 Database API](https://developers.cloudflare.com/d1/worker-api/d1-database/)。
+单行状态方案仍需验证容量、争用、完整 schema、GC、收据保留和灾难恢复。它不是已验收的生产 adapter。平台语义见 [D1 数据库接口](https://developers.cloudflare.com/d1/worker-api/d1-database/)；[KV 最终一致性](https://developers.cloudflare.com/kv/concepts/how-kv-works/)不能满足即时撤销。
 
-Workers KV 的最终一致性不适用于本提案的即时撤销保证。参见 [Workers KV 一致性说明](https://developers.cloudflare.com/kv/concepts/how-kv-works/)。
+建议以独立 `MISUB_SESSION_DB` 接口准备生产实现；复用安全 D1 会耦合登录与通知/审计的可用性。接口选择不等于创建资源、绑定或迁移授权。产品切换必须拒绝旧签名 Cookie，并明确强制重登和回滚策略。
 
-| 待选存储方案        | 影响                                                                                                                     |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| 专用会话 D1（建议） | 需新增明确授权的 binding、迁移和运维；鉴权不与订阅数据或通知审计表共享故障域。每次鉴权增加数据库读取，需评估延迟和费用。 |
-| 明确复用安全 D1     | 减少一个数据库资源，但必须先核实该 binding 的部署状态，并接受登录、审计/通知共用可用性和写入预算；仍需新增表与权限审查。 |
+## 验证与尚未交付
 
-未创建数据库、密钥、身份、binding 或迁移执行任务，也未更改工作流。产品接入和生产资源操作分别审批。
-
-## 浏览器状态、容量与尚未完成的边界
-
-实验的正常鉴权最多解析 8 个候选 Cookie、4 KiB；维护路径单独限制为 32 个候选、16 KiB，只返回服务端已失效的 SID。固定 SID 清理接口不经过正常鉴权的数量限制，并再次确认 SID 不活跃才发送对应删除 Cookie。正常登录前后执行维护；迟到的清理只能删除永不重用的旧名称。超维护上限时仍拒绝；如果客户端持有旧 SID 元数据，可以逐个清理，未知 Cookie 的超限恢复 UI 与平台入口头部上限尚未验收，不能承诺任意数量可自动恢复。
-
-IndexedDB 最多准入 16 个已绑定的待完成登录，超额先处理已有操作。已取消但尚未绑定的意图可以回收；晚到的绑定必须失败。登出快照及确认都使用 IndexedDB 读写事务，不能用单标签页内存队列代替。
-
-以下是接入生产前必须实现和验证的工作，不属于当前实验已经完成的保证：
-
-- **本地协调数据丢失。** 若 IndexedDB 被清空而 Cookie 仍有效，新 registry 的空快照不能代表已登出。生产需要受保护的当前 SID 元数据恢复、带代次的跨标签页同步和操作准入；无法找回在途票据取消能力时必须显示未确认状态或要求撤销更大范围。当前实验未实现恢复，空快照可能确认成功而仍保留旧权限，因此不可直接用于产品。
-- **持久化失败和崩溃。** IndexedDB 不可用时停止登录/登出准入；崩溃恢复需要明确如何处理保存的未完成快照、不同网页版本、被淘汰的 Cookie，以及丢失尚未绑定的票据响应。
-- **接口与资源保护。** 实际路由的 Origin/CSRF、缓存禁止、请求体/票据长度、匿名票据发行限流、密码尝试限流、重复操作配额、清理预算、随机数、常量时间比较及日志脱敏需要复用并检验现有安全机制。实验路由只存在于 Playwright 拦截器，未替代这些检查。
-- **迁移和回滚。** 建议版本切换时一次性拒绝旧 `auth_session` 并要求重新登录。自动接受旧 Cookie 会重新引入无法撤销的授权。若发布回滚到旧鉴权实现，保证也随之失效，需明确回滚策略和用户提示。
-- **登出范围。** 当前设计针对同一浏览器存储中的已知会话和在途登录。跨设备/全管理员会话撤销需要用户级 epoch 或额外索引、独立明确操作及测试，不能暗中扩大普通登出的范围。
-- **真实运行环境。** Cloudflare D1 并发和主实例读取、多个 Worker 实例、Safari/WebKit、代理/CDN 响应处理与移动端存储回收均未实测。
-
-## 离线复现与验收
-
-运行需要 Node.js 22.13+（内置 `node:sqlite`），仓库依赖和本机已有的 Playwright Chromium。测试全部使用合成凭据；浏览器只访问拦截的 `https://session-protocol-fixture.invalid`，外部请求中止，无监听公网端口。
+Node SQLite 与真实 Chromium Cookie/IndexedDB 均使用合成身份和截获 HTTPS，无后端出网。响应 gate 控制服务端提交前与送达前，覆盖响应顺序、状态丢失、跨标签、失败重试、新登录保护、期限和容量。固定提交计数记录在任务与 PR，模型不能替代产品路由验收。
 
 ```sh
-node node_modules/vitest/vitest.mjs run tests/unit/session-cookie-protocol-model.test.js
+node node_modules/vitest/vitest.mjs run tests/unit/session-cookie-protocol-model.test.js tests/unit/session-cookie-recovery.test.js tests/unit/session-cookie-d1-state.test.js
 node tests/browser/session-cookie-protocol.mjs /absolute/path/to/evidence
 ```
 
-可用 `MISUB_BROWSER_EXECUTABLE` 指定已有的 Chromium。浏览器报告记录 UTC 时间、Git HEAD、模型与 registry 的 SHA-256、检查结果、状态码、浏览器版本及拦截越界请求，不记录 Cookie 值或取消证明。
-
-当前验证分为 SQLite 模型的响应排列与事务测试，以及真实 Chromium Cookie/IndexedDB 上运行的候选协议测试。它们不使用产品 auth handler；已有产品 Cookie 乱序复现与候选方案通过是两组不同证据。最终执行计数和独立复验记录在 PR #40。
-
-产品接入前需要确认：会话存储选择、旧会话强制重新登录与回滚策略、普通登出范围及协调数据丢失后的恢复语义。确认前可以继续适配器设计和离线测试，不能以本实验通过替代产品修复、Cloudflare 部署或实网验收。
+仍需：完整 D1 状态机与产品 auth/session 接线、CSPRNG、Origin/CSRF 与限流、GC/恢复 epoch、请求和日志脱敏、启用与旧 token 截止、Cloudflare 多 Worker/D1 并发、Safari/WebKit 和实际用户浏览器验收。本目录未改变 `functions/`、`src/`、工作流或生产配置。
