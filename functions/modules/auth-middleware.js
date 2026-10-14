@@ -13,6 +13,8 @@ import {
     readJsonWithLimit,
 } from './utils.js';
 import { StorageFactory } from '../storage-adapter.js';
+import { SessionAuthority, sessionProtocol } from './session-authority.js';
+import { handleSessionRequest, sessionError } from './session-handler.js';
 
 function normalizeSecret(value) {
     return String(value ?? '')
@@ -116,6 +118,22 @@ export async function verifySignedToken(key, token) {
  * @returns {Promise<Object>}
  */
 export async function getAuthSessionDiagnostic(request, env) {
+    if (sessionProtocol(env) === 'd1-v1') {
+        const header = request.headers.get('Cookie') || '';
+        if (!header.includes('__Host-misub_sid_'))
+            return {
+                isAuthenticated: false,
+                shouldRenew: false,
+                protocol: 'd1-v1',
+                reason: 'no_cookie',
+            };
+        const auth = await new SessionAuthority(env.MISUB_SESSION_DB).authenticate(header);
+        return {
+            ...auth,
+            protocol: 'd1-v1',
+            reason: auth.isAuthenticated ? 'ok' : 'session_invalid',
+        };
+    }
     const result = {
         isAuthenticated: false,
         reason: 'unknown',
@@ -221,6 +239,25 @@ export async function getAuthSessionDiagnostic(request, env) {
  * @returns {Promise<Response>}
  */
 export async function renewAuthSession(request, env, response, diagnostic = null) {
+    if (sessionProtocol(env) === 'd1-v1') {
+        if (
+            response.status >= 400 ||
+            !(request.headers.get('Cookie') || '').includes('__Host-misub_sid_')
+        )
+            return response;
+        // Authorization precedes route execution. An optional idle-time extension must
+        // not replace an already produced response during a subsequent store outage.
+        try {
+            const current = await getAuthSessionDiagnostic(request, env);
+            if (current.isAuthenticated && current.shouldRenew)
+                await new SessionAuthority(env.MISUB_SESSION_DB).renew(
+                    request.headers.get('Cookie') || ''
+                );
+        } catch {
+            /* A failed extension leaves the existing server expiry unchanged. */
+        }
+        return response;
+    }
     const authDiagnostic = diagnostic || (await getAuthSessionDiagnostic(request, env));
     if (!authDiagnostic?.isAuthenticated || !authDiagnostic.shouldRenew) {
         return response;
@@ -303,6 +340,7 @@ export async function authMiddleware(request, env) {
         const diagnostic = await getAuthSessionDiagnostic(request, env);
         return diagnostic.isAuthenticated;
     } catch (e) {
+        if (env?.SESSION_AUTH_MODE) throw e;
         console.error('[Auth] 鉴权失败', { ...logMeta, error: e?.message });
         return false;
     }
@@ -315,6 +353,11 @@ export async function authMiddleware(request, env) {
  * @returns {Promise<Response>} 登录响应
  */
 export async function handleLogin(request, env) {
+    try {
+        if (sessionProtocol(env) === 'd1-v1') return handleSessionRequest(request, env, '/login');
+    } catch (error) {
+        return sessionError(error);
+    }
     if (request.method !== 'POST') {
         return new Response('Method Not Allowed', { status: 405 });
     }
@@ -374,7 +417,12 @@ export async function handleLogin(request, env) {
  * 处理用户登出
  * @returns {Promise<Response>} 登出响应
  */
-export async function handleLogout(request) {
+export async function handleLogout(request, env) {
+    try {
+        if (sessionProtocol(env) === 'd1-v1') return handleSessionRequest(request, env, '/logout');
+    } catch (error) {
+        return sessionError(error);
+    }
     const headers = new Headers({ 'Content-Type': 'application/json' });
     const isSecure = typeof request?.url === 'string' && request.url.startsWith('https');
     const secureFlag = isSecure ? 'Secure;' : '';

@@ -4,6 +4,7 @@
 
 import { api, APIError } from './http.js';
 import { t } from '../i18n/index.js';
+import { sessionClient } from './session-client.js';
 
 /**
  * 统一的 API 错误处理辅助函数
@@ -107,11 +108,7 @@ export async function fetchInitialData({ shouldHandleUnauthorized } = {}) {
 
 export async function login(password) {
     try {
-        const data = await api.post(
-            '/api/login',
-            { password },
-            { shouldHandleUnauthorized: () => false }
-        );
+        const data = await sessionClient().login(password);
         return { success: true, data };
     } catch (error) {
         if (error instanceof APIError && (error.status === 429 || error.status === 503)) {

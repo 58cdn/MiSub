@@ -461,7 +461,12 @@
 
             <!-- LOGIN VIEW (Not logged in, not public) -->
             <template v-else>
-                <component :is="loginComponent" :login="login" />
+                <component
+                    :is="loginComponent"
+                    :login="login"
+                    :logout-pending="sessionStore.logoutPending"
+                    :retry-logout="logout"
+                />
             </template>
         </main>
 

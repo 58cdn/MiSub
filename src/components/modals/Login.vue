@@ -24,7 +24,22 @@
 
     const props = defineProps({
         login: Function,
+        logoutPending: Boolean,
+        retryLogout: Function,
     });
+
+    const retryPendingLogout = async () => {
+        if (isLoading.value || !props.retryLogout) return;
+        isLoading.value = true;
+        try {
+            if (!(await props.retryLogout())) error.value = t('session.unconfirmed');
+            else error.value = '';
+        } catch {
+            error.value = t('session.unconfirmed');
+        } finally {
+            isLoading.value = false;
+        }
+    };
 
     const submitLogin = async () => {
         if (isLoading.value || retrySeconds.value > 0) return;
@@ -110,6 +125,21 @@
             </div>
 
             <form @submit.prevent="submitLogin" class="space-y-8 relative z-10 w-full mb-4">
+                <div
+                    v-if="logoutPending"
+                    role="alert"
+                    class="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100"
+                >
+                    <p>{{ t('session.unconfirmed') }}</p>
+                    <button
+                        type="button"
+                        :disabled="isLoading"
+                        class="mt-2 font-semibold underline disabled:opacity-50"
+                        @click="retryPendingLogout"
+                    >
+                        {{ t('session.retry') }}
+                    </button>
+                </div>
                 <div class="relative w-full group" :class="{ 'animate-shake': error }">
                     <div
                         class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none transition-colors"

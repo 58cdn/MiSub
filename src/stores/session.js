@@ -7,6 +7,7 @@ import { advanceSessionGeneration, currentSessionGeneration } from '../lib/sessi
 import { handleError } from '../utils/errorHandler.js';
 import { useDataStore } from './useDataStore';
 import { t } from '../i18n/index.js';
+import { onSessionChange, sessionClient } from '../lib/session-client.js';
 
 export const useSessionStore = defineStore('session', () => {
     const sessionState = ref('loading'); // loading, loggedIn, loggedOut
@@ -14,6 +15,7 @@ export const useSessionStore = defineStore('session', () => {
     const subscriptionConfig = ref({});
     const securityWarning = ref(null);
     const loginSecurity = ref(null);
+    const logoutPending = ref(false);
     const defaultPublicConfig = Object.freeze({
         enablePublicPage: true,
         isLoginPath: false,
@@ -40,6 +42,14 @@ export const useSessionStore = defineStore('session', () => {
     }); // Default true until fetched
     const hasLoadedPublicConfig = ref(false);
     let checkSequence = 0;
+    onSessionChange((type) => {
+        if (type === 'logout-pending' || type === 'logout-complete') {
+            clearSession();
+            logoutPending.value = type === 'logout-pending';
+        } else if (type === 'login-complete') {
+            advanceSessionGeneration();
+        }
+    });
 
     function clearSession() {
         advanceSessionGeneration();
@@ -56,6 +66,19 @@ export const useSessionStore = defineStore('session', () => {
         const sequence = ++checkSequence;
         const isCurrent = () =>
             generation === currentSessionGeneration() && sequence === checkSequence;
+        try {
+            if (await sessionClient().recoveryPending()) {
+                if (!isCurrent()) return null;
+                clearSession();
+                logoutPending.value = true;
+                return false;
+            }
+        } catch (error) {
+            if (!isCurrent()) return null;
+            clearSession();
+            handleError(error, t('settings.sessionCheckContext'), { errorType: 'server' });
+            return false;
+        }
         // Parallel fetch of initial data (auth check) and public config
         const [dataResult, pConfigResult] = await Promise.all([
             fetchInitialData({ shouldHandleUnauthorized: isCurrent }),
@@ -108,6 +131,7 @@ export const useSessionStore = defineStore('session', () => {
         const result = await apiLogin(password);
         if (generation !== currentSessionGeneration()) return false;
         if (result.success) {
+            logoutPending.value = false;
             securityWarning.value = result.data?.securityWarning || null;
             loginSecurity.value = result.data?.loginSecurity || null;
             sessionState.value = 'loading';
@@ -140,10 +164,30 @@ export const useSessionStore = defineStore('session', () => {
         const generation = advanceSessionGeneration();
         let logoutConfirmed = false;
         try {
+            const modern = await sessionClient().logout();
+            if (modern.protocol === 'd1-v1') {
+                if (generation !== currentSessionGeneration()) return false;
+                logoutPending.value = false;
+                clearSession();
+                await router.push({ path: '/' });
+                return true;
+            }
             await api.get('/api/logout');
             logoutConfirmed = true;
         } catch (error) {
             if (generation !== currentSessionGeneration()) return false;
+            // A persistent recovery must retain its fixed target set across retries.
+            try {
+                if (await sessionClient().recoveryPending()) {
+                    logoutPending.value = true;
+                    handleError(new Error(t('session.unconfirmed')), t('settings.logoutContext'), {
+                        errorType: 'logout_failed',
+                    });
+                    return false;
+                }
+            } catch {
+                return false;
+            }
             console.warn('Logout request failed:', error);
         }
         if (generation !== currentSessionGeneration()) return false;
@@ -173,6 +217,7 @@ export const useSessionStore = defineStore('session', () => {
         subscriptionConfig,
         securityWarning,
         loginSecurity,
+        logoutPending,
         checkSession,
         handleUnauthorized,
         login,

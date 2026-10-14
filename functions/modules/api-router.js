@@ -4,6 +4,7 @@
  */
 
 import { StorageFactory, DataMigrator } from '../storage-adapter.js';
+import { handleSessionRequest } from './session-handler.js';
 import { KV_KEY_SUBS } from './config.js';
 import {
     createJsonResponse,
@@ -94,6 +95,7 @@ function isAuthDiagnosticsEnabled(env) {
 export async function handleApiRequest(request, env, context = null) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api/, '');
+    if (path.startsWith('/session/')) return handleSessionRequest(request, env, path);
 
     if (path === '/external-nodes-callback') {
         return handleExternalNodesCallbackRequest(request, env);
@@ -293,7 +295,7 @@ export async function handleApiRequest(request, env, context = null) {
 
     // Logout 无需认证（cookie 过期时也需能正常登出）
     if (path === '/logout') {
-        return await handleLogout(request);
+        return await handleLogout(request, env);
     }
 
     // 认证调试端点（默认关闭，不返回敏感值）

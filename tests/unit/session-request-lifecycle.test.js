@@ -49,6 +49,8 @@ beforeEach(() => {
     vi.stubGlobal(
         'fetch',
         vi.fn((url) => {
+            if (url === '/api/session/protocol')
+                return Promise.resolve(response({ protocol: 'legacy' }));
             const queue = queues.get(url);
             if (!queue?.length) throw new Error(`Unexpected offline request: ${url}`);
             return Promise.resolve(queue.shift());

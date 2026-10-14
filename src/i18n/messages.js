@@ -1,8 +1,10 @@
 import { notificationMessages } from './notifications.js';
+import { sessionMessages } from './session.js';
 
 export const messages = {
     'zh-CN': {
         notifications: notificationMessages['zh-CN'],
+        session: sessionMessages['zh-CN'],
         diagnostics: {
             title: '节点诊断',
             action: '诊断',
@@ -1860,6 +1862,7 @@ export const messages = {
     },
     'en-US': {
         notifications: notificationMessages['en-US'],
+        session: sessionMessages['en-US'],
         diagnostics: {
             title: 'Node diagnostics',
             action: 'Diagnose',

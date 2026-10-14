@@ -9,6 +9,13 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../../src/lib/api', () => apiMocks);
+vi.mock('../../src/lib/session-client.js', () => ({
+    onSessionChange: () => () => {},
+    sessionClient: () => ({
+        recoveryPending: async () => false,
+        logout: async () => ({ protocol: 'legacy' }),
+    }),
+}));
 vi.mock('../../src/lib/http.js', () => ({
     api: { get: apiMocks.apiGet },
 }));
