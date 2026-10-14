@@ -629,6 +629,26 @@ try {
             'Unbound ticket responses count toward the 16-operation admission budget; recovery cancels their Cookie-backed server operations and releases the budget.'
         );
     }
+    {
+        const page = await fixture(),
+            other = await secondTab();
+        await login(page);
+        const held = gate('/logout-recovered');
+        const first = recoveryLogout(page);
+        await held.reached;
+        const second = await recoveryLogout(other);
+        assert.equal(second.response.status, 200);
+        held.release();
+        const completed = await first;
+        assert.equal(completed.response.status, 200);
+        assert.deepEqual(completed.snapshot, second.snapshot);
+        assert.equal((await rpc(page, '/protected')).status, 401);
+        await login(other);
+        assert.equal((await rpc(other, '/protected')).status, 200);
+        report.checks.push(
+            'Two ordinary concurrent logout calls complete the same persisted snapshot idempotently and release the login admission gate.'
+        );
+    }
     for (const lateTicket of [false, true]) {
         const page = await fixture();
         let delayed, held, oldIntent;

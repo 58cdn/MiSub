@@ -144,7 +144,8 @@ export function createPendingLoginRegistry(indexedDB, name = 'misub-session-prot
         completeRecovery: (id) =>
             transact((state) => {
                 const recovery = state.recoveries[id];
-                if (!recovery?.snapshot) throw new Error('recovery_unconfirmed');
+                if (!recovery) return;
+                if (!recovery.snapshot) throw new Error('recovery_unconfirmed');
                 for (const intentId of recovery.intentIds) delete state.intents[intentId];
                 const captured = new Set([...recovery.knownIds, ...recovery.snapshot.ids]);
                 state.known = state.known.filter((sid) => !captured.has(sid));
