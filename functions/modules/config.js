@@ -18,6 +18,7 @@ export const DEFAULT_SUBCONVERTER_BACKEND = 'subapi.cmliussss.net';
 // Default settings
 export const DEFAULT_SETTINGS = {
     FileName: 'MiSub',
+    groupsPageSize: 20,
     mytoken: 'auto',
     profileToken: 'profiles',
     transformConfigMode: 'builtin',
