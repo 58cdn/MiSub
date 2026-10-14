@@ -44,6 +44,8 @@ MiSub 主应用与 MiSub Probe 独立维护版本；检测器 Git 标签采用 `
 
 ### 修复
 
+- 订阅或订阅组读取失败、数据损坏或所选存储绑定缺失时明确报错；保存先完整读取两类数据，失败时停止通知与业务写入，管理读取绕过旧集合缓存。（[#41]）
+- 保存订阅与订阅组时拒绝缺失、无效或重复的 ID，避免写入无法完整加载的数据。（[#41]）
 - 机场订阅在筛选状态下排序时保留隐藏订阅及其订阅组引用，排序只调整参与条目的位置并保留最新字段。（[#33]）
 - 检测器发行按固定 Release ID 验收草稿和公开，支持完整核验已有产物与来源证明后继续发布。（[#31]）
 - 草稿公开后的资产校验接受固定 tag 下载地址的规范化变化，同时保持 Release、资产 ID、文件摘要及其他身份字段校验。（[#29]）
@@ -133,4 +135,5 @@ MiSub 主应用与 MiSub Probe 独立维护版本；检测器 Git 标签采用 `
 [#29]: https://github.com/58cdn/MiSub/pull/29
 [#30]: https://github.com/58cdn/MiSub/pull/30
 [#31]: https://github.com/58cdn/MiSub/pull/31
+[#41]: https://github.com/58cdn/MiSub/pull/41
 [#33]: https://github.com/58cdn/MiSub/issues/33
