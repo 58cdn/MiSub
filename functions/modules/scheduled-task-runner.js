@@ -7,6 +7,8 @@
 import { StorageFactory, SettingsCache } from '../storage-adapter.js';
 import { KV_KEY_SETTINGS } from './config.js';
 import { performWebdavBackup } from './webdav-backup-handler.js';
+import { isAtomicSubscriptionStorage } from '../services/subscription-protocol/index.js';
+import { commitWebdavStatusPatch } from '../services/domain-settings-service.js';
 
 const LOCK_KEY = 'misub_webdav_backup_lock';
 const CHECK_THROTTLE_MS = 5 * 60 * 1000;
@@ -41,8 +43,12 @@ export async function maybeRunScheduledTasks(context = {}, options = {}) {
     if (!env) return { skipped: true, reason: 'missing-env' };
 
     const storageAdapter = await getStorage(env);
-    const settings =
-        (await storageAdapter.get(KV_KEY_SETTINGS)) || (await SettingsCache.get(env)) || {};
+    const snapshot = isAtomicSubscriptionStorage(storageAdapter)
+        ? await storageAdapter.readDomainSnapshot()
+        : null;
+    const settings = snapshot
+        ? snapshot.settings
+        : (await storageAdapter.get(KV_KEY_SETTINGS)) || (await SettingsCache.get(env)) || {};
     const config = settings.webdavBackup || {};
 
     if (!config.enabled || !config.autoBackup) {
@@ -62,7 +68,13 @@ export async function maybeRunScheduledTasks(context = {}, options = {}) {
             lastCheckedAt: new Date(now).toISOString(),
         },
     };
-    await storageAdapter.put(KV_KEY_SETTINGS, updatedSettings);
+    if (snapshot) {
+        await commitWebdavStatusPatch(
+            storageAdapter,
+            { lastCheckedAt: new Date(now).toISOString() },
+            { expectedEpoch: snapshot.version.epoch }
+        );
+    } else await storageAdapter.put(KV_KEY_SETTINGS, updatedSettings);
     SettingsCache.clear();
 
     const lastBackupAt = parseTime(config.lastBackupAt);

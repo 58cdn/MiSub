@@ -6,6 +6,14 @@
 
 import { formatBytes } from './utils.js';
 import { KV_KEY_SUBS, KV_KEY_SETTINGS, DEFAULT_SETTINGS, SYSTEM_CONSTANTS } from './config.js';
+import {
+    isAtomicSubscriptionStorage,
+    captureSubscriptionIdentity,
+    commitRuntimeObservation,
+    protocolError,
+} from '../services/subscription-protocol/index.js';
+import { isSuspiciousNodeCountDrop } from '../services/node-cache-service.js';
+import { handleNodeCountRequest } from './handlers/node-handler.js';
 // 导入核心通知服务及工具
 import {
     sendTgNotification as sendCoreTg,
@@ -108,6 +116,216 @@ export async function checkAndNotify(sub, settings, env) {
     }
 }
 
+export function normalizeSubscriptionSyncConfig(config = {}) {
+    const bounded = (value, fallback, minimum, maximum) => {
+        const number = value === undefined ? fallback : Number(value);
+        if (!Number.isSafeInteger(number) || number < minimum || number > maximum) {
+            const error = new Error('invalid_sync_config');
+            error.status = 400;
+            throw error;
+        }
+        return number;
+    };
+    return {
+        maxSyncCount: bounded(config.maxSyncCount, 50, 0, 1000),
+        concurrency: bounded(config.concurrency, config.enableParallel === false ? 1 : 5, 1, 6),
+        timeout: bounded(config.timeout ?? config.syncTimeout, 30000, 1, 60000),
+    };
+}
+
+/** Fetch canonical observations with bounded work; notification delivery is a separate step. */
+export async function runCanonicalSubscriptionSync(
+    storage,
+    env,
+    config = {},
+    capturedSnapshot = null
+) {
+    const limits = normalizeSubscriptionSyncConfig(config);
+    const atomic = isAtomicSubscriptionStorage(storage);
+    const snapshot =
+        capturedSnapshot ||
+        (atomic
+            ? await storage.readSubscriptionSnapshot()
+            : { subscriptions: await loadSubscriptionsForCron(storage) });
+    const subscriptions = snapshot.subscriptions
+        .filter(
+            (sub) => sub.enabled && typeof sub.url === 'string' && /^https?:\/\//i.test(sub.url)
+        )
+        .slice(0, limits.maxSyncCount);
+    const startTime = Date.now();
+    const applied = [];
+    const failures = [];
+    const details = [];
+    // Batch boundaries also bound outstanding network requests and runtime commits.
+    for (let offset = 0; offset < subscriptions.length; offset += limits.concurrency) {
+        const results = await Promise.allSettled(
+            subscriptions.slice(offset, offset + limits.concurrency).map(async (sub) => {
+                const observation = {
+                    operationId: crypto.randomUUID(),
+                    epoch: snapshot.version?.epoch,
+                    id: sub.id,
+                    observedAt: Date.now(),
+                    ...(atomic ? { identity: await captureSubscriptionIdentity(sub) } : {}),
+                    requestPolicy: snapshot.requestPolicy,
+                };
+                const response = await handleNodeCountRequest(
+                    new Request('https://misub.invalid/api/node_count', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            url: sub.url,
+                            fetchProxy: sub.fetchProxy,
+                            userAgent: sub.customUserAgent,
+                            plusAsSpace: sub.plusAsSpace,
+                            inspectOnly: true,
+                        }),
+                    }),
+                    env,
+                    { requestPolicy: snapshot.requestPolicy, timeoutMs: limits.timeout }
+                );
+                const result = await response.json();
+                if (response.status >= 500) throw protocolError('storage_unavailable');
+                if (!response.ok || !result.success || !result.data) {
+                    return {
+                        name: sub.name,
+                        url: sub.url,
+                        error: result.errorType === 'timeout' ? 'timeout' : 'fetch_failed',
+                    };
+                }
+                const knownCount = Math.max(
+                    Number(sub.lastGoodNodeCount) || 0,
+                    Number(sub.nodeCount) || 0
+                );
+                if (isSuspiciousNodeCountDrop(knownCount, result.data.count)) {
+                    return { name: sub.name, url: sub.url, error: 'observation_protected' };
+                }
+                const fields = {
+                    nodeCount: result.data.count,
+                    ...(result.data.count >= 10 ? { lastGoodNodeCount: result.data.count } : {}),
+                    userInfo: result.data.userInfo,
+                    lastError: null,
+                    lastUpdate: new Date(observation.observedAt).toISOString(),
+                };
+                return {
+                    commit: async () => {
+                        let updated;
+                        if (atomic) {
+                            const outcome = await commitRuntimeObservation(storage, {
+                                ...observation,
+                                fields,
+                            });
+                            if (!outcome.applied)
+                                return { name: sub.name, url: sub.url, error: outcome.reason };
+                            updated = outcome.snapshot.subscriptions.find(
+                                (item) => item.id === sub.id
+                            );
+                        } else {
+                            const identityFields = [
+                                'url',
+                                'fetchProxy',
+                                'customUserAgent',
+                                'plusAsSpace',
+                                'enabled',
+                            ];
+                            const identity = (item) =>
+                                JSON.stringify(identityFields.map((field) => item[field]));
+                            try {
+                                updated = await storage.updateSubscriptionById(
+                                    sub.id,
+                                    (current) => {
+                                        if (identity(current) !== identity(sub))
+                                            throw protocolError('identity_conflict');
+                                        return { ...current, ...fields };
+                                    }
+                                );
+                            } catch (error) {
+                                if (error.code !== 'identity_conflict') throw error;
+                                return { name: sub.name, url: sub.url, error: error.code };
+                            }
+                        }
+                        if (!updated)
+                            return { name: sub.name, url: sub.url, error: 'unknown_item' };
+                        return {
+                            sub: updated,
+                            identity: observation.identity,
+                        };
+                    },
+                };
+            })
+        );
+        const failed = results.find((result) => result.status === 'rejected');
+        if (failed) throw failed.reason;
+        // Fetch in parallel, then submit in order to avoid competing against this batch's own revision changes.
+        for (const { value: fetched } of results) {
+            const result = fetched.commit ? await fetched.commit() : fetched;
+            if (result.sub) {
+                applied.push(result);
+                details.push({
+                    name: result.sub.name,
+                    url: result.sub.url,
+                    status: 'success',
+                    nodeCount: result.sub.nodeCount,
+                });
+            } else {
+                failures.push(result);
+                details.push({ ...result, status: 'failed' });
+            }
+        }
+    }
+    return {
+        snapshot,
+        subscriptions,
+        applied,
+        failures,
+        details,
+        config: limits,
+        duration: Date.now() - startTime,
+    };
+}
+
+async function handleAtomicCron(storage, env) {
+    const snapshot = await storage.readSubscriptionSnapshot();
+    const settings = (await storage.get(KV_KEY_SETTINGS)) || DEFAULT_SETTINGS;
+    const { subscriptions, applied, failures, duration } = await runCanonicalSubscriptionSync(
+        storage,
+        env,
+        { maxSyncCount: 1000, concurrency: 6, timeout: 15000 },
+        snapshot
+    );
+
+    // A storage failure above aborts before any business notification is sent.
+    for (const result of applied) {
+        const sub = { ...result.sub };
+        await checkAndNotify(sub, settings, env);
+        const fields = {};
+        for (const field of ['lastNotifiedExpire', 'lastNotifiedTraffic']) {
+            if (sub[field] !== result.sub[field]) fields[field] = sub[field];
+        }
+        if (Object.keys(fields).length) {
+            await commitRuntimeObservation(storage, {
+                operationId: crypto.randomUUID(),
+                id: sub.id,
+                epoch: snapshot.version.epoch,
+                identity: result.identity,
+                observedAt: Date.now(),
+                requestPolicy: snapshot.requestPolicy,
+                fields,
+            });
+        }
+    }
+    const summary = {
+        total: subscriptions.length,
+        updated: applied.length,
+        failed: failures.length,
+        changes: applied.length > 0,
+        duration: `${duration}ms`,
+        failed_subscriptions: failures,
+    };
+    return new Response(JSON.stringify({ success: true, summary }), {
+        headers: { 'Content-Type': 'application/json' },
+    });
+}
+
 /**
  * 处理定时任务的通知更新（并行处理版本）
  */
@@ -118,6 +336,7 @@ export async function handleCronTrigger(env) {
         env,
         await StorageFactory.getStorageType(env)
     );
+    if (isAtomicSubscriptionStorage(storageAdapter)) return handleAtomicCron(storageAdapter, env);
     const originalSubs = await loadSubscriptionsForCron(storageAdapter);
     const allSubs = JSON.parse(JSON.stringify(originalSubs));
     const settings = (await storageAdapter.get(KV_KEY_SETTINGS)) || DEFAULT_SETTINGS;

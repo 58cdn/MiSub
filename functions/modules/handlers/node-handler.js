@@ -15,6 +15,14 @@ import { parseNodeList } from '../utils/node-parser.js';
 import { getProcessedUserAgent } from '../../utils/format-utils.js';
 import { buildFetchProxyUrl } from '../../utils/fetch-proxy-utils.js';
 import { isSuspiciousNodeCountDrop } from '../../services/node-cache-service.js';
+import {
+    isAtomicSubscriptionStorage,
+    captureSubscriptionIdentity,
+    commitRuntimeObservation,
+    requireMutationMetadata,
+    protocolError,
+    getProtocolError,
+} from '../../services/subscription-protocol/index.js';
 
 // 创建用于全局匹配的协议正则表达式
 const NODE_PROTOCOL_GLOBAL_REGEX = new RegExp(
@@ -40,7 +48,7 @@ function summarizeResponseText(text) {
         .slice(0, 180);
 }
 
-function detectSubscriptionBodyError(text) {
+export function detectSubscriptionBodyError(text) {
     const summary = summarizeResponseText(text);
     if (!summary) return null;
 
@@ -57,17 +65,23 @@ function detectSubscriptionBodyError(text) {
     return error;
 }
 
-async function resolveNodeCountFetchCfOptions(env) {
+async function resolveNodeCountFetchCfOptions(env, suppliedStorage, requestPolicy) {
     try {
-        const storageAdapter = StorageFactory.createAdapter(
-            env,
-            await StorageFactory.getStorageType(env)
-        );
+        const storageAdapter =
+            suppliedStorage ||
+            StorageFactory.createAdapter(env, await StorageFactory.getStorageType(env));
+        if (isAtomicSubscriptionStorage(storageAdapter)) {
+            const policy =
+                requestPolicy ?? (await storageAdapter.readSubscriptionSnapshot()).requestPolicy;
+            if (policy !== 0 && policy !== 1) throw protocolError('schema_not_ready');
+            return policy === 1 ? { cf: { insecureSkipVerify: true } } : {};
+        }
         const settings = (await storageAdapter.get(KV_KEY_SETTINGS)) || DEFAULT_SETTINGS;
         if (settings?.builtinSkipCertVerify === true) {
             return { cf: { insecureSkipVerify: true } };
         }
     } catch (error) {
+        if (isAtomicSubscriptionStorage(suppliedStorage) || error?.code) throw error;
         console.warn(
             '[NodeHandler] Failed to load certificate verification setting, using secure default:',
             error
@@ -82,18 +96,52 @@ async function resolveNodeCountFetchCfOptions(env) {
  * @param {Object} env - Cloudflare环境对象
  * @returns {Promise<Response>} HTTP响应
  */
-export async function handleNodeCountRequest(request, env) {
+export async function handleNodeCountRequest(request, env, options = {}) {
     if (request.method !== 'POST') {
         return createErrorResponse('Method Not Allowed', 405);
     }
 
+    let atomic = false;
     try {
-        const {
-            url: subUrl,
-            fetchProxy,
-            plusAsSpace,
-            userAgent: customUserAgent,
-        } = await readJsonWithLimit(request, JSON_BODY_LIMITS.normal);
+        const requestData = await readJsonWithLimit(request, JSON_BODY_LIMITS.normal);
+        let { url: subUrl, fetchProxy, plusAsSpace, userAgent: customUserAgent } = requestData;
+        const storageAdapter = StorageFactory.createAdapter(
+            env,
+            await StorageFactory.getStorageType(env)
+        );
+        atomic = isAtomicSubscriptionStorage(storageAdapter);
+        const inspectOnly = requestData.inspectOnly === true;
+        let observedSub = null;
+        let observation = null;
+        let subscriptionSnapshot = null;
+        if (atomic && !inspectOnly) {
+            const metadata = requireMutationMetadata(requestData, request);
+            if (
+                typeof requestData.subscriptionId !== 'string' ||
+                !requestData.subscriptionId.trim()
+            ) {
+                throw protocolError('invalid_operation');
+            }
+            subscriptionSnapshot = await storageAdapter.readSubscriptionSnapshot();
+            const { version, subscriptions } = subscriptionSnapshot;
+            if (version.epoch !== metadata.baseVersion.epoch) throw protocolError('epoch_conflict');
+            if (version.revision !== metadata.baseVersion.revision)
+                throw protocolError('revision_conflict');
+            observedSub = subscriptions.find((sub) => sub.id === requestData.subscriptionId);
+            if (!observedSub) throw protocolError('unknown_item');
+            subUrl = observedSub.url;
+            fetchProxy = observedSub.fetchProxy;
+            plusAsSpace = observedSub.plusAsSpace;
+            customUserAgent = observedSub.customUserAgent;
+            observation = {
+                operationId: metadata.operationId,
+                epoch: subscriptionSnapshot.version.epoch,
+                id: observedSub.id,
+                observedAt: Date.now(),
+                identity: await captureSubscriptionIdentity(observedSub),
+                requestPolicy: subscriptionSnapshot.requestPolicy,
+            };
+        }
         if (!subUrl || typeof subUrl !== 'string' || !/^https?:\/\//i.test(subUrl)) {
             return createErrorResponse('Invalid or missing url', 400);
         }
@@ -112,19 +160,34 @@ export async function handleNodeCountRequest(request, env) {
             requestUrl = buildFetchProxyUrl(fetchProxy, subUrl, processedUserAgent);
         }
 
+        const controller = new AbortController();
+        const timeoutMs = Number.isFinite(options.timeoutMs)
+            ? Math.min(60000, Math.max(1, Math.floor(options.timeoutMs)))
+            : 15000;
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        const sourceSignal = options.signal || request.signal;
+        const abort = () => controller.abort();
+        if (sourceSignal?.aborted) abort();
+        else sourceSignal?.addEventListener('abort', abort, { once: true });
         try {
             // 使用统一的User-Agent策略
             const fetchOptions = {
                 headers: { 'User-Agent': processedUserAgent },
                 redirect: 'follow',
+                signal: controller.signal,
             };
             const trafficFetchOptions = {
                 headers: { 'User-Agent': 'clash-verge/v2.4.3' },
                 redirect: 'follow',
+                signal: controller.signal,
             };
 
             // cf 选项需传给 fetch() 而非 Request()：仅在用户显式启用跳过证书验证时传递
-            const cfOptions = await resolveNodeCountFetchCfOptions(env);
+            const cfOptions = await resolveNodeCountFetchCfOptions(
+                env,
+                storageAdapter,
+                observation?.requestPolicy ?? options.requestPolicy
+            );
             const trafficRequest = fetch(new Request(requestUrl, trafficFetchOptions), cfOptions);
             const nodeCountRequest = fetch(new Request(requestUrl, fetchOptions), cfOptions);
 
@@ -414,14 +477,22 @@ export async function handleNodeCountRequest(request, env) {
                 });
             }
 
+            if (controller.signal.aborted) {
+                return createJsonResponse({
+                    success: false,
+                    error: '订阅请求超时',
+                    errorType: 'timeout',
+                    count: 0,
+                });
+            }
             // 只有在至少获取到一个有效信息时，才更新数据库
-            if (result.count > 0) {
-                const storageAdapter = StorageFactory.createAdapter(
-                    env,
-                    await StorageFactory.getStorageType(env)
-                );
-                const originalSubs = (await storageAdapter.get('misub_subscriptions_v1')) || [];
-                const subToUpdate = originalSubs.find((s) => s.url === subUrl);
+            if (result.count > 0 && !inspectOnly) {
+                const originalSubs = atomic
+                    ? subscriptionSnapshot.subscriptions
+                    : (await storageAdapter.get('misub_subscriptions_v1')) || [];
+                const subToUpdate = atomic
+                    ? observedSub
+                    : originalSubs.find((s) => s.url === subUrl);
 
                 if (subToUpdate) {
                     const knownNodeCount = Math.max(
@@ -442,10 +513,41 @@ export async function handleNodeCountRequest(request, env) {
                         return createJsonResponse({
                             success: true,
                             data: result,
+                            ...(atomic ? { applied: false, reason: 'observation_protected' } : {}),
                         });
                     }
 
-                    if (typeof storageAdapter.updateSubscriptionById === 'function') {
+                    if (atomic) {
+                        const outcome = await commitRuntimeObservation(storageAdapter, {
+                            ...observation,
+                            fields: {
+                                nodeCount: result.count,
+                                ...(result.count >= 10 ? { lastGoodNodeCount: result.count } : {}),
+                                userInfo: result.userInfo,
+                                lastError: null,
+                                lastUpdate: new Date(observation.observedAt).toISOString(),
+                            },
+                        });
+                        if (!outcome.applied) {
+                            const error = getProtocolError(protocolError(outcome.reason));
+                            return createJsonResponse(
+                                {
+                                    success: false,
+                                    applied: false,
+                                    reason: outcome.reason,
+                                    error: error.code,
+                                },
+                                error.status
+                            );
+                        }
+                        return createJsonResponse({
+                            success: true,
+                            data: result,
+                            applied: true,
+                            replayed: outcome.replayed,
+                            subscriptionSnapshot: outcome.snapshot,
+                        });
+                    } else if (typeof storageAdapter.updateSubscriptionById === 'function') {
                         await storageAdapter.updateSubscriptionById(subToUpdate.id, (current) => ({
                             ...current,
                             nodeCount: result.count,
@@ -471,6 +573,10 @@ export async function handleNodeCountRequest(request, env) {
                 // 如果 count 为 0 且没有用户信息，但请求成功了（可能机场真的没节点），也要更新错误状态（可选，此处暂不作为错误）
             }
         } catch (e) {
+            if (atomic || e?.code) {
+                const error = getProtocolError(e);
+                return createJsonResponse({ success: false, error: error.code }, error.status);
+            }
             // 节点计数处理错误
             console.error('Node count processing error:', e);
             return createJsonResponse({
@@ -478,6 +584,9 @@ export async function handleNodeCountRequest(request, env) {
                 error: `处理失败: ${e.message}`,
                 errorType: 'processing_error',
             });
+        } finally {
+            clearTimeout(timeoutId);
+            sourceSignal?.removeEventListener('abort', abort);
         }
 
         return createJsonResponse({
@@ -485,6 +594,10 @@ export async function handleNodeCountRequest(request, env) {
             data: result,
         });
     } catch (e) {
+        if (atomic || e?.code) {
+            const error = getProtocolError(e);
+            return createJsonResponse({ success: false, error: error.code }, error.status);
+        }
         return createErrorResponse(`获取节点数量失败: ${e.message}`, 500);
     }
 }
@@ -518,7 +631,9 @@ export async function handleBatchUpdateNodesRequest(request, env) {
             env,
             await StorageFactory.getStorageType(env)
         );
-        const allSubscriptions = (await storageAdapter.get('misub_subscriptions_v1')) || [];
+        const allSubscriptions = isAtomicSubscriptionStorage(storageAdapter)
+            ? (await storageAdapter.readSubscriptionSnapshot()).subscriptions
+            : (await storageAdapter.get('misub_subscriptions_v1')) || [];
 
         // 过滤出要更新的订阅
         const targetSubscriptions = allSubscriptions.filter(

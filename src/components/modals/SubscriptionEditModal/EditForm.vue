@@ -48,7 +48,8 @@
                 props.editingSubscription.url,
                 props.editingSubscription.fetchProxy,
                 props.editingSubscription.plusAsSpace,
-                props.editingSubscription.customUserAgent
+                props.editingSubscription.customUserAgent,
+                { inspectOnly: true }
             );
             if (res.success) {
                 showToast(

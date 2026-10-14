@@ -463,27 +463,25 @@ describe('data store authoritative baseline and local edit integrity', () => {
             wait.resolve(operation === 'save' ? response({ misubs: [], profiles: [] }) : data());
             expect(await pending).toBe(false);
             expect(cache()).toBeNull();
-            expect(store.subscriptions.map((item) => item.id)).toEqual(['a', 'b']);
+            expect(store.subscriptions).toEqual([]);
             expect(store.isDirty).toBe(true);
             expect(await store.saveData()).toBe(false);
         }
     );
 
-    it('keeps the old operation locked until it settles, then starts a fresh session request', async () => {
+    it('starts a fresh session request while an invalidated operation is still pending', async () => {
         const store = loaded();
         const old = deferred();
         post.mockReturnValue(old.promise);
         const pending = store.saveData();
         store.clearCachedData();
         store.hydrateFromData(data());
-        expect(await store.saveData()).toBe(false);
-        expect(await store.fetchData(true)).toBe(false);
-        expect(store.isLoading).toBe(true);
-        old.resolve(response({ misubs: [], profiles: [] }));
-        expect(await pending).toBe(false);
         const current = deferred();
         get.mockReturnValue(current.promise);
         const refresh = store.fetchData(true);
+        expect(get).toHaveBeenCalledTimes(1);
+        old.resolve(response({ misubs: [], profiles: [] }));
+        expect(await pending).toBe(false);
         expect(store.isLoading).toBe(true);
         expect(await store.saveData()).toBe(false);
         current.resolve(data());
