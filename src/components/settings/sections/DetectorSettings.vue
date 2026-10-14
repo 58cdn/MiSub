@@ -10,6 +10,7 @@
     } from 'vue';
     import Modal from '@/components/forms/Modal.vue';
     import NodeObservationReport from '@/components/nodes/NodeObservationReport.vue';
+    import ProbeExecutionMetadata from '@/components/nodes/ProbeExecutionMetadata.vue';
     import DetectorPairingWizard from './DetectorPairingWizard.vue';
     import DetectorTable from './DetectorTable.vue';
     import {
@@ -1397,6 +1398,10 @@
                             date(record.completedAt)
                         }}</time>
                     </p>
+                    <ProbeExecutionMetadata
+                        :metadata="record.executionMetadata"
+                        :state="record.state"
+                    />
                     <div
                         v-for="[type, check] in checks(record)"
                         :key="type"

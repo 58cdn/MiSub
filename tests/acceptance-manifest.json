@@ -45,6 +45,13 @@
             "errors": ["errors", "external"]
         },
         {
+            "file": "tests/browser/probe-execution-history.mjs",
+            "report": "report.json",
+            "cases": "tests",
+            "errors": ["pageErrors", "externalRequests"],
+            "passed": true
+        },
+        {
             "file": "tests/browser/probe-observations.mjs",
             "report": "observations-browser.json",
             "cases": "tests",
