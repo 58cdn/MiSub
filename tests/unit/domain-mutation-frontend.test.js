@@ -458,6 +458,27 @@ describe('domain request lifecycle and submitted snapshots', () => {
 });
 
 describe('shared settings writer and read generations', () => {
+    it('rejects a read started during a failed save even after its writer releases the lock', async () => {
+        const store = loaded(),
+            logic = useSettingsLogic(),
+            pending = deferred(),
+            stale = deferred();
+        get.mockResolvedValueOnce(settingsEnvelope());
+        await logic.loadSettings();
+        logic.settings.value.groupsPageSize = 50;
+        post.mockReturnValueOnce(pending.promise);
+        const saving = logic.handleSave();
+        get.mockReturnValueOnce(stale.promise);
+        const reading = logic.loadSettings();
+        pending.reject(new APIError('offline', 503));
+        expect(await saving).toBe(false);
+        stale.resolve({ ...settingsEnvelope(), data: { storageType: 'd1', groupsPageSize: 20 } });
+        expect(await reading).toBe(false);
+        expect(logic.settings.value.groupsPageSize).toBe(50);
+        respond(settingsEnvelope(3));
+        expect(await logic.handleSave()).toBe(true);
+        expect(post.mock.calls[1][1].baseVersion).toEqual(version(2));
+    });
     it('keeps an acknowledged settings bridge when an older full GET arrives', async () => {
         const store = loaded(),
             logic = useSettingsLogic(),

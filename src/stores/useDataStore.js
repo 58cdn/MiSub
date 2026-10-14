@@ -585,10 +585,11 @@ export const useDataStore = defineStore('data', () => {
     }
 
     function settingsReadToken() {
-        return { lifecycle, generation: configGeneration };
+        return { lifecycle, generation: configGeneration, readable: !domainSaves.has('settings') };
     }
     function isSettingsReadCurrent(token) {
         return (
+            token.readable &&
             token.lifecycle === lifecycle &&
             token.generation === configGeneration &&
             !domainSaves.has('settings')
