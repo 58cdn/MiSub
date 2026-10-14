@@ -274,6 +274,7 @@ async function refreshAtomicExternal(storage, metadata, payload, { kind, id, act
             };
             const committed = await commitRuntimeObservation(storage, {
                 operationId,
+                epoch: snapshot.version.epoch,
                 id: item.id,
                 identity,
                 observedAt,

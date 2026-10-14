@@ -60,11 +60,22 @@ async function edit(operations) {
         operations,
     });
 }
+async function writeSettings(settings) {
+    const snapshot = await storage.readDomainSnapshot();
+    return storage.commitDomainOperations({
+        operationId: crypto.randomUUID(),
+        baseVersion: snapshot.version,
+        domains: { settings },
+    });
+}
 
 describe('runtime writer entry points with real SQLite transactions', () => {
-    it('adapter settings writes are visible through strict reads and the request-policy snapshot', async () => {
+    it('versioned settings writes are visible through strict reads and the request-policy snapshot', async () => {
+        await expect(storage.put('worker_settings_v1', {})).rejects.toMatchObject({
+            code: 'legacy_write_blocked',
+        });
         for (const value of [true, false]) {
-            await storage.put('worker_settings_v1', { builtinSkipCertVerify: value });
+            await writeSettings({ builtinSkipCertVerify: value });
             expect(await storage.get('worker_settings_v1')).toEqual({
                 builtinSkipCertVerify: value,
                 storageType: 'd1',
@@ -81,43 +92,53 @@ describe('runtime writer entry points with real SQLite transactions', () => {
         ).toBeUndefined();
     });
     it.each([false, true])('rejects an in-flight TLS policy change from %s', async (initial) => {
-        const writeSettings = (value) =>
-            storage.put('worker_settings_v1', { builtinSkipCertVerify: value });
-        await writeSettings(initial);
+        await writeSettings({ builtinSkipCertVerify: initial });
         const request = await refreshInput();
+        let changed = false;
         fetch.mockImplementation(async (_request, options) => {
             expect(Boolean(options.cf?.insecureSkipVerify)).toBe(initial);
-            await writeSettings(!initial);
+            if (!changed) {
+                changed = true;
+                await writeSettings({ builtinSkipCertVerify: !initial });
+            }
             return new Response(node);
         });
         const response = await handleNodeCountRequest(request, fixture.env);
         expect(response.status).toBe(409);
         const snapshot = await storage.readSubscriptionSnapshot();
-        expect(snapshot.version.revision).toBe(0);
+        expect(snapshot.version.revision).toBe(2);
         expect(snapshot.subscriptions[0].nodeCount).toBeUndefined();
     });
     it('SQL admission rejects policy changes after the helper has read its snapshot', async () => {
         const request = await refreshInput();
         const originalBatch = fixture.db.batch;
+        let changed = false;
         fixture.db.batch = async (statements) => {
-            await storage.put('worker_settings_v1', { builtinSkipCertVerify: true });
+            if (!changed) {
+                changed = true;
+                await writeSettings({ builtinSkipCertVerify: true });
+            }
             return originalBatch(statements);
         };
         const response = await handleNodeCountRequest(request, fixture.env);
         expect(response.status).toBe(409);
         expect((await response.json()).reason).toBe('identity_conflict');
-        expect(fixture.state.batches).toBe(1);
+        expect(fixture.state.batches).toBe(2);
         const snapshot = await storage.readSubscriptionSnapshot();
-        expect(snapshot.version.revision).toBe(0);
+        expect(snapshot.version.revision).toBe(1);
         expect(snapshot.subscriptions[0].nodeCount).toBeUndefined();
     });
     it('unrelated settings changes do not invalidate a captured network policy', async () => {
         const request = await refreshInput();
+        let changed = false;
         fetch.mockImplementation(async () => {
-            await storage.put('worker_settings_v1', {
-                builtinSkipCertVerify: 'true',
-                unrelated: 'synthetic',
-            });
+            if (!changed) {
+                changed = true;
+                await writeSettings({
+                    builtinSkipCertVerify: 'true',
+                    unrelated: 'synthetic',
+                });
+            }
             return new Response(node);
         });
         const response = await handleNodeCountRequest(request, fixture.env);

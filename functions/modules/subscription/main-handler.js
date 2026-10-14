@@ -559,6 +559,7 @@ export async function handleMisubRequest(context) {
               ]).then(([subscriptions, profiles]) => ({ subscriptions, profiles })),
     ]);
     const { subscriptions: allMisubs, profiles: allProfiles } = collections;
+    if (atomic) context.subscriptionSnapshot = collections;
     const settings = settingsData || {};
 
     // 自动迁移旧版 profile ID（去除 'profile_' 前缀）

@@ -9,6 +9,15 @@ import { TIMING } from '../constants/timing.js';
 import { api } from '../lib/http.js';
 import { t } from '../i18n/index.js';
 import {
+    acknowledgedDomainVersion,
+    domainMutationMetadata,
+    isStrictSettingsData,
+    replayDomainEdits,
+    sameDomainData,
+    validDomainAcknowledgement,
+    validDomainResponse,
+} from '../shared/domain-mutation.js';
+import {
     buildSubscriptionEditOperations,
     createSubscriptionOperationId,
     editableSubscriptionFields,
@@ -112,6 +121,12 @@ export const useDataStore = defineStore('data', () => {
     let saveSequence = 0;
     let saving = false;
     let snapshotVersion = null;
+    let configVersion = null;
+    let rulesVersion = null;
+    let rulesProtocol = 'legacy';
+    let rulesRequest = 0;
+    let rulesReadSequence = 0;
+    const domainSaves = new Map();
     let pendingSubmission = null;
 
     // --- Actions ---
@@ -135,12 +150,16 @@ export const useDataStore = defineStore('data', () => {
             settingsStore.setConfig({ ...DEFAULT_SETTINGS, ...next.config });
             if (!fromCache) {
                 lifecycle += 1;
+                invalidateDomainRequests();
                 lastSavedData = snapshot;
                 hasAuthoritativeBaseline = true;
                 subscriptionProtocol.value =
                     next.subscriptionProtocol === 'd1-v1' ? 'd1-v1' : 'legacy';
                 snapshotVersion =
                     subscriptionProtocol.value === 'd1-v1' ? cloneData(next.version) : null;
+                configVersion = snapshotVersion ? { ...snapshotVersion } : null;
+                rulesVersion = snapshotVersion ? { ...snapshotVersion } : null;
+                rulesProtocol = subscriptionProtocol.value;
                 pendingSubmission = null;
                 subscriptionConflict.value = false;
                 lastUpdated.value = new Date();
@@ -377,23 +396,48 @@ export const useDataStore = defineStore('data', () => {
      */
     async function saveSettings(newSettings, options = {}) {
         const { silent = false, preferencesOnly = false } = options;
-        editorStore.setLoading(true);
+        const request = beginDomainSave('settings');
         try {
+            const strict = subscriptionProtocol.value === 'd1-v1';
+            const metadata = domainMutationMetadata({
+                subscriptionProtocol: subscriptionProtocol.value,
+                version: configVersion,
+            });
+            const submitted = cloneData(newSettings);
+            const editorAtStart = cloneData(settingsStore.config);
+            const confirmedAtStart = cloneData(lastSavedData.config);
             const result = await api.post(
                 '/api/settings',
-                newSettings,
+                strict ? { ...metadata, settings: submitted } : submitted,
                 preferencesOnly ? { headers: { 'X-MiSub-Save-Scope': 'preferences' } } : {}
             );
 
-            if (!result.success) {
+            if (!currentDomainSave('settings', request)) return false;
+            if (!result?.success) {
                 throw new Error(result.message || t('store.saveSettingsFailed'));
             }
 
-            settingsStore.updateConfig(newSettings);
-            syncCachedConfig(settingsStore.config);
+            if (!validDomainAcknowledgement(result, metadata, isStrictSettingsData))
+                throw new Error(t('store.invalidDataResponse'));
+            const confirmed = strict
+                ? cloneData(result.data)
+                : { ...confirmedAtStart, ...submitted };
+            const displayed = strict
+                ? { ...DEFAULT_SETTINGS, ...confirmed }
+                : { ...editorAtStart, ...submitted };
+            const intended = replayDomainEdits(editorAtStart, settingsStore.config, {
+                ...editorAtStart,
+                ...submitted,
+            });
+            const submittedBaseline = { ...DEFAULT_SETTINGS, ...confirmedAtStart, ...submitted };
+            const changed = !sameDomainData(submittedBaseline, intended);
+            settingsStore.setConfig(replayDomainEdits(submittedBaseline, intended, displayed));
+            if (strict) configVersion = acknowledgedDomainVersion(result, changed);
+            syncCachedConfig(confirmed);
             if (!silent) showToast(t('store.settingsUpdated'), 'success');
             return true;
         } catch (error) {
+            if (!currentDomainSave('settings', request)) return false;
             console.error('Failed to save settings:', error);
             if (!silent) {
                 showToast(
@@ -403,7 +447,7 @@ export const useDataStore = defineStore('data', () => {
             }
             throw error;
         } finally {
-            editorStore.setLoading(false);
+            finishDomainSave('settings', request);
         }
     }
 
@@ -522,24 +566,72 @@ export const useDataStore = defineStore('data', () => {
     }
 
     async function fetchRuleTemplates() {
+        const sequence = ++rulesReadSequence;
+        const requestGeneration = rulesRequest;
+        const requestLifecycle = lifecycle;
+        const editorAtStart = cloneData(ruleTemplates.value);
         const result = await api.get('/api/rule_templates');
-        ruleTemplates.value = Array.isArray(result?.data) ? result.data : [];
+        if (
+            requestLifecycle !== lifecycle ||
+            sequence !== rulesReadSequence ||
+            requestGeneration !== rulesRequest
+        )
+            return false;
+        if (!sameDomainData(editorAtStart, ruleTemplates.value)) return false;
+        if (
+            !validDomainResponse(result, validIdentifiedCollection, {
+                strict: rulesProtocol === 'd1-v1',
+            })
+        )
+            throw new Error(t('store.invalidDataResponse'));
+        ruleTemplates.value = cloneData(result.data);
+        rulesRequest += 1;
+        rulesProtocol = result.subscriptionProtocol === 'd1-v1' ? 'd1-v1' : 'legacy';
+        rulesVersion = result.subscriptionProtocol === 'd1-v1' ? { ...result.version } : null;
         lastSavedData.ruleTemplates = JSON.parse(JSON.stringify(ruleTemplates.value));
         return ruleTemplates.value;
     }
 
     async function saveRuleTemplates(items = ruleTemplates.value) {
-        editorStore.setLoading(true);
+        const request = beginDomainSave('rules');
+        const sequence = ++rulesRequest;
         try {
-            const result = await api.post('/api/rule_templates', { templates: items });
-            if (!result.success) {
+            const strict = rulesProtocol === 'd1-v1';
+            const metadata = domainMutationMetadata({
+                subscriptionProtocol: rulesProtocol,
+                version: rulesVersion,
+            });
+            const submitted = cloneData(items);
+            const editorAtStart = cloneData(ruleTemplates.value);
+            const result = await api.post('/api/rule_templates', {
+                templates: submitted,
+                ...metadata,
+            });
+            if (!currentDomainSave('rules', request) || sequence !== rulesRequest) return false;
+            if (!result?.success) {
                 throw new Error(result.message || t('store.saveRuleTemplatesFailed'));
             }
-            ruleTemplates.value = Array.isArray(result.data) ? result.data : [];
-            lastSavedData.ruleTemplates = JSON.parse(JSON.stringify(ruleTemplates.value));
+            if (
+                !validIdentifiedCollection(result.data) ||
+                !validDomainAcknowledgement(result, metadata, validIdentifiedCollection)
+            )
+                throw new Error(t('store.invalidDataResponse'));
+            const changed = !sameDomainData(editorAtStart, ruleTemplates.value);
+            rulesVersion = strict ? acknowledgedDomainVersion(result, changed) : null;
+            ruleTemplates.value = replayDomainEdits(
+                editorAtStart,
+                ruleTemplates.value,
+                result.data
+            );
+            lastSavedData.ruleTemplates = cloneData(result.data);
+            if (changed) editorStore.markDirty();
+            const cached = dataCache.get();
+            if (cached) dataCache.set({ ...cached, ruleTemplates: cloneData(result.data) });
+            rulesRequest += 1;
             showToast(t('store.ruleTemplatesSaved'), 'success');
             return ruleTemplates.value;
         } catch (error) {
+            if (!currentDomainSave('rules', request) || sequence !== rulesRequest) return false;
             console.error('Failed to save rule templates:', error);
             showToast(
                 t('store.saveRuleTemplatesFailedWithMessage', { message: error.message }),
@@ -547,11 +639,35 @@ export const useDataStore = defineStore('data', () => {
             );
             throw error;
         } finally {
-            editorStore.setLoading(false);
+            finishDomainSave('rules', request);
         }
     }
 
     // --- Helpers ---
+
+    function invalidateDomainRequests() {
+        rulesRequest += 1;
+        domainSaves.clear();
+        editorStore.setLoading(false);
+    }
+
+    function beginDomainSave(domain) {
+        if (domainSaves.has(domain)) throw new Error(t('store.tooFrequent'));
+        const request = { lifecycle };
+        domainSaves.set(domain, request);
+        editorStore.setLoading(true);
+        return request;
+    }
+
+    function currentDomainSave(domain, request) {
+        return request.lifecycle === lifecycle && domainSaves.get(domain) === request;
+    }
+
+    function finishDomainSave(domain, request) {
+        if (!currentDomainSave(domain, request)) return;
+        domainSaves.delete(domain);
+        editorStore.setLoading(domainSaves.size > 0);
+    }
 
     function captureEditorData() {
         return {
@@ -572,10 +688,14 @@ export const useDataStore = defineStore('data', () => {
 
     function clearCachedData() {
         lifecycle += 1;
+        invalidateDomainRequests();
         hasAuthoritativeBaseline = false;
         subscriptionProtocol.value = 'legacy';
         subscriptionConflict.value = false;
         snapshotVersion = null;
+        configVersion = null;
+        rulesVersion = null;
+        rulesProtocol = 'legacy';
         pendingSubmission = null;
         lastUpdated.value = null;
         dataCache.clear();
@@ -613,10 +733,7 @@ export const useDataStore = defineStore('data', () => {
 
         dataCache.set({
             ...cachedData,
-            config: {
-                ...(cachedData.config || {}),
-                ...(nextConfig || {}),
-            },
+            config: cloneData(nextConfig),
         });
     }
 

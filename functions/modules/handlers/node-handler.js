@@ -48,7 +48,7 @@ function summarizeResponseText(text) {
         .slice(0, 180);
 }
 
-function detectSubscriptionBodyError(text) {
+export function detectSubscriptionBodyError(text) {
     const summary = summarizeResponseText(text);
     if (!summary) return null;
 
@@ -135,6 +135,7 @@ export async function handleNodeCountRequest(request, env, options = {}) {
             customUserAgent = observedSub.customUserAgent;
             observation = {
                 operationId: metadata.operationId,
+                epoch: subscriptionSnapshot.version.epoch,
                 id: observedSub.id,
                 observedAt: Date.now(),
                 identity: await captureSubscriptionIdentity(observedSub),
@@ -159,17 +160,26 @@ export async function handleNodeCountRequest(request, env, options = {}) {
             requestUrl = buildFetchProxyUrl(fetchProxy, subUrl, processedUserAgent);
         }
 
+        const controller = new AbortController();
+        const timeoutMs = Number.isFinite(options.timeoutMs)
+            ? Math.min(60000, Math.max(1, Math.floor(options.timeoutMs)))
+            : 15000;
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        const sourceSignal = options.signal || request.signal;
+        const abort = () => controller.abort();
+        if (sourceSignal?.aborted) abort();
+        else sourceSignal?.addEventListener('abort', abort, { once: true });
         try {
             // 使用统一的User-Agent策略
             const fetchOptions = {
                 headers: { 'User-Agent': processedUserAgent },
                 redirect: 'follow',
-                signal: AbortSignal.timeout(15000),
+                signal: controller.signal,
             };
             const trafficFetchOptions = {
                 headers: { 'User-Agent': 'clash-verge/v2.4.3' },
                 redirect: 'follow',
-                signal: AbortSignal.timeout(15000),
+                signal: controller.signal,
             };
 
             // cf 选项需传给 fetch() 而非 Request()：仅在用户显式启用跳过证书验证时传递
@@ -467,6 +477,14 @@ export async function handleNodeCountRequest(request, env, options = {}) {
                 });
             }
 
+            if (controller.signal.aborted) {
+                return createJsonResponse({
+                    success: false,
+                    error: '订阅请求超时',
+                    errorType: 'timeout',
+                    count: 0,
+                });
+            }
             // 只有在至少获取到一个有效信息时，才更新数据库
             if (result.count > 0 && !inspectOnly) {
                 const originalSubs = atomic
@@ -566,6 +584,9 @@ export async function handleNodeCountRequest(request, env, options = {}) {
                 error: `处理失败: ${e.message}`,
                 errorType: 'processing_error',
             });
+        } finally {
+            clearTimeout(timeoutId);
+            sourceSignal?.removeEventListener('abort', abort);
         }
 
         return createJsonResponse({

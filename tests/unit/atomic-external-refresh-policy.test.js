@@ -61,6 +61,27 @@ function requests() {
 }
 
 describe('strict external refresh uses canonical request policy through the real node handler', () => {
+    it('rejects an observation fetched before restore even when restored configuration is unchanged', async () => {
+        await setup();
+        const before = await storage.readSubscriptionSnapshot();
+        let restored;
+        fetch.mockImplementationOnce(async () => {
+            restored = await storage.restoreSubscriptionSnapshot({
+                operationId: 'restore_during_fetch',
+                baseVersion: before.version,
+                nextEpoch: 'restored_epoch',
+                subscriptions: before.subscriptions,
+                profiles: before.profiles,
+            });
+            return new Response(node);
+        });
+        const response = await refresh();
+        expect(response.status).toBe(409);
+        expect((await response.json()).error.code).toBe('epoch_conflict');
+        const after = await storage.readSubscriptionSnapshot();
+        expect(after.version.epoch).toBe('restored_epoch');
+        expect(after.subscriptions).toEqual(restored.snapshot.subscriptions);
+    });
     it('unconfigured UA sends the same actual v2rayN header as node_count and Cron', async () => {
         await setup();
         expect((await refresh()).status).toBe(200);

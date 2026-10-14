@@ -177,6 +177,8 @@ export async function fetchNodeCount(
 export async function fetchSettings() {
     try {
         const data = await api.get(`/api/settings?t=${Date.now()}`);
+        if (data?.subscriptionProtocol !== undefined || data?.success === false || data?.error)
+            return data;
         return { success: true, data };
     } catch (error) {
         return handleApiError(error, 'fetchSettings');
@@ -204,9 +206,12 @@ export async function fetchPublicConfig() {
     }
 }
 
-export async function saveSettings(settings) {
+export async function saveSettings(settings, metadata = {}) {
     try {
-        return await api.post('/api/settings', settings);
+        return await api.post(
+            '/api/settings',
+            metadata.baseVersion ? { ...metadata, settings } : settings
+        );
     } catch (error) {
         return handleApiError(error, 'saveSettings');
     }
@@ -216,9 +221,9 @@ export async function saveSettings(settings) {
  * 恢复出厂设置（仅限设置项，不删除节点和订阅组）
  * @returns {Promise<Object>} - 重置结果
  */
-export async function resetSettings() {
+export async function resetSettings(metadata = {}) {
     try {
-        return await api.post('/api/settings/reset');
+        return await api.post('/api/settings/reset', metadata);
     } catch (error) {
         return handleApiError(error, 'resetSettings');
     }

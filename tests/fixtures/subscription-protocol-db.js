@@ -1,9 +1,18 @@
 import { DatabaseSync } from 'node:sqlite';
 import { planOfflineSubscriptionMigration } from '../../experiments/subscription-transactions/migration.js';
+import { StorageFactory } from '../../functions/storage-adapter.js';
 
 // Real SQLite SQL/batch adapter; failures rollback the database, not a JavaScript Map.
-export async function createProtocolFixture({ subscriptions = [], profiles = [], now } = {}) {
+export async function createProtocolFixture({
+    subscriptions = [],
+    profiles = [],
+    settings,
+    ruleTemplates,
+    now,
+} = {}) {
     const sql = new DatabaseSync(':memory:');
+    // Align SQLite's admission clock with controlled fixture clocks, including vi.setSystemTime.
+    sql.function('julianday', (_value) => 2440587.5 + (now ? now() : Date.now()) / 86400000);
     sql.exec('PRAGMA foreign_keys=ON');
     for (const name of ['subscriptions', 'profiles'])
         sql.exec(
@@ -59,6 +68,9 @@ export async function createProtocolFixture({ subscriptions = [], profiles = [],
             }
         },
     };
+    const legacy = StorageFactory.createAdapter({ MISUB_DB: db }, 'd1');
+    if (settings !== undefined) await legacy.put('worker_settings_v1', settings);
+    if (ruleTemplates !== undefined) await legacy.put('misub_rule_templates_v1', ruleTemplates);
     await db.batch(migration.statements.map(({ sql: text, args }) => prepare(text, args)));
     state.batches = 0;
     state.plans = [];

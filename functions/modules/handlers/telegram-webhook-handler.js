@@ -28,6 +28,16 @@ import { createJsonResponse, escapeHtml, JSON_BODY_LIMITS, readJsonWithLimit } f
 import { KV_KEY_SUBS, KV_KEY_PROFILES, KV_KEY_SETTINGS } from '../config.js';
 import { extractValidNodes } from '../utils/node-parser.js';
 import { isAtomicSubscriptionStorage } from '../../services/subscription-protocol/index.js';
+import {
+    getTelegramPreviewScope,
+    markTelegramPreviewFailed,
+    identifyTelegramPreview,
+    createTelegramPreviewScope,
+    queueTelegramPreviewMessage,
+    deferTelegramCacheClear,
+    buildTelegramPreview,
+    formatTelegramPreview,
+} from '../../services/telegram-preview-service.js';
 
 // ==================== 存储与配置 ====================
 
@@ -35,6 +45,8 @@ import { isAtomicSubscriptionStorage } from '../../services/subscription-protoco
  * 获取存储适配器实例
  */
 async function getStorageAdapter(env) {
+    const scope = getTelegramPreviewScope(env);
+    if (scope) return scope.adapter;
     const storageType = await StorageFactory.getStorageType(env);
     return StorageFactory.createAdapter(env, storageType);
 }
@@ -354,6 +366,7 @@ async function handleFileInput(chatId, message, userId, config, env, requestCach
         );
         return createJsonResponse({ ok: true });
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] File handling error:', error);
         await sendTelegramMessage(chatId, `❌ 处理文件失败：${error.message}`, env);
         return createJsonResponse({ ok: true });
@@ -622,7 +635,7 @@ async function applyGroupOperation(
     }
 
     // 清理节点缓存，避免前端读到旧数据
-    if (type === 'node') await clearAllNodeCaches(env);
+    if (type === 'node' && !deferTelegramCacheClear(env)) await clearAllNodeCaches(env);
 
     return changed;
 }
@@ -674,7 +687,9 @@ function parseTargetArgs(args) {
  */
 async function sendTelegramMessage(chatId, text, env, options = {}) {
     try {
-        const config = await getTelegramPushConfig(env, options.requestCache || null);
+        const { requestCache, ...telegramOptions } = options;
+        if (queueTelegramPreviewMessage(env, 'send', [chatId, text, telegramOptions])) return;
+        const config = await getTelegramPushConfig(env, requestCache || null);
         if (!config.bot_token) {
             console.error('[Telegram Push] Bot token not configured');
             return;
@@ -684,7 +699,7 @@ async function sendTelegramMessage(chatId, text, env, options = {}) {
             chat_id: chatId,
             text: text,
             parse_mode: 'HTML',
-            ...options,
+            ...telegramOptions,
         };
 
         const response = await fetch(
@@ -702,6 +717,7 @@ async function sendTelegramMessage(chatId, text, env, options = {}) {
 
         return response;
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Error sending message:', error);
     }
 }
@@ -711,7 +727,10 @@ async function sendTelegramMessage(chatId, text, env, options = {}) {
  */
 async function editTelegramMessage(chatId, messageId, text, env, options = {}) {
     try {
-        const config = await getTelegramPushConfig(env, options.requestCache || null);
+        const { requestCache, ...telegramOptions } = options;
+        if (queueTelegramPreviewMessage(env, 'edit', [chatId, messageId, text, telegramOptions]))
+            return;
+        const config = await getTelegramPushConfig(env, requestCache || null);
         if (!config.bot_token) return;
 
         const body = {
@@ -719,7 +738,7 @@ async function editTelegramMessage(chatId, messageId, text, env, options = {}) {
             message_id: messageId,
             text: text,
             parse_mode: 'HTML',
-            ...options,
+            ...telegramOptions,
         };
 
         await fetch(`https://api.telegram.org/bot${config.bot_token}/editMessageText`, {
@@ -728,6 +747,7 @@ async function editTelegramMessage(chatId, messageId, text, env, options = {}) {
             body: JSON.stringify(body),
         });
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Error editing message:', error);
     }
 }
@@ -737,6 +757,7 @@ async function editTelegramMessage(chatId, messageId, text, env, options = {}) {
  */
 async function answerCallbackQuery(callbackQueryId, text, env, showAlert = false) {
     try {
+        if (queueTelegramPreviewMessage(env, 'answer', [callbackQueryId, text, showAlert])) return;
         const config = await getTelegramPushConfig(env);
         if (!config.bot_token) return;
 
@@ -750,6 +771,7 @@ async function answerCallbackQuery(callbackQueryId, text, env, showAlert = false
             }),
         });
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Error answering callback:', error);
     }
 }
@@ -1155,6 +1177,7 @@ async function handleListCommand(
             await sendTelegramMessage(chatId, message, env, { reply_markup: keyboard });
         }
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] List command failed:', error);
         await sendTelegramMessage(chatId, `\u274C 获取列表失败: ${error.message}`, env); // ❌
     }
@@ -1234,6 +1257,7 @@ async function handleStatsCommand(chatId, userId, env, requestCache = null) {
 
         await sendTelegramMessage(chatId, message, env, { requestCache });
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Stats command failed:', error);
         await sendTelegramMessage(chatId, `\u274C 获取统计失败: ${error.message}`, env, {
             requestCache,
@@ -1345,6 +1369,7 @@ async function handleDeleteCommand(chatId, userId, args, env) {
                 }
             }
         } catch (cleanupError) {
+            markTelegramPreviewFailed(env);
             console.error('[Telegram Push] Cleanup profiles error:', cleanupError);
         }
 
@@ -1358,6 +1383,7 @@ async function handleDeleteCommand(chatId, userId, args, env) {
         await sendTelegramMessage(chatId, message, env);
         console.info(`[Telegram Push] User ${userId} deleted ${deletedNames.length} nodes`);
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Delete command failed:', error);
         await sendTelegramMessage(chatId, `❌ 删除失败: ${error.message}`, env);
     }
@@ -1441,6 +1467,7 @@ async function handleToggleCommand(chatId, userId, args, env, enable) {
 
         await sendTelegramMessage(chatId, message, env);
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error(`[Telegram Push] Toggle command failed:`, error);
         await sendTelegramMessage(
             chatId,
@@ -1501,6 +1528,7 @@ async function handleSearchCommand(chatId, userId, args, env) {
 
         await sendTelegramMessage(chatId, message, env);
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Search command failed:', error);
         await sendTelegramMessage(chatId, `❌ 搜索失败: ${error.message}`, env);
     }
@@ -1587,6 +1615,7 @@ async function handleSubCommand(chatId, args, env, request, requestCache = null)
             await sendTelegramMessage(chatId, message, env);
         }
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Sub command failed:', error);
         await sendTelegramMessage(chatId, `❌ 获取订阅失败: ${escapeHtml(error.message)}`, env);
     }
@@ -1633,6 +1662,7 @@ async function handleSubCommandSimple(chatId, env, requestCache = null) {
 
         await sendTelegramMessage(chatId, message, env);
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Sub command simple failed:', error);
         await sendTelegramMessage(chatId, `❌ 获取订阅失败: ${escapeHtml(error.message)}`, env);
     }
@@ -1691,6 +1721,7 @@ async function handleRenameCommand(chatId, userId, args, env) {
             env
         );
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Rename command failed:', error);
         await sendTelegramMessage(chatId, `❌ 重命名失败: ${escapeHtml(error.message)}`, env);
     }
@@ -1773,6 +1804,7 @@ async function handleInfoCommand(chatId, userId, args, env) {
 
         await sendTelegramMessage(chatId, message, env, { reply_markup: keyboard });
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Info command failed:', error);
         await sendTelegramMessage(chatId, `❌ 获取详情失败: ${escapeHtml(error.message)}`, env);
     }
@@ -1835,6 +1867,7 @@ async function handleCopyCommand(chatId, userId, args, env) {
             );
         }
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Copy command failed:', error);
         await sendTelegramMessage(chatId, `❌ 复制失败: ${escapeHtml(error.message)}`, env);
     }
@@ -1900,6 +1933,7 @@ async function handleExportCommand(chatId, userId, args, env) {
             env
         );
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Export command failed:', error);
         await sendTelegramMessage(chatId, `❌ 导出失败: ${escapeHtml(error.message)}`, env);
     }
@@ -1958,6 +1992,7 @@ async function handleImportCommand(chatId, userId, args, env) {
                     nodeUrls = extractNodeUrls(content);
                 }
             } catch (fetchError) {
+                markTelegramPreviewFailed(env);
                 await sendTelegramMessage(chatId, `❌ 获取订阅失败: ${fetchError.message}`, env);
                 return;
             }
@@ -2006,6 +2041,7 @@ async function handleImportCommand(chatId, userId, args, env) {
 
         console.info(`[Telegram Push] User ${userId} imported ${addedNodes.length} nodes`);
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Import command failed:', error);
         await sendTelegramMessage(chatId, `❌ 导入失败: ${escapeHtml(error.message)}`, env);
     }
@@ -2092,6 +2128,7 @@ async function handleSortCommand(chatId, userId, args, env) {
             env
         );
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Sort command failed:', error);
         await sendTelegramMessage(chatId, `❌ 排序失败: ${escapeHtml(error.message)}`, env);
     }
@@ -2173,6 +2210,7 @@ async function handleDupCommand(chatId, userId, args, env) {
             await sendTelegramMessage(chatId, message, env, { reply_markup: keyboard });
         }
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Dup command failed:', error);
         await sendTelegramMessage(chatId, `❌ 去重检测失败: ${escapeHtml(error.message)}`, env);
     }
@@ -2261,6 +2299,7 @@ async function handleBindCommand(chatId, userId, args, env, requestCache = null)
             { requestCache }
         );
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Bind command failed:', error);
         await sendTelegramMessage(chatId, `❌ 绑定失败: ${escapeHtml(error.message)}`, env, {
             requestCache,
@@ -2293,6 +2332,7 @@ async function handleUnbindCommand(chatId, userId, env, requestCache = null) {
             env
         );
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Unbind command failed:', error);
         await sendTelegramMessage(chatId, `❌ 解除绑定失败: ${escapeHtml(error.message)}`, env);
     }
@@ -2413,6 +2453,7 @@ async function handleNodeInput(chatId, text, userId, env, requestCache = null, o
                 throw new Error('KV Write Verification Failed. Please try again.');
             }
         } catch (verifyError) {
+            markTelegramPreviewFailed(env);
             console.error('[Telegram Push] KV Verification error:', verifyError);
             if (verifyError.message.includes('Verification Failed')) throw verifyError;
         }
@@ -2456,11 +2497,14 @@ async function handleNodeInput(chatId, text, userId, env, requestCache = null, o
 
         // 5. 清除节点缓存，确保 Bot 新增/关联的节点能立即出现在实际订阅输出中
         try {
-            const cacheResult = await clearAllNodeCaches(storageAdapter);
+            const cacheResult = deferTelegramCacheClear(env)
+                ? { cleared: 0, failed: 0 }
+                : await clearAllNodeCaches(storageAdapter);
             console.info(
                 `[Telegram Push] Cleared ${cacheResult?.cleared ?? 0} node caches after node import`
             );
         } catch (cacheError) {
+            markTelegramPreviewFailed(env);
             console.warn(
                 '[Telegram Push] Failed to clear node caches after node import:',
                 cacheError?.message || cacheError
@@ -2512,6 +2556,7 @@ async function handleNodeInput(chatId, text, userId, env, requestCache = null, o
 
         return createJsonResponse({ ok: true });
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Node addition failed:', error);
         await sendTelegramMessage(
             chatId,
@@ -3547,6 +3592,7 @@ async function handleCallbackQuery(callbackQuery, env, request, requestCache = n
                 }
         }
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Callback query failed:', error);
         await answerCallbackQuery(callbackQuery.id, '操作失败', env, true);
     }
@@ -3555,6 +3601,136 @@ async function handleCallbackQuery(callbackQuery, env, request, requestCache = n
 }
 
 // ==================== 主 Webhook 处理 ====================
+
+async function flushTelegramPreviewMessages(scope, env) {
+    for (const { method, args } of scope.messages) {
+        if (method === 'send') await sendTelegramMessage(args[0], args[1], env, args[2]);
+        else if (method === 'edit')
+            await editTelegramMessage(args[0], args[1], args[2], env, args[3]);
+        else if (method === 'answer') await answerCallbackQuery(args[0], args[1], env, args[2]);
+    }
+}
+
+async function showTelegramPreview(preview, snapshot, update, env) {
+    const chunks = formatTelegramPreview(preview, snapshot);
+    if (update.callback_query)
+        await answerCallbackQuery(update.callback_query.id, '请核对预览后确认', env);
+    for (let i = 0; i < chunks.length; i++) {
+        await sendTelegramMessage(
+            preview.chatId,
+            chunks[i],
+            env,
+            i === chunks.length - 1
+                ? {
+                      reply_markup: {
+                          inline_keyboard: [
+                              [
+                                  {
+                                      text: '确认此预览',
+                                      callback_data: `tg_confirm_${preview.id}`,
+                                  },
+                              ],
+                              [{ text: '返回菜单', callback_data: 'cmd_menu' }],
+                          ],
+                      },
+                  }
+                : {}
+        );
+    }
+}
+
+async function handleAtomicTelegramUpdate(update, env, request, storage) {
+    const message = update.callback_query?.message ?? update.message;
+    const chatId = message?.chat?.id;
+    try {
+        const identity = await identifyTelegramPreview(update);
+        const snapshot = await storage.readDomainSnapshot();
+        const scope = createTelegramPreviewScope(env, snapshot);
+        const cache = createRequestCache();
+        cache.storageAdapter = scope.adapter;
+        const config = await getTelegramPushConfig(scope.env, cache);
+        if (
+            !config.enabled ||
+            !config.webhook_secret ||
+            !verifyTelegramRequest(request, config) ||
+            !checkUserPermission(identity.actorId, config).allowed
+        ) {
+            return createJsonResponse({ error: 'Unauthorized' }, 403);
+        }
+        const confirmation =
+            update.callback_query?.data?.match(/^tg_confirm_([a-f0-9]{32})$/) ??
+            message?.text?.match(/^\/confirm(?:@\S+)?\s+([a-f0-9]{32})\s*$/i);
+        if (confirmation) {
+            const result = await storage.commitTelegramPreview({
+                id: confirmation[1],
+                actorId: identity.actorId,
+                chatId: identity.chatId,
+            });
+            if (!result.replayed) {
+                try {
+                    await clearAllNodeCaches(storage);
+                } catch (error) {
+                    console.warn('[Telegram Push] Cache cleanup after confirmation failed', error);
+                }
+            }
+            if (update.callback_query)
+                await answerCallbackQuery(update.callback_query.id, '操作已确认', env);
+            await sendTelegramMessage(
+                chatId,
+                `✅ ${result.replayed ? '此预览已提交，无需重复执行' : '预览已提交'}。版本：${result.receipt.version.revision}`,
+                env
+            );
+            return createJsonResponse({ ok: true, confirmed: true, replayed: !!result.replayed });
+        }
+        const prior = await storage.readTelegramPreview(identity);
+        if (prior) {
+            if (prior.sourceDigest !== identity.sourceDigest)
+                throw new Error('telegram_update_conflict');
+            await showTelegramPreview(prior, snapshot, update, env);
+            return createJsonResponse({ ok: true, preview: true });
+        }
+        if (update.callback_query) {
+            await handleCallbackQuery(update.callback_query, scope.env, request, cache);
+        } else if (!message.text && (message.document || message.photo)) {
+            await handleFileInput(
+                chatId,
+                message,
+                Number(identity.actorId),
+                config,
+                scope.env,
+                cache
+            );
+        } else if (message.text?.startsWith('/')) {
+            await handleCommand(
+                chatId,
+                message.text,
+                Number(identity.actorId),
+                scope.env,
+                request,
+                cache
+            );
+        } else if (message.text) {
+            await handleNodeInput(chatId, message.text, Number(identity.actorId), scope.env, cache);
+        }
+        const preview = buildTelegramPreview(scope, identity);
+        if (!preview.operations.length && !preview.settingsPatch) {
+            await flushTelegramPreviewMessages(scope, env);
+            return createJsonResponse({ ok: true });
+        }
+        formatTelegramPreview(preview, snapshot);
+        const saved = await storage.createTelegramPreview(preview);
+        await showTelegramPreview(saved, snapshot, update, env);
+        return createJsonResponse({ ok: true, preview: true });
+    } catch (error) {
+        console.error('[Telegram Push] Versioned operation failed:', error?.code || error?.message);
+        const text =
+            '操作未执行或确认结果暂时不可用。请重试同一确认；若预览已过期或数据已变更，请重新生成并核对预览。';
+        if (update.callback_query)
+            await answerCallbackQuery(update.callback_query.id, text, env, true);
+        else if (chatId !== undefined) await sendTelegramMessage(chatId, text, env);
+        return createJsonResponse({ ok: true, code: 'telegram_confirmation_required' });
+    }
+}
 
 /**
  * 主 Webhook 处理函数
@@ -3583,8 +3759,6 @@ export async function handleTelegramWebhook(request, env) {
         // 解析 Telegram Update
         const update = await readJsonWithLimit(request, JSON_BODY_LIMITS.small);
         const atomic = isAtomicSubscriptionStorage(requestCache.storageAdapter);
-        const atomicMutationMessage =
-            '当前已启用订阅版本保护。旧按钮、序号命令与 Telegram 导入暂不支持安全提交，请在网页管理中刷新数据后操作。';
 
         // 处理 Callback Query（按钮回调）
         if (update.callback_query) {
@@ -3600,13 +3774,12 @@ export async function handleTelegramWebhook(request, env) {
                 return createJsonResponse({ ok: true });
             }
             if (atomic) {
-                await answerCallbackQuery(
-                    update.callback_query.id,
-                    atomicMutationMessage,
+                return await handleAtomicTelegramUpdate(
+                    update,
                     env,
-                    true
+                    request,
+                    requestCache.storageAdapter
                 );
-                return createJsonResponse({ ok: true, code: 'legacy_write_blocked' });
             }
             return await handleCallbackQuery(update.callback_query, env, request, requestCache);
         }
@@ -3626,40 +3799,12 @@ export async function handleTelegramWebhook(request, env) {
             }
 
             if (atomic) {
-                // These commands only display data; imports and index-based mutations require a versioned view.
-                const readCommands = new Set([
-                    '/start',
-                    '/help',
-                    '/menu',
-                    '/list',
-                    '/stats',
-                    '/search',
-                    '/find',
-                    '/sub',
-                    '/subscription',
-                    '/info',
-                    '/detail',
-                    '/copy',
-                    '/cp',
-                    '/export',
-                    '/backup',
-                    '/groups',
-                    '/group',
-                ]);
-                const command =
-                    typeof text === 'string'
-                        ? text.split(/\s+/)[0].toLowerCase().split('@')[0]
-                        : '';
-                const duplicateInspection =
-                    ['/dup', '/dedup'].includes(command) &&
-                    !text
-                        .split(/\s+/)
-                        .slice(1)
-                        .some((arg) => ['clean', 'remove'].includes(arg.toLowerCase()));
-                if (!readCommands.has(command) && !duplicateInspection) {
-                    await sendTelegramMessage(chatId, atomicMutationMessage, env);
-                    return createJsonResponse({ ok: true, code: 'legacy_write_blocked' });
-                }
+                return await handleAtomicTelegramUpdate(
+                    update,
+                    env,
+                    request,
+                    requestCache.storageAdapter
+                );
             }
 
             // 文件/文档消息：下载内容后走与文本相同的导入流程
@@ -3682,6 +3827,7 @@ export async function handleTelegramWebhook(request, env) {
         // 忽略其他类型的更新
         return createJsonResponse({ ok: true });
     } catch (error) {
+        markTelegramPreviewFailed(env);
         console.error('[Telegram Push] Webhook handler error:', error);
         return createJsonResponse(
             { error: error.status === 413 ? error.message : 'Internal server error' },

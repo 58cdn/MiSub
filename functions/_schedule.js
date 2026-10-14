@@ -1,221 +1,123 @@
-/**
- * Cron Triggers 定时同步服务
- * 使用 Cloudflare Pages Functions 的 Cron Triggers 功能
- */
+/** Authenticated HTTP scheduling entry and platform-event sync function. */
+import { StorageFactory } from './storage-adapter.js';
+import { authMiddleware } from './modules/auth-middleware.js';
+import { KV_KEY_SETTINGS, DEFAULT_SETTINGS } from './modules/config.js';
+import { createJsonResponse } from './modules/utils.js';
+import { getProtocolError } from './services/subscription-protocol/index.js';
+import { runCanonicalSubscriptionSync } from './modules/notifications.js';
 
-import {
-    isAtomicSubscriptionRequested,
-    protocolError,
-    resolveSubscriptionProtocol,
-    getProtocolError,
-} from './services/subscription-protocol/index.js';
-
-export async function onRequest(context) {
-    // 只有在 Cron 触发时才执行
-    if (context.request.headers.get('CF-Cron') !== 'true') {
-        return new Response('Not a cron request', { status: 400 });
+export async function authorizeCronRequest(request, env) {
+    if (!['GET', 'POST'].includes(request.method)) {
+        return createJsonResponse({ error: 'Method Not Allowed' }, 405, { Allow: 'GET, POST' });
     }
-
-    const results = {
-        timestamp: new Date().toISOString(),
-        subscriptionSync: null,
-    };
-
-    try {
-        // 执行订阅同步逻辑
-        results.subscriptionSync = await performSubscriptionSync(context.env);
-    } catch (error) {
-        if (error?.code) {
-            const failure = getProtocolError(error);
-            return new Response(JSON.stringify({ error: failure.code }), {
-                status: failure.status,
-                headers: { 'Content-Type': 'application/json' },
-            });
-        }
-        console.error('Cron subscription sync failed:', error);
-        results.subscriptionSync = { error: error.message };
+    if (
+        request.method === 'POST' &&
+        request.headers.has('Cookie') &&
+        (await authMiddleware(request, env))
+    ) {
+        return null;
     }
-
-    return new Response(JSON.stringify(results), {
-        headers: { 'Content-Type': 'application/json' },
-    });
+    const storage = StorageFactory.createAdapter(env, await StorageFactory.getStorageType(env));
+    const settings = await storage.get(KV_KEY_SETTINGS);
+    const secret = settings?.cronSecret;
+    if (
+        typeof secret === 'string' &&
+        secret.length > 0 &&
+        (request.headers.get('Authorization') === 'Bearer ' + secret ||
+            new URL(request.url).searchParams.get('secret') === secret)
+    )
+        return null;
+    return createJsonResponse({ error: 'Unauthorized' }, 401);
 }
 
-/**
- * 执行订阅同步
- */
-export async function performSubscriptionSync(env, config = {}) {
-    if (isAtomicSubscriptionRequested(env)) {
-        resolveSubscriptionProtocol(env);
-        throw protocolError('legacy_write_blocked');
+export function cronErrorResponse(error) {
+    if (error?.code) {
+        const failure = getProtocolError(error);
+        return createJsonResponse({ success: false, error: failure.code }, failure.status);
     }
-    const { maxSyncCount = 50, timeout = 30000, concurrency = 5 } = config;
-
-    const results = {
-        timestamp: new Date().toISOString(),
-        totalSubscriptions: 0,
-        successfulSyncs: 0,
-        failedSyncs: 0,
-        details: [],
-        config: {
-            maxSyncCount,
-            timeout,
-            concurrency,
-        },
-    };
-
-    try {
-        // 获取所有需要同步的订阅
-        const subscriptions = await getSubscriptionsToSync(env);
-
-        results.totalSubscriptions = subscriptions.length;
-
-        // 并发执行同步，但限制并发数
-        const BATCH_SIZE = concurrency;
-        for (let i = 0; i < subscriptions.length; i += BATCH_SIZE) {
-            const batch = subscriptions.slice(i, i + BATCH_SIZE);
-            const batchPromises = batch.map((sub) => syncSingleSubscription(sub, env, timeout));
-
-            const batchResults = await Promise.allSettled(batchPromises);
-
-            batchResults.forEach((result, index) => {
-                const subscription = batch[index];
-                if (result.status === 'fulfilled') {
-                    results.successfulSyncs++;
-                    results.details.push({
-                        name: subscription.name,
-                        url: subscription.url,
-                        status: 'success',
-                        nodeCount: result.value.nodeCount,
-                    });
-                } else {
-                    results.failedSyncs++;
-                    results.details.push({
-                        name: subscription.name,
-                        url: subscription.url,
-                        status: 'failed',
-                        error: result.reason.message,
-                    });
-                }
-            });
-        }
-    } catch (error) {
-        console.error('Subscription sync error:', error);
-        results.error = error.message;
-    }
-
-    return results;
+    return createJsonResponse(
+        { success: false, error: error?.status === 400 ? 'invalid_sync_config' : 'sync_failed' },
+        error?.status === 400 ? 400 : 503
+    );
 }
 
-/**
- * 获取需要同步的订阅列表
- */
-async function getSubscriptionsToSync(env) {
-    // 这里应该从你的存储（KV/D1）中获取订阅列表
-    // 示例实现
-    const subscriptions = [];
-
-    // 从 KV 存储获取
-    if (env.KV_STORAGE) {
-        const data = await env.KV_STORAGE.get('subscriptions');
-        if (data) {
-            const parsed = JSON.parse(data);
-            subscriptions.push(...parsed);
-        }
-    }
-
-    // 从 D1 数据库获取
-    if (env.DB) {
-        const { results } = await env.DB.prepare(
-            'SELECT * FROM subscriptions WHERE auto_sync = 1'
-        ).all();
-        subscriptions.push(...results);
-    }
-
-    return subscriptions;
-}
-
-/**
- * 同步单个订阅
- */
-async function syncSingleSubscription(subscription, env) {
-    const { url, userAgent = 'clash-meta/2.5.0', timeout = 30000 } = subscription;
-
-    console.log(`[Cron Sync] Syncing subscription: ${subscription.name}`);
-
-    // 使用重试机制获取订阅
-    const response = await fetch(url, {
-        headers: {
-            'User-Agent': userAgent,
-        },
-        signal: AbortSignal.timeout(timeout),
-    });
-
-    if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    const content = await response.text();
-
-    // 解析订阅内容
-    const nodes = await parseSubscriptionContent(content);
-
-    // 更新存储
-    await updateSubscriptionData(subscription, nodes, env);
-
+export function cronSyncConfig(env) {
     return {
-        nodeCount: nodes.length,
-        contentLength: content.length,
+        maxSyncCount: env.CRON_MAX_SYNC_COUNT === undefined ? 50 : Number(env.CRON_MAX_SYNC_COUNT),
+        timeout: env.CRON_SYNC_TIMEOUT === undefined ? 30000 : Number(env.CRON_SYNC_TIMEOUT),
+        concurrency: env.CRON_ENABLE_PARALLEL === 'false' ? 1 : 5,
     };
 }
 
-/**
- * 解析订阅内容
- */
-async function parseSubscriptionContent(content) {
-    // 这里应该调用你的订阅解析逻辑
-    // 简单示例：假设是 Clash 格式
+export async function onRequest({ request, env }) {
     try {
-        const config = jsyaml.load(content);
-        return config.proxies || [];
+        const denied = await authorizeCronRequest(request, env);
+        if (denied) return denied;
+        return createJsonResponse({
+            timestamp: new Date().toISOString(),
+            subscriptionSync: await performSubscriptionSync(env, cronSyncConfig(env)),
+        });
     } catch (error) {
-        // 尝试 base64 解码
-        try {
-            const decoded = atob(content.trim());
-            const config = jsyaml.load(decoded);
-            return config.proxies || [];
-        } catch (decodeError) {
-            throw new Error('Unable to parse subscription content');
-        }
+        return cronErrorResponse(error);
     }
 }
 
-/**
- * 更新订阅数据到存储
- */
-async function updateSubscriptionData(subscription, nodes, env) {
-    // 更新 KV 存储
-    if (env.KV_STORAGE) {
-        const key = `subscription_${subscription.id}`;
-        await env.KV_STORAGE.put(
-            key,
-            JSON.stringify({
-                ...subscription,
-                nodes,
-                lastSync: new Date().toISOString(),
-                nodeCount: nodes.length,
-            })
-        );
+export async function performSubscriptionSync(env, config = {}, options = {}) {
+    if (env.ENABLE_CRON === 'false') {
+        const error = new Error('Cron functionality is disabled');
+        error.status = 400;
+        throw error;
     }
+    const storage = StorageFactory.createAdapter(env, await StorageFactory.getStorageType(env));
+    const settings = options.checkTraffic
+        ? (await storage.get(KV_KEY_SETTINGS)) || DEFAULT_SETTINGS
+        : null;
+    const result = await runCanonicalSubscriptionSync(storage, env, config);
+    const traffic = [];
+    if (settings) {
+        const threshold =
+            Number(settings.NotifyThresholdPercent) || DEFAULT_SETTINGS.NotifyThresholdPercent;
+        for (const { sub } of result.applied) {
+            const { upload, download, total } = sub.userInfo || {};
+            if (
+                ![upload, download, total].every(Number.isFinite) ||
+                upload < 0 ||
+                download < 0 ||
+                total <= 0
+            )
+                continue;
+            const usagePercent = Math.round(((upload + download) / total) * 100);
+            traffic.push({
+                id: sub.id,
+                name: sub.name,
+                usagePercent,
+                warning: usagePercent >= threshold,
+            });
+        }
+    }
+    return {
+        timestamp: new Date().toISOString(),
+        totalSubscriptions: result.subscriptions.length,
+        successfulSyncs: result.applied.length,
+        failedSyncs: result.failures.length,
+        details: result.details,
+        config: result.config,
+        ...(settings
+            ? {
+                  trafficCheck: {
+                      checkedSubscriptions: traffic.length,
+                      unavailableSubscriptions: result.subscriptions.length - traffic.length,
+                      warnings: traffic.filter((item) => item.warning).length,
+                      details: traffic,
+                  },
+              }
+            : {}),
+    };
+}
 
-    // 更新 D1 数据库
-    if (env.DB) {
-        await env.DB.prepare(
-            `UPDATE subscriptions
-             SET nodes = ?, node_count = ?, last_sync = ?
-             WHERE id = ?`
-        )
-            .bind(JSON.stringify(nodes), nodes.length, new Date().toISOString(), subscription.id)
-            .run();
-    }
+/** Platform events call this function directly; an HTTP header never establishes this trust. */
+export async function scheduled(_event, env, context) {
+    const task = performSubscriptionSync(env, cronSyncConfig(env));
+    if (typeof context?.waitUntil === 'function') context.waitUntil(task);
+    return task;
 }

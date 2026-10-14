@@ -6,6 +6,7 @@ import { StorageFactory } from '../../functions/storage-adapter.js';
 import {
     captureSubscriptionIdentity,
     commitRuntimeObservation,
+    createSubscriptionProtocol,
 } from '../../functions/services/subscription-protocol/index.js';
 import { compileCommit } from '../../functions/services/subscription-protocol/sql.js';
 
@@ -112,6 +113,34 @@ describe('offline physical-row migration planner', () => {
 });
 
 describe('actual local D1 runtime and migration batches', () => {
+    it('checks Telegram preview expiry using the real D1 transaction clock', async () => {
+        const { db, env } = await create();
+        await execute(db, (await migration()).statements);
+        const fixedClock = Date.now() - 60000;
+        const storage = createSubscriptionProtocol(env, { now: () => fixedClock });
+        const preview = await storage.createTelegramPreview({
+            id: 'native-clock',
+            actorId: '1',
+            chatId: '1',
+            sourceDigest: 'a'.repeat(64),
+            baseVersion: { epoch: 'fixture-epoch', revision: 0 },
+            operations: [
+                { type: 'update', collection: 'subscriptions', id: 'a', fields: { name: 'new' } },
+            ],
+        });
+        // The request clock remains before expiry; only the database clock is later.
+        await db
+            .prepare('UPDATE subscription_protocol_previews SET expires_at=? WHERE id=?')
+            .bind(fixedClock + 1, preview.id)
+            .run();
+        await expect(storage.commitTelegramPreview(preview)).rejects.toThrow('preview_expired');
+        expect((await storage.readSubscriptionSnapshot()).version.revision).toBe(0);
+        await db
+            .prepare('UPDATE subscription_protocol_previews SET expires_at=? WHERE id=?')
+            .bind(Date.now() + 600000, preview.id)
+            .run();
+        expect((await storage.commitTelegramPreview(preview)).receipt.version.revision).toBe(1);
+    });
     it('rejects a settings race inside the real D1 runtime commit boundary', async () => {
         const { db, env } = await create();
         await execute(db, (await migration()).statements);
@@ -121,8 +150,10 @@ describe('actual local D1 runtime and migration batches', () => {
                 MISUB_DB: {
                     prepare: (...args) => db.prepare(...args),
                     batch: async (statements) => {
-                        await StorageFactory.createAdapter(env, 'd1').put('worker_settings_v1', {
-                            builtinSkipCertVerify: true,
+                        await StorageFactory.createAdapter(env, 'd1').commitDomainOperations({
+                            baseVersion: { epoch: 'fixture-epoch', revision: 0 },
+                            operationId: 'settings-race',
+                            domains: { settings: { builtinSkipCertVerify: true } },
                         });
                         return db.batch(statements);
                     },
@@ -135,6 +166,7 @@ describe('actual local D1 runtime and migration batches', () => {
             await commitRuntimeObservation(storage, {
                 id: 'a',
                 operationId: 'policy-race',
+                epoch: 'fixture-epoch',
                 requestPolicy: before.requestPolicy,
                 identity: await captureSubscriptionIdentity(before.subscriptions[0]),
                 observedAt: 10,
@@ -142,12 +174,12 @@ describe('actual local D1 runtime and migration batches', () => {
             })
         ).toEqual({ applied: false, reason: 'identity_conflict' });
         const after = await storage.readSubscriptionSnapshot();
-        expect(after.version).toEqual(before.version);
+        expect(after.version).toEqual({ ...before.version, revision: 1 });
         expect(after.subscriptions).toEqual(before.subscriptions);
         expect(after.requestPolicy).toBe(1);
         expect(
             await db.prepare('SELECT count(*) n FROM subscription_protocol_receipts').first('n')
-        ).toBe(0);
+        ).toBe(1);
         expect(
             await db.prepare('SELECT count(*) n FROM subscription_protocol_gate').first('n')
         ).toBe(0);
@@ -226,7 +258,7 @@ describe('actual local D1 runtime and migration batches', () => {
             id: 'a',
             operationId: 'runtime',
             identity: await captureSubscriptionIdentity(sub),
-            requestPolicy: 0,
+            epoch: 'fixture-epoch',
             requestPolicy: 0,
             observedAt: 10,
             fields: { nodeCount: 4 },

@@ -6,7 +6,10 @@ import {
     createSubscriptionProtocol,
     protocolError,
 } from '../../functions/services/subscription-protocol/index.js';
-import { PROTOCOL_SCHEMA } from '../../functions/services/subscription-protocol/sql.js';
+import {
+    PROTOCOL_SCHEMA,
+    PROTOCOL_SCHEMA_VERSION,
+} from '../../functions/services/subscription-protocol/sql.js';
 import {
     handleDataRequest,
     handleMisubsSave,
@@ -102,8 +105,8 @@ function createFixture() {
         sqlite.prepare('INSERT INTO profiles VALUES(?,?)').run(item.id, JSON.stringify(item));
     for (const sql of PROTOCOL_SCHEMA) sqlite.exec(sql);
     sqlite
-        .prepare('INSERT INTO subscription_protocol_meta VALUES(1,?,1,?,0)')
-        .run('fixture_authority', baseVersion.epoch);
+        .prepare('INSERT INTO subscription_protocol_meta VALUES(1,?,?,?,0)')
+        .run('fixture_authority', PROTOCOL_SCHEMA_VERSION, baseVersion.epoch);
     const db = {
         prepare(sql) {
             const prepared = (args = []) => ({
@@ -166,7 +169,12 @@ function createFixture() {
         db,
         sqlite,
         snapshot: () => adapter.readSubscriptionSnapshot(),
-        setSettings: (settings) => authoritativeSettings.put('worker_settings_v1', settings),
+        setSettings: async (settings) =>
+            authoritativeSettings.commitDomainOperations({
+                operationId: `fixture_settings_${crypto.randomUUID()}`,
+                baseVersion: (await authoritativeSettings.readDomainSnapshot()).version,
+                domains: { settings },
+            }),
     };
 }
 
@@ -205,9 +213,9 @@ function noLegacyWrites(adapter) {
 }
 
 describe('atomic management integration', () => {
-    it('GET returns one snapshot version without profile ID migration or lazy writes', async () => {
+    it('GET returns one snapshot version without profile ID migration and allows scheduled checks', async () => {
         const { env, adapter } = createFixture();
-        const read = vi.spyOn(adapter, 'readSubscriptionSnapshot');
+        const read = vi.spyOn(adapter, 'readDomainSnapshot');
         const response = await handleDataRequest(env);
         expect(response.status).toBe(200);
         expect(await response.json()).toMatchObject({
@@ -218,8 +226,29 @@ describe('atomic management integration', () => {
         expect(read).toHaveBeenCalledTimes(1);
         expect(adapter.getAllSubscriptions).not.toHaveBeenCalled();
         expect(adapter.getAllProfiles).not.toHaveBeenCalled();
-        expect(maybeRunScheduledTasks).not.toHaveBeenCalled();
+        expect(maybeRunScheduledTasks).toHaveBeenCalledTimes(1);
         noLegacyWrites(adapter);
+    });
+    it('keeps the captured response coherent when a lazy task advances settings revision', async () => {
+        const { env, adapter } = createFixture();
+        const pending = [];
+        maybeRunScheduledTasks.mockImplementationOnce(async () =>
+            adapter.commitDomainOperations({
+                operationId: 'lazy_settings_patch',
+                baseVersion,
+                domains: { settings: { storageType: 'd1', FileName: 'Lazy task' } },
+            })
+        );
+        const response = await handleDataRequest(env, {
+            env,
+            waitUntil: (work) => pending.push(work),
+        });
+        await Promise.all(pending);
+        expect(await response.json()).toMatchObject({
+            version: baseVersion,
+            config: { FileName: 'MiSub' },
+        });
+        expect((await adapter.readDomainSnapshot()).settings.FileName).toBe('Lazy task');
     });
     it.each([{ misubs: [], profiles: [] }, { diff: { subscriptions: {} } }, { operations: [] }])(
         'rejects unversioned request %j with zero side effects',
@@ -294,7 +323,7 @@ describe('atomic management integration', () => {
     });
     it('unknown backend failure becomes a sanitized 503', async () => {
         const { env, adapter } = createFixture();
-        adapter.readSubscriptionSnapshot = vi
+        adapter.readDomainSnapshot = vi
             .fn()
             .mockRejectedValue(new Error('synthetic-secret-detail'));
         const response = await handleDataRequest(env);
@@ -526,7 +555,7 @@ describe('atomic restore and migration guards', () => {
         expect(db.batch).not.toHaveBeenCalled();
         noLegacyWrites(adapter);
     });
-    it('rejects multidomain restore before creating a snapshot or writing settings', async () => {
+    it('rejects multidomain restore without an explicit next epoch before writing', async () => {
         const { env, adapter, db } = createFixture();
         const response = await handleBackupRestore(
             jsonRequest({
@@ -535,8 +564,8 @@ describe('atomic restore and migration guards', () => {
             }),
             env
         );
-        expect(response.status).toBe(400);
-        expect(await response.json()).toMatchObject({ code: 'unsupported_restore_scope' });
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ code: 'epoch_conflict' });
         expect(db.batch).not.toHaveBeenCalled();
         noLegacyWrites(adapter);
     });
@@ -584,7 +613,7 @@ describe('atomic restore and migration guards', () => {
     });
     it('exports collections from one atomic snapshot and labels its version', async () => {
         const { env, adapter } = createFixture();
-        const read = vi.spyOn(adapter, 'readSubscriptionSnapshot');
+        const read = vi.spyOn(adapter, 'readDomainSnapshot');
         const payload = await buildBackupPayload(env);
         expect(payload.source.subscriptionVersion).toEqual(baseVersion);
         expect(read).toHaveBeenCalledTimes(1);
@@ -600,7 +629,7 @@ describe('atomic restore and migration guards', () => {
             noLegacyWrites(adapter);
         }
     );
-    it('blocks storage fallback and settings reset', async () => {
+    it('blocks storage fallback and unversioned settings reset', async () => {
         const { env, adapter, db } = createFixture();
         expect((await handleSettingsSave(jsonRequest({ storageType: 'kv' }), env)).status).toBe(
             428
@@ -611,26 +640,35 @@ describe('atomic restore and migration guards', () => {
     });
     it('saves strict settings only in its authoritative D1 adapter', async () => {
         const { env, adapter, db } = createFixture();
-        adapter.put.mockResolvedValue(true);
         const response = await handleSettingsSave(
-            jsonRequest({ storageType: 'd1', defaultLocale: 'en-US' }, 'POST', '/api/settings', {
-                'X-MiSub-Save-Scope': 'preferences',
-            }),
+            jsonRequest(
+                { ...metadata, settings: { storageType: 'd1', defaultLocale: 'en-US' } },
+                'POST',
+                '/api/settings',
+                {
+                    'X-MiSub-Save-Scope': 'preferences',
+                }
+            ),
             env
         );
         expect(response.status).toBe(200);
         expect(StorageFactory.createAdapter).toHaveBeenCalledTimes(1);
-        expect(adapter.put).toHaveBeenCalledTimes(1);
-        expect(adapter.put.mock.calls[0][1]).toMatchObject({
+        expect(adapter.put).not.toHaveBeenCalled();
+        expect((await adapter.readDomainSnapshot()).settings).toMatchObject({
             storageType: 'd1',
             defaultLocale: 'en-US',
         });
-        expect(db.batch).not.toHaveBeenCalled();
+        expect(db.batch).toHaveBeenCalledTimes(1);
     });
     it('sanitizes a strict settings storage failure', async () => {
         const { env, adapter } = createFixture();
-        adapter.put.mockRejectedValue(new Error('synthetic_private_store_details'));
-        const response = await handleSettingsSave(jsonRequest({ defaultLocale: 'en-US' }), env);
+        adapter.commitDomainOperations = vi
+            .fn()
+            .mockRejectedValue(new Error('synthetic_private_store_details'));
+        const response = await handleSettingsSave(
+            jsonRequest({ ...metadata, settings: { defaultLocale: 'en-US' } }),
+            env
+        );
         expect(response.status).toBe(503);
         const body = await response.json();
         expect(body.code).toBe('storage_unavailable');
@@ -692,10 +730,14 @@ describe('atomic external inspection and refresh', () => {
     it('uses the captured global TLS policy for inspection and its observation commit', async () => {
         const { env, setSettings, snapshot } = createFixture();
         await setSettings({ builtinSkipCertVerify: true });
-        const response = await handleExternalSubscriptionsRequest(jsonRequest(metadata), env, {
-            id: 'sub_a',
-            action: 'refresh',
-        });
+        const response = await handleExternalSubscriptionsRequest(
+            jsonRequest({ ...metadata, baseVersion: (await snapshot()).version }),
+            env,
+            {
+                id: 'sub_a',
+                action: 'refresh',
+            }
+        );
         expect(response.status).toBe(200);
         expect(handleNodeCountRequest.mock.calls[0][2]).toEqual({ requestPolicy: 1 });
         expect((await snapshot()).subscriptions.find(({ id }) => id === 'sub_a').nodeCount).toBe(7);

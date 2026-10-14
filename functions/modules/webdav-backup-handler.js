@@ -16,7 +16,12 @@ import {
     requireMutationMetadata,
 } from '../services/subscription-protocol/index.js';
 import { KV_KEY_SUBS, KV_KEY_PROFILES, KV_KEY_SETTINGS } from './config.js';
-import { KV_KEY_RULE_TEMPLATES, listRuleTemplates } from './rule-template-handler.js';
+import {
+    KV_KEY_RULE_TEMPLATES,
+    listRuleTemplates,
+    validateStrictRuleTemplates,
+} from './rule-template-handler.js';
+import { commitWebdavStatusPatch } from '../services/domain-settings-service.js';
 import {
     createJsonResponse,
     createErrorResponse,
@@ -112,14 +117,13 @@ async function getStorage(env) {
     };
 }
 
-async function readBusinessData(storageAdapter) {
+async function readBusinessData(storageAdapter, domainSnapshot) {
     if (isAtomicSubscriptionStorage(storageAdapter)) {
-        const snapshot = await storageAdapter.readSubscriptionSnapshot();
-        const ruleTemplates = await listRuleTemplates(storageAdapter);
+        const snapshot = domainSnapshot || (await storageAdapter.readDomainSnapshot());
         return {
             subscriptions: snapshot.subscriptions,
             profiles: snapshot.profiles,
-            ruleTemplates,
+            ruleTemplates: snapshot.ruleTemplates,
             subscriptionVersion: snapshot.version,
         };
     }
@@ -142,11 +146,15 @@ async function readBusinessData(storageAdapter) {
 
 export async function buildBackupPayload(env, options = {}) {
     const { storageAdapter, storageType } = await getStorage(env);
-    const settings =
-        (await storageAdapter.get(KV_KEY_SETTINGS)) || (await SettingsCache.get(env)) || {};
+    const snapshot = isAtomicSubscriptionStorage(storageAdapter)
+        ? await storageAdapter.readDomainSnapshot()
+        : null;
+    const settings = snapshot
+        ? snapshot.settings
+        : (await storageAdapter.get(KV_KEY_SETTINGS)) || (await SettingsCache.get(env)) || {};
     const backupConfig = normalizeWebdavConfig(settings);
     const scope = normalizeScope(options.scope || backupConfig.backupScope);
-    const businessData = await readBusinessData(storageAdapter);
+    const businessData = await readBusinessData(storageAdapter, snapshot);
 
     const payload = {
         version: BACKUP_VERSION,
@@ -161,6 +169,7 @@ export async function buildBackupPayload(env, options = {}) {
                 ? {
                       subscriptionProtocol: 'd1-v1',
                       subscriptionVersion: businessData.subscriptionVersion,
+                      domainVersion: businessData.subscriptionVersion,
                   }
                 : {}),
         },
@@ -285,28 +294,106 @@ async function createPreRestoreSnapshot(env, storageAdapter, scope) {
 export async function restoreBackupPayload(env, rawPayload, options = {}) {
     const { storageAdapter } = await getStorage(env);
     if (isAtomicSubscriptionStorage(storageAdapter)) {
-        if (options.scope !== 'subscriptions-only')
+        const metadata = requireMutationMetadata(options, options.request);
+        const scope = options.scope || rawPayload?.scope || BACKUP_SCOPES.DATA_ONLY;
+        if (
+            ![
+                'subscriptions-only',
+                BACKUP_SCOPES.DATA_ONLY,
+                BACKUP_SCOPES.DATA_AND_SETTINGS,
+            ].includes(scope)
+        )
             throw protocolError('unsupported_restore_scope');
-        const data = rawPayload?.data || rawPayload;
+        const unified = rawPayload?.type === BACKUP_TYPE;
+        const data = unified ? rawPayload.data : rawPayload?.data || rawPayload;
         if (
             !data ||
             typeof data !== 'object' ||
             Array.isArray(data) ||
             !Array.isArray(data.subscriptions) ||
-            !Array.isArray(data.profiles) ||
+            !Array.isArray(data.profiles)
+        )
+            throw protocolError('invalid_data');
+        if (
+            scope === 'subscriptions-only' &&
             Object.keys(data).some((key) => !['subscriptions', 'profiles'].includes(key))
         )
             throw protocolError('invalid_data');
-        const metadata = requireMutationMetadata(options, options.request);
+        const snapshot = await storageAdapter.readDomainSnapshot();
+        if (snapshot.version.epoch !== metadata.baseVersion.epoch)
+            throw protocolError('epoch_conflict');
+        if (snapshot.version.revision !== metadata.baseVersion.revision)
+            throw protocolError('revision_conflict');
+        let subscriptions = data.subscriptions;
+        if (!unified && data.manualNodes !== undefined) {
+            if (!Array.isArray(data.manualNodes)) throw protocolError('invalid_data');
+            subscriptions = [...subscriptions, ...data.manualNodes];
+        }
+        const domains = {};
+        if (scope !== 'subscriptions-only') {
+            if (unified && !Array.isArray(data.ruleTemplates)) throw protocolError('invalid_data');
+            if (data.ruleTemplates !== undefined)
+                domains.ruleTemplates = validateStrictRuleTemplates(data.ruleTemplates);
+            if (scope === BACKUP_SCOPES.DATA_AND_SETTINGS) {
+                if (
+                    !data.settings ||
+                    typeof data.settings !== 'object' ||
+                    Array.isArray(data.settings)
+                )
+                    throw protocolError('invalid_data');
+                const restored = sanitizeSettingsForRestore(data.settings);
+                const sanitizedCurrent = sanitizeSettingsForRestore(snapshot.settings);
+                const protectedKeys = Object.keys(snapshot.settings).filter(
+                    (key) => !Object.hasOwn(sanitizedCurrent, key)
+                );
+                domains.settings = {
+                    ...restored,
+                    ...Object.fromEntries(
+                        protectedKeys.map((key) => [key, snapshot.settings[key]])
+                    ),
+                    storageType: STORAGE_TYPES.D1,
+                };
+            }
+        }
+        const preRestoreBackup = {
+            version: BACKUP_VERSION,
+            app: 'MiSub',
+            type: BACKUP_TYPE,
+            scope,
+            exportedAt: new Date().toISOString(),
+            source: {
+                storageType: STORAGE_TYPES.D1,
+                trigger: 'pre-restore',
+                subscriptionProtocol: 'd1-v1',
+                domainVersion: snapshot.version,
+            },
+            data: {
+                subscriptions: snapshot.subscriptions,
+                profiles: snapshot.profiles,
+                ruleTemplates: snapshot.ruleTemplates,
+                settings:
+                    scope === BACKUP_SCOPES.DATA_AND_SETTINGS
+                        ? sanitizeSettingsForBackup(snapshot.settings)
+                        : null,
+            },
+        };
         const result = await storageAdapter.restoreSubscriptionSnapshot({
             ...metadata,
             nextEpoch: options.nextEpoch,
-            subscriptions: data.subscriptions,
+            subscriptions,
             profiles: data.profiles,
+            ...(scope !== 'subscriptions-only' ? { domains, preRestoreBackup } : {}),
         });
+        SettingsCache.clear();
         return {
             success: true,
-            scope: 'subscriptions-only',
+            scope,
+            restored: {
+                subscriptions: result.snapshot.subscriptions.length,
+                profiles: result.snapshot.profiles.length,
+                ruleTemplates: domains.ruleTemplates?.length,
+                settings: domains.settings !== undefined,
+            },
             data: {
                 misubs: result.snapshot.subscriptions,
                 profiles: result.snapshot.profiles,
@@ -440,8 +527,13 @@ export function formatBackupFilename(
     return safeTemplate.replace(/\{datetime\}/g, datetime).replace(/\{date\}/g, date);
 }
 
-async function updateBackupStatus(env, patch) {
+async function updateBackupStatus(env, patch, options = {}) {
     const { storageAdapter } = await getStorage(env);
+    if (isAtomicSubscriptionStorage(storageAdapter)) {
+        const result = await commitWebdavStatusPatch(storageAdapter, patch, options);
+        SettingsCache.clear();
+        return result.snapshot.settings.webdavBackup;
+    }
     const settings = (await storageAdapter.get(KV_KEY_SETTINGS)) || {};
     const webdavBackup = { ...normalizeWebdavConfig(settings), ...patch };
     await storageAdapter.put(KV_KEY_SETTINGS, { ...settings, webdavBackup });
@@ -451,7 +543,12 @@ async function updateBackupStatus(env, patch) {
 
 export async function performWebdavBackup(env, options = {}) {
     const { storageAdapter } = await getStorage(env);
-    const settings = (await storageAdapter.get(KV_KEY_SETTINGS)) || {};
+    const snapshot = isAtomicSubscriptionStorage(storageAdapter)
+        ? await storageAdapter.readDomainSnapshot()
+        : null;
+    const settings = snapshot
+        ? snapshot.settings
+        : (await storageAdapter.get(KV_KEY_SETTINGS)) || {};
     const config = normalizeWebdavConfig(settings);
     assertSafeWebdavConfig(config);
 
@@ -474,12 +571,16 @@ export async function performWebdavBackup(env, options = {}) {
             throw new Error(`WebDAV 上传失败: HTTP ${response.status}`);
         }
 
-        await updateBackupStatus(env, {
-            lastBackupAt: payload.exportedAt,
-            lastBackupStatus: 'success',
-            lastBackupMessage: '备份成功',
-            lastBackupFile: remotePath,
-        });
+        await updateBackupStatus(
+            env,
+            {
+                lastBackupAt: payload.exportedAt,
+                lastBackupStatus: 'success',
+                lastBackupMessage: '备份成功',
+                lastBackupFile: remotePath,
+            },
+            { expectedEpoch: snapshot?.version.epoch }
+        );
 
         return {
             success: true,
@@ -490,11 +591,15 @@ export async function performWebdavBackup(env, options = {}) {
             timestamp: payload.exportedAt,
         };
     } catch (error) {
-        await updateBackupStatus(env, {
-            lastBackupAt: new Date().toISOString(),
-            lastBackupStatus: 'failed',
-            lastBackupMessage: error.message || '备份失败',
-        });
+        await updateBackupStatus(
+            env,
+            {
+                lastBackupAt: new Date().toISOString(),
+                lastBackupStatus: 'failed',
+                lastBackupMessage: snapshot ? '备份失败' : error.message || '备份失败',
+            },
+            { expectedEpoch: snapshot?.version.epoch }
+        );
         throw error;
     }
 }
@@ -651,7 +756,15 @@ export async function handleWebdavRestore(request, env) {
     if (request.method !== 'POST') return createErrorResponse('Method Not Allowed', 405);
     try {
         const body = await readJsonWithLimit(request, JSON_BODY_LIMITS.large);
-        if (isAtomicSubscriptionRequested(env) && body.scope !== 'subscriptions-only')
+        if (
+            isAtomicSubscriptionRequested(env) &&
+            body.scope !== undefined &&
+            ![
+                'subscriptions-only',
+                BACKUP_SCOPES.DATA_ONLY,
+                BACKUP_SCOPES.DATA_AND_SETTINGS,
+            ].includes(body.scope)
+        )
             throw protocolError('unsupported_restore_scope');
         if (isAtomicSubscriptionRequested(env)) requireMutationMetadata(body, request);
         const payload =

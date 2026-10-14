@@ -1,5 +1,8 @@
 // Pure offline planner: accepts supplied physical rows, never resolves a binding or executes SQL.
-import { PROTOCOL_SCHEMA } from '../../functions/services/subscription-protocol/sql.js';
+import {
+    PROTOCOL_SCHEMA,
+    PROTOCOL_SCHEMA_VERSION,
+} from '../../functions/services/subscription-protocol/sql.js';
 import {
     canonicalJson,
     hashValue,
@@ -83,7 +86,12 @@ export async function planOfflineSubscriptionMigration({
             ),
         ]),
         ...PROTOCOL_SCHEMA.slice(1).map((sql) => step(sql)),
-        step('INSERT INTO subscription_protocol_meta VALUES(1,?,1,?,0)', authority, epoch),
+        step(
+            'INSERT INTO subscription_protocol_meta VALUES(1,?,?,?,0)',
+            authority,
+            PROTOCOL_SCHEMA_VERSION,
+            epoch
+        ),
     ];
     return {
         sourceDigest: await hashValue(source),

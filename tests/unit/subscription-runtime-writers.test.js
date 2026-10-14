@@ -292,21 +292,16 @@ describe('strict node observations', () => {
 });
 
 describe('strict Cron and download writers', () => {
-    it('the obsolete schedule HTTP entry returns a clear rejection', async () => {
-        const db = { prepare: vi.fn(), batch: vi.fn() };
+    it('schedule HTTP rejects a forged platform header before fetching', async () => {
+        fixture();
         const response = await legacyScheduleRequest({
             request: new Request('https://misub.invalid/_schedule', {
                 headers: { 'CF-Cron': 'true' },
             }),
-            env: {
-                MISUB_SUBSCRIPTION_PROTOCOL: 'd1-v1',
-                MISUB_SUBSCRIPTION_AUTHORITY: 'fixture',
-                MISUB_DB: db,
-            },
+            env: {},
         });
-        expect(response.status).toBe(428);
-        expect(await response.json()).toEqual({ error: 'legacy_write_blocked' });
-        expect(db.prepare).not.toHaveBeenCalled();
+        expect(response.status).toBe(401);
+        expect(await response.json()).toEqual({ error: 'Unauthorized' });
         expect(fetch).not.toHaveBeenCalled();
     });
     it('Cron commits runtime observations before notifications and never persists a full list', async () => {
@@ -364,25 +359,22 @@ describe('strict Cron and download writers', () => {
         expect(state.subscriptions).toEqual([]);
         expectNoLegacyWrite(storage);
     });
-    it('download waitUntil does not persist client/profile scoped runtime observations', async () => {
+    it('download waitUntil rejects a canonical observation after its URL changes', async () => {
         const { state, storage } = fixture();
         const source = structuredClone(state.subscriptions[0]);
         const pending = [];
+        const context = { storage, waitUntil: (promise) => pending.push(promise) };
         fetch.mockImplementation(async () => {
             state.subscriptions[0].url = 'https://edited.example/sub';
             return new Response(node);
         });
-        await generateCombinedNodeList(
-            { storage, waitUntil: (promise) => pending.push(promise) },
-            {},
-            'ClashMeta',
-            [source],
-            '',
-            {},
-            false
-        );
+        await generateCombinedNodeList(context, {}, 'ClashMeta', [source], '', {}, false);
         await Promise.all(pending);
-        expect(commitObservation).not.toHaveBeenCalled();
+        expect(commitObservation).toHaveBeenCalledTimes(1);
+        expect(context.subscriptionRuntimeObservations.one).toMatchObject({
+            status: 'rejected',
+            reason: 'identity_conflict',
+        });
         expect(state.subscriptions[0].nodeCount).toBeUndefined();
         expectNoLegacyWrite(storage);
     });
@@ -400,30 +392,67 @@ describe('strict Cron and download writers', () => {
         expect(storage.getAllProfiles).not.toHaveBeenCalled();
         expectNoLegacyWrite(storage);
     });
-    it.each(['d1-v1', 'unrecognized'])(
-        'obsolete schedule rejects %s before touching raw bindings',
-        async (mode) => {
-            const kv = { get: vi.fn(), put: vi.fn() };
-            const db = { prepare: vi.fn(), batch: vi.fn() };
-            await expect(
-                performSubscriptionSync({
-                    MISUB_SUBSCRIPTION_PROTOCOL: mode,
-                    MISUB_SUBSCRIPTION_AUTHORITY: 'fixture',
-                    MISUB_DB: db,
-                    KV_STORAGE: kv,
-                    DB: db,
-                })
-            ).rejects.toMatchObject({
-                code: mode === 'd1-v1' ? 'legacy_write_blocked' : 'invalid_protocol_mode',
-            });
-            expect(kv.get).not.toHaveBeenCalled();
-            expect(db.prepare).not.toHaveBeenCalled();
-            expect(fetch).not.toHaveBeenCalled();
-        }
-    );
+    it.each(['unrecognized'])('schedule rejects %s before touching raw bindings', async (mode) => {
+        const kv = { get: vi.fn(), put: vi.fn() };
+        const db = { prepare: vi.fn(), batch: vi.fn() };
+        await expect(
+            performSubscriptionSync({
+                MISUB_SUBSCRIPTION_PROTOCOL: mode,
+                MISUB_SUBSCRIPTION_AUTHORITY: 'fixture',
+                MISUB_DB: db,
+                KV_STORAGE: kv,
+                DB: db,
+            })
+        ).rejects.toMatchObject({
+            code: 'invalid_protocol_mode',
+        });
+        expect(kv.get).not.toHaveBeenCalled();
+        expect(db.prepare).not.toHaveBeenCalled();
+        expect(fetch).not.toHaveBeenCalled();
+    });
 });
 
-describe('strict Telegram legacy mutation gate', () => {
+describe('strict Telegram preview-only legacy command routing', () => {
+    function telegramFixture() {
+        const value = fixture([
+            {
+                id: 'one',
+                name: 'Zulu',
+                url: 'https://source.example/sub',
+                enabled: true,
+                group: 'group',
+                _writeGeneration: 'g1',
+            },
+            {
+                id: 'duplicate',
+                name: 'Alpha',
+                url: 'https://source.example/sub',
+                enabled: false,
+                _writeGeneration: 'g2',
+            },
+            {
+                id: 'manual',
+                name: 'Manual',
+                url: node,
+                enabled: true,
+                group: 'group',
+                _writeGeneration: 'g3',
+            },
+        ]);
+        value.state.profiles = [
+            { id: 'profile-1', name: 'Profile', subscriptions: ['one'], manualNodes: ['manual'] },
+        ];
+        value.settings.telegram_push_config.user_bindings = { 1: 'profile-1' };
+        Object.assign(value.storage, {
+            readDomainSnapshot: vi.fn(async () =>
+                structuredClone({ ...value.state, settings: value.settings })
+            ),
+            readTelegramPreview: vi.fn(async () => null),
+            createTelegramPreview: vi.fn(async (preview) => preview),
+            commitTelegramPreview: vi.fn(),
+        });
+        return value;
+    }
     function webhook(update) {
         return new Request('https://misub.invalid/api/telegram/webhook', {
             method: 'POST',
@@ -431,7 +460,7 @@ describe('strict Telegram legacy mutation gate', () => {
                 'Content-Type': 'application/json',
                 'X-Telegram-Bot-Api-Secret-Token': 'synthetic-secret',
             },
-            body: JSON.stringify(update),
+            body: JSON.stringify({ update_id: 1, ...update }),
         });
     }
     it.each([
@@ -454,16 +483,24 @@ describe('strict Telegram legacy mutation gate', () => {
         '/unbind',
         'https://source.example/sub',
         node,
-    ])('rejects %s without collection writes', async (text) => {
-        const { storage } = fixture();
+    ])('previews or displays %s without collection writes', async (text) => {
+        const { storage } = telegramFixture();
         fetch.mockImplementation(async () => new Response('{"ok":true}'));
         const response = await handleTelegramWebhook(
             webhook({ message: { from: { id: 1 }, chat: { id: 1 }, text } }),
             {}
         );
-        expect(await response.json()).toMatchObject({ code: 'legacy_write_blocked' });
-        expect(fetch).toHaveBeenCalledTimes(1);
-        expect(JSON.parse(fetch.mock.calls[0][1].body).text).toContain('网页管理');
+        const body = await response.json();
+        expect(body).toMatchObject({ ok: true });
+        expect(body.code).toBeUndefined();
+        expect(fetch).toHaveBeenCalled();
+        expect(storage.readDomainSnapshot).toHaveBeenCalledOnce();
+        expect(storage.commitTelegramPreview).not.toHaveBeenCalled();
+        for (const [preview] of storage.createTelegramPreview.mock.calls) {
+            expect(preview.baseVersion).toEqual({ epoch: 'fixture-epoch', revision: 4 });
+            expect(preview.actorId).toBe('1');
+            expect(preview.chatId).toBe('1');
+        }
         expectNoLegacyWrite(storage);
     });
     it.each([
@@ -485,8 +522,8 @@ describe('strict Telegram legacy mutation gate', () => {
         'do_delete_all',
         'bind_profile_profile-1',
         'unbind_profile',
-    ])('rejects old callback %s', async (data) => {
-        const { storage } = fixture();
+    ])('previews or displays old callback %s without executing it', async (data) => {
+        const { storage } = telegramFixture();
         fetch.mockImplementation(async () => new Response('{"ok":true}'));
         const response = await handleTelegramWebhook(
             webhook({
@@ -499,13 +536,22 @@ describe('strict Telegram legacy mutation gate', () => {
             }),
             {}
         );
-        expect(await response.json()).toMatchObject({ code: 'legacy_write_blocked' });
+        const body = await response.json();
+        expect(body).toMatchObject({ ok: true });
+        expect(body.code).toBeUndefined();
+        expect(storage.readDomainSnapshot).toHaveBeenCalledOnce();
+        expect(storage.commitTelegramPreview).not.toHaveBeenCalled();
         expectNoLegacyWrite(storage);
     });
-    it('rejects file import before downloading the attachment', async () => {
-        const { storage } = fixture();
-        fetch.mockImplementation(async () => new Response('{"ok":true}'));
-        await handleTelegramWebhook(
+    it('previews a synthetic file import after parsing without writing collections', async () => {
+        const { storage } = telegramFixture();
+        fetch.mockImplementation(async (url) => {
+            if (url.includes('/getFile?'))
+                return Response.json({ ok: true, result: { file_path: 'fixture.txt' } });
+            if (url.includes('/file/bot')) return new Response('ss://new@fixture.invalid:443#New');
+            return Response.json({ ok: true });
+        });
+        const response = await handleTelegramWebhook(
             webhook({
                 message: {
                     from: { id: 1 },
@@ -515,19 +561,20 @@ describe('strict Telegram legacy mutation gate', () => {
             }),
             {}
         );
-        expect(fetch).toHaveBeenCalledTimes(1);
-        expect(String(fetch.mock.calls[0][0])).toContain('/sendMessage');
+        expect(await response.json()).toMatchObject({ ok: true, preview: true });
+        expect(storage.createTelegramPreview).toHaveBeenCalledOnce();
+        expect(storage.commitTelegramPreview).not.toHaveBeenCalled();
         expectNoLegacyWrite(storage);
     });
     it('keeps read-only stats available', async () => {
-        const { storage } = fixture();
+        const { storage } = telegramFixture();
         fetch.mockImplementation(async () => new Response('{"ok":true}'));
         const response = await handleTelegramWebhook(
             webhook({ message: { from: { id: 1 }, chat: { id: 1 }, text: '/stats' } }),
             {}
         );
         expect(await response.json()).toEqual({ ok: true });
-        expect(storage.readSubscriptionSnapshot).toHaveBeenCalledTimes(1);
+        expect(storage.readDomainSnapshot).toHaveBeenCalledTimes(1);
         expectNoLegacyWrite(storage);
     });
 });

@@ -5,7 +5,13 @@ import {
 } from '../../../src/shared/subscription-edit-operations.js';
 import { protocolError } from './errors.js';
 
-export const PROTOCOL_LIMITS = Object.freeze({ bytes: 262144, items: 1000, operations: 2000 });
+export const PROTOCOL_LIMITS = Object.freeze({
+    bytes: 262144,
+    domainBytes: 1048576,
+    transactionBytes: 2621440,
+    items: 1000,
+    operations: 2000,
+});
 export { RUNTIME_FIELDS };
 const editable = {
     subscriptions: new Set(SUBSCRIPTION_EDIT_FIELDS),
@@ -45,11 +51,11 @@ function stable(value) {
     return value;
 }
 
-export function canonicalJson(value) {
+export function canonicalJson(value, maxBytes = PROTOCOL_LIMITS.bytes) {
     try {
         const result = JSON.stringify(stable(value));
         if (!result) throw protocolError('invalid_data');
-        if (new TextEncoder().encode(result).byteLength > PROTOCOL_LIMITS.bytes)
+        if (new TextEncoder().encode(result).byteLength > maxBytes)
             throw protocolError('capacity_exceeded');
         return result;
     } catch (error) {
@@ -58,10 +64,35 @@ export function canonicalJson(value) {
     }
 }
 
-export async function hashValue(value) {
-    const bytes = new TextEncoder().encode(canonicalJson(value));
+export async function hashValue(value, maxBytes) {
+    const bytes = new TextEncoder().encode(canonicalJson(value, maxBytes));
     const hash = await crypto.subtle.digest('SHA-256', bytes);
     return Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export function validateDomains(value) {
+    if (
+        !isRecord(value) ||
+        Object.keys(value).some((key) => !['settings', 'ruleTemplates'].includes(key))
+    )
+        throw protocolError('invalid_data');
+    if (Object.hasOwn(value, 'settings')) {
+        if (!isRecord(value.settings)) throw protocolError('invalid_data');
+        if (value.settings.storageType !== undefined && value.settings.storageType !== 'd1')
+            throw protocolError('authority_mismatch');
+        canonicalJson(value.settings, PROTOCOL_LIMITS.domainBytes);
+    }
+    if (Object.hasOwn(value, 'ruleTemplates')) {
+        if (!Array.isArray(value.ruleTemplates)) throw protocolError('invalid_data');
+        const ids = new Set();
+        for (const rule of value.ruleTemplates) {
+            if (!isRecord(rule) || !validId(rule.id) || ids.has(rule.id))
+                throw protocolError('invalid_data');
+            ids.add(rule.id);
+        }
+        canonicalJson(value.ruleTemplates, PROTOCOL_LIMITS.domainBytes);
+    }
+    return JSON.parse(canonicalJson(value, PROTOCOL_LIMITS.transactionBytes));
 }
 
 export async function captureSubscriptionIdentity(subscription) {

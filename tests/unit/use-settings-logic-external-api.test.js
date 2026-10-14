@@ -52,13 +52,15 @@ describe('useSettingsLogic externalApi normalization', () => {
 
     it('shows a visible reload countdown and reloads automatically after saving', async () => {
         vi.useFakeTimers();
+        fetchSettings.mockResolvedValue({ success: true, data: { storageType: 'kv' } });
         saveSettings.mockResolvedValue({ success: true });
         const reload = vi.fn();
         const originalReload = window.location.reload;
         window.location.reload = reload;
 
         try {
-            const { settings, handleSave, restartCountdown } = useSettingsLogic();
+            const { settings, loadSettings, handleSave, restartCountdown } = useSettingsLogic();
+            await loadSettings();
             settings.value.storageType = 'kv';
 
             expect(await handleSave()).toBe(true);
@@ -75,12 +77,14 @@ describe('useSettingsLogic externalApi normalization', () => {
     });
 
     it('normalizes blank token names before saving', async () => {
+        fetchSettings.mockResolvedValue({ success: true, data: { storageType: 'kv' } });
         saveSettings.mockResolvedValue({ success: true });
         const originalReload = window.location.reload;
         window.location.reload = vi.fn();
 
         try {
-            const { settings, handleSave } = useSettingsLogic();
+            const { settings, loadSettings, handleSave } = useSettingsLogic();
+            await loadSettings();
             settings.value.storageType = 'kv';
             settings.value.externalApi = {
                 enabled: true,

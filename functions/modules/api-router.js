@@ -558,7 +558,7 @@ export async function handleApiRequest(request, env, context = null) {
 
         case '/settings/reset':
             if (request.method === 'POST') {
-                return await handleSettingsReset(env);
+                return await handleSettingsReset(env, request);
             }
             return createErrorResponse('Method Not Allowed', 405);
 
@@ -578,6 +578,7 @@ export async function handleApiRequest(request, env, context = null) {
             return await handleCronStatusRequest(env);
 
         case '/cron/trigger':
+            if (request.method !== 'POST') return createErrorResponse('Method Not Allowed', 405);
             if (!(await authMiddleware(request, env))) {
                 return createJsonResponse({ error: 'Unauthorized' }, 401);
             }
@@ -934,8 +935,8 @@ async function handleCronTriggerRequest(env) {
         const scheduleModule = await import('../_schedule.js');
         const result = await scheduleModule.performSubscriptionSync(env, {
             maxSyncCount,
-            syncTimeout,
-            enableParallel,
+            timeout: syncTimeout,
+            concurrency: enableParallel ? 5 : 1,
         });
 
         // 保存执行状态

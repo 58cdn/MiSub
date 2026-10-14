@@ -16,8 +16,18 @@ import {
     validateRuntimeObservation,
     applyObservation,
     captureSubscriptionIdentity,
+    validateDomains,
+    PROTOCOL_LIMITS,
+    isRecord,
 } from './operations.js';
-import { SNAPSHOT_SQL, PROTOCOL_SCHEMA_VERSION, SETTINGS_ROW_KEY, compileCommit } from './sql.js';
+import {
+    SNAPSHOT_SQL,
+    DOMAIN_SNAPSHOT_SQL,
+    PROTOCOL_SCHEMA_VERSION,
+    RULES_ROW_KEY,
+    compileCommit,
+} from './sql.js';
+import { createTelegramPreviewStore } from './telegram-previews.js';
 
 export * from './errors.js';
 export { captureSubscriptionIdentity } from './operations.js';
@@ -37,7 +47,7 @@ const deniedWrites = new Set([
 function translateSqlError(error) {
     if (getProtocolError(error).code !== 'storage_unavailable') return error;
     const code =
-        /subscription_(schema_not_ready|authority_mismatch|epoch_conflict|operation_id_conflict|revision_conflict|identity_conflict|receipt_capacity|legacy_write_blocked|invalid_operation)/.exec(
+        /subscription_(schema_not_ready|authority_mismatch|epoch_conflict|operation_id_conflict|revision_conflict|identity_conflict|receipt_capacity|preview_capacity|preview_expired|legacy_write_blocked|invalid_operation)/.exec(
             String(error?.message ?? '')
         )?.[1];
     if (code) return protocolError(code);
@@ -62,9 +72,11 @@ export function createSubscriptionProtocol(env, { now = () => Date.now() } = {})
     if (!config) return null;
     const db = config.db.withSession?.('first-primary') ?? config.db;
 
-    async function readSubscriptionSnapshot() {
+    async function readSnapshot(includeDomains = false) {
         try {
-            const row = await db.prepare(SNAPSHOT_SQL).first();
+            const row = await db
+                .prepare(includeDomains ? DOMAIN_SNAPSHOT_SQL : SNAPSHOT_SQL)
+                .first();
             if (!row || row.schema_version !== PROTOCOL_SCHEMA_VERSION)
                 throw protocolError('schema_not_ready');
             if (row.authority !== config.authority) throw protocolError('authority_mismatch');
@@ -83,29 +95,64 @@ export function createSubscriptionProtocol(env, { now = () => Date.now() } = {})
                         (Number(left.sortIndex) || 0) - (Number(right.sortIndex) || 0) ||
                         left.id.localeCompare(right.id)
                 );
+            if (includeDomains) {
+                const settings = JSON.parse(row.settings);
+                if (!isRecord(settings)) throw protocolError('invalid_data');
+                Object.assign(
+                    result,
+                    validateDomains({
+                        settings: { ...settings, storageType: 'd1' },
+                        ruleTemplates: JSON.parse(row.rule_templates),
+                    })
+                );
+            }
             return result;
         } catch (error) {
             throw translateSqlError(error);
         }
     }
 
-    async function commit(request, { kind = 'edit', observation, restore } = {}) {
+    const readSubscriptionSnapshot = () => readSnapshot();
+    const readDomainSnapshot = () => readSnapshot(true);
+
+    async function commit(
+        request,
+        { kind = 'edit', observation, restore, domains, preRestoreBackup, preview } = {}
+    ) {
         const metadata = requireMutationMetadata(request);
-        const operations = kind === 'edit' ? validateOperations(request.operations) : undefined;
+        const operations = ['edit', 'domains', 'telegram'].includes(kind)
+            ? validateOperations(request.operations ?? [])
+            : undefined;
         const payload =
-            kind === 'edit' ? { operations } : kind === 'runtime' ? { observation } : { restore };
+            kind === 'edit'
+                ? { operations }
+                : kind === 'domains'
+                  ? { operations, domains }
+                  : kind === 'telegram'
+                    ? { preview }
+                    : kind === 'runtime'
+                      ? { observation }
+                      : {
+                            restore,
+                            ...(domains ? { domains } : {}),
+                            ...(preRestoreBackup ? { preRestoreBackup } : {}),
+                        };
         const intentMetadata =
             kind === 'runtime'
                 ? { operationId: metadata.operationId, epoch: metadata.baseVersion.epoch }
                 : metadata;
-        const digest = await hashValue({
-            authority: config.authority,
-            kind,
-            ...intentMetadata,
-            ...payload,
-        });
+        const digest = await hashValue(
+            {
+                authority: config.authority,
+                kind,
+                ...intentMetadata,
+                ...payload,
+            },
+            PROTOCOL_LIMITS.transactionBytes
+        );
         try {
-            const snapshot = await readSubscriptionSnapshot();
+            const includeDomains = !!domains || kind === 'telegram';
+            const snapshot = await readSnapshot(includeDomains);
             if (snapshot.version.epoch !== metadata.baseVersion.epoch)
                 throw protocolError('epoch_conflict');
             const timestamp = now();
@@ -120,7 +167,7 @@ export function createSubscriptionProtocol(env, { now = () => Date.now() } = {})
                 throw protocolError('revision_conflict');
             const next = prior
                 ? snapshot
-                : kind === 'edit'
+                : ['edit', 'domains', 'telegram'].includes(kind)
                   ? applyOperations(snapshot, operations, timestamp)
                   : kind === 'runtime'
                     ? await applyObservation(snapshot, observation)
@@ -133,6 +180,32 @@ export function createSubscriptionProtocol(env, { now = () => Date.now() } = {})
                           })),
                           profiles: restore.profiles,
                       });
+            if (kind === 'telegram' && !prior) {
+                for (const item of next.subscriptions) {
+                    if (preview.createMetadata?.[item.id])
+                        Object.assign(item, preview.createMetadata[item.id]);
+                }
+                if (preview.settingsPatch) {
+                    const binding =
+                        preview.settingsPatch.telegram_push_config.user_bindings[preview.actorId];
+                    if (binding !== '' && !next.profiles.some((item) => item.id === binding))
+                        throw protocolError('invalid_reference');
+                    const settings = snapshot.settings;
+                    domains = validateDomains({
+                        settings: {
+                            ...settings,
+                            telegram_push_config: {
+                                ...settings.telegram_push_config,
+                                user_bindings: {
+                                    ...settings.telegram_push_config?.user_bindings,
+                                    [preview.actorId]: binding,
+                                },
+                            },
+                        },
+                    });
+                }
+                validateSnapshot(next);
+            }
             const plan = compileCommit({
                 authority: config.authority,
                 ...metadata,
@@ -140,6 +213,9 @@ export function createSubscriptionProtocol(env, { now = () => Date.now() } = {})
                 next,
                 nextEpoch: restore?.nextEpoch,
                 requestPolicy: kind === 'runtime' ? observation.requestPolicy : null,
+                domains,
+                preRestoreBackup,
+                preview: kind === 'telegram' ? preview : undefined,
                 now: timestamp,
             });
             const result = await db.batch(
@@ -148,7 +224,7 @@ export function createSubscriptionProtocol(env, { now = () => Date.now() } = {})
             const receipt = receiptFromRow(result.at(-1)?.results?.[0]);
             return {
                 receipt,
-                snapshot: await readSubscriptionSnapshot(),
+                snapshot: await readSnapshot(includeDomains),
                 replayed: !!prior || result[1]?.results?.[0]?.apply === 0,
             };
         } catch (error) {
@@ -168,14 +244,40 @@ export function createSubscriptionProtocol(env, { now = () => Date.now() } = {})
             })
         );
         validateSnapshot(restore, { requireGeneration: false });
-        return commit(metadata, { kind: 'restore', restore });
+        const domains =
+            request.domains === undefined ? undefined : validateDomains(request.domains);
+        const preRestoreBackup =
+            request.preRestoreBackup === undefined
+                ? undefined
+                : JSON.parse(
+                      canonicalJson(request.preRestoreBackup, PROTOCOL_LIMITS.transactionBytes)
+                  );
+        return commit(metadata, { kind: 'restore', restore, domains, preRestoreBackup });
     }
 
     return {
         subscriptionProtocol: 'd1-v1',
         readSubscriptionSnapshot,
+        readDomainSnapshot,
         commitSubscriptionOperations: (request) => commit(request),
+        commitDomainOperations: async (request) =>
+            commit(request, { kind: 'domains', domains: validateDomains(request.domains) }),
         restoreSubscriptionSnapshot,
+        ...createTelegramPreviewStore({
+            db,
+            now,
+            readDomainSnapshot,
+            translateSqlError,
+            commit: (preview) =>
+                commit(
+                    {
+                        operationId: `tg_${preview.id}`,
+                        baseVersion: preview.baseVersion,
+                        operations: preview.operations,
+                    },
+                    { kind: 'telegram', preview }
+                ),
+        }),
         [runtimeCommit]: async (request, observation) =>
             commit(request, { kind: 'runtime', observation }),
     };
@@ -184,10 +286,12 @@ export function createSubscriptionProtocol(env, { now = () => Date.now() } = {})
 export async function commitRuntimeObservation(storage, value) {
     if (!isAtomicSubscriptionStorage(storage) || typeof storage[runtimeCommit] !== 'function')
         throw protocolError('atomic_backend_required');
-    if (!validToken(value?.operationId)) throw protocolError('invalid_version');
+    if (!validToken(value?.operationId) || !validToken(value?.epoch))
+        throw protocolError('invalid_version');
     const observation = validateRuntimeObservation(value);
     const first = await storage.readSubscriptionSnapshot();
-    const baseEpoch = first.version.epoch;
+    const baseEpoch = value.epoch;
+    if (first.version.epoch !== baseEpoch) return { applied: false, reason: 'epoch_conflict' };
     let snapshot = first;
     for (let attempt = 0; attempt < 3; attempt++) {
         try {
@@ -232,45 +336,21 @@ export function wrapAtomicSubscriptionAdapter(base, env) {
             (await read()).profiles.filter((item) => ids.includes(item.id)),
         async get(key, ...args) {
             if (Object.hasOwn(keys, key)) return (await read())[keys[key]];
-            if (key === settingsKey) {
-                await read();
-                try {
-                    const row = await env.MISUB_DB.prepare('SELECT value FROM settings WHERE key=?')
-                        .bind(SETTINGS_ROW_KEY)
-                        .first();
-                    const settings = row ? JSON.parse(row.value) : {};
-                    if (!settings || typeof settings !== 'object' || Array.isArray(settings))
-                        throw protocolError('invalid_data');
-                    return { ...settings, storageType: 'd1' };
-                } catch {
-                    throw protocolError('storage_unavailable');
-                }
-            }
+            if (key === settingsKey)
+                return { ...(await protocol.readDomainSnapshot()).settings, storageType: 'd1' };
+            if (key === RULES_ROW_KEY) return (await protocol.readDomainSnapshot()).ruleTemplates;
             return base.get(key, ...args);
         },
         async put(key, value, ...args) {
             if (Object.hasOwn(keys, key)) throw protocolError('legacy_write_blocked');
-            if (key === settingsKey) {
-                await read();
-                let parsed;
-                try {
-                    parsed = typeof value === 'string' ? JSON.parse(value) : value;
-                } catch {
-                    throw protocolError('invalid_data');
-                }
-                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
-                    throw protocolError('invalid_data');
-                if (
-                    base.type !== 'd1' ||
-                    (parsed.storageType !== undefined && parsed.storageType !== 'd1')
-                )
-                    throw protocolError('authority_mismatch');
-            }
+            if (key === settingsKey || key === RULES_ROW_KEY)
+                throw protocolError('legacy_write_blocked');
             return base.put(key, value, ...args);
         },
         async delete(key, ...args) {
             if (Object.hasOwn(keys, key)) throw protocolError('legacy_write_blocked');
-            if (key === settingsKey) throw protocolError('authority_mismatch');
+            if (key === settingsKey || key === RULES_ROW_KEY)
+                throw protocolError('legacy_write_blocked');
             return base.delete(key, ...args);
         },
     };

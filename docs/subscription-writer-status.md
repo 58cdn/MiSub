@@ -1,84 +1,31 @@
-# 订阅 writer 接入状态
+# 订阅 writer 覆盖状态
 
-本表对应 [PR #44](https://github.com/58cdn/MiSub/pull/44) 的 `d1-v1` 路径。默认 legacy 仍使用原有 D1/KV 行为；“拒绝”表示功能在严格模式不可用，不表示已经完成等价转换。协议及上线边界见[运行时约定](subscription-runtime-contract.md)，历史完整清单见[写入设计](subscription-write-protocol.md)。
+本表对应 [PR #44](https://github.com/58cdn/MiSub/pull/44) 的默认关闭 `d1-v1` 路径，要求内部 schema 2。默认 legacy 保留既有 D1/KV 语义，不获得跨请求 CAS。协议、容量和迁移边界见[运行时约定](subscription-runtime-contract.md)。
 
-## 管理与外部 API
+| 入口                                          | 严格模式行为                                                                                                               | 离线验证                                                                 |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| /api/data                                     | 单条 SQL 读取订阅、组、settings、rules 及同一版本；已配置的 lazy task 在捕获响应快照后调度                                 | atomic-domain-api、atomic-subscription-api                               |
+| /api/misubs、浏览器保存                       | 明确操作、客户端基线、稳定请求；失败保留编辑；成功响应核验及提交后编辑重放                                                 | atomic-subscription-api、data-store-subscription-protocol                |
+| 外部 CRUD、link/unlink                        | 客户端版本与稳定 ID，字段白名单、引用校验和事务提交                                                                        | atomic-subscription-api                                                  |
+| node_count、网页自动刷新                      | 绑定获取前 epoch、目标身份、TLS 策略及观测时间；仅写 runtime 字段                                                          | subscription-runtime-writers-sqlite                                      |
+| 外部 refresh                                  | 使用规范 UA/代理/解析策略；每项固定观察、条件提交，批量允许部分成功                                                        | atomic-external-refresh-policy、atomic-subscription-api                  |
+| 通知 Cron                                     | 规范获取后条件写 runtime，再发送预警及条件写通知时间；不提供消息 exactly-once                                              | subscription-runtime-writers-sqlite、notifications-disabled-subscription |
+| /_schedule、/_cron、/api/cron/trigger         | 同一受限刷新 runner；/_schedule、/_cron 接受管理员 POST 或现有 cronSecret；/api/cron/trigger 仅管理员 POST；CF-Cron 不认证 | subscription-schedule、cron-trigger-route                                |
+| 平台 scheduled 函数                           | 直接调用同一 runner；未增加生产调度配置                                                                                    | subscription-schedule                                                    |
+| 订阅下载                                      | 请求前快照；等价规范参数的原始节点数可条件提交；过滤、客户端流量、缓存回退独立记录                                         | subscription-download-observations、既有 subscription-service 测试       |
+| Telegram 只读命令/分页                        | 请求内完整权威快照，保留现有显示和分页                                                                                     | telegram-preview                                                         |
+| Telegram 删除/排序/导入/改名/启停/组操作/绑定 | 旧索引解析只生成稳定 ID 预览；确认时重验认证，提交保存的操作与原版本                                                       | telegram-preview、telegram-preview-sqlite                                |
+| Telegram 预览                                 | actor/chat/update 绑定、十分钟首次确认、SQL 数据库时钟准入、重复请求复用、容量拒绝                                         | telegram-preview-sqlite、subscription-runtime-migration-d1               |
+| /settings GET/POST/reset                      | 脱敏读取及独立客户端基线；保存/重置使用共享版本，不切 authority 或 mirror 到 KV                                            | atomic-domain-api、domain-mutation-frontend                              |
+| /rule_templates GET/POST                      | 稳定 ID、严格结构/INI 校验、完整数组和客户端版本；拒绝静默删项/生成 ID                                                     | atomic-domain-api、domain-mutation-frontend                              |
+| 备份导出                                      | 订阅、组、规则与设置取同一内部快照，敏感字段按原导出范围排除                                                               | atomic-domain-api、webdav-backup                                         |
+| 本地/WebDAV 恢复                              | dataOnly/dataAndSettings 含恢复前备份；subscriptions-only 仅双集合；完整输入、新 epoch 与目标域同一事务                    | atomic-domain-api、subscription-domain-core                              |
+| 恢复 UI                                       | 确认前取得基线，提交固定基线；冲突不代填新版本；本地文件与远端路径合成测试                                                 | backup-version-confirmation                                              |
+| WebDAV 状态、lazy task 时间                   | 只接受限定状态字段；同 epoch 内有限冲突重算，不提交旧整份 settings                                                         | atomic-domain-api                                                        |
+| 旧 collection/settings/rules adapter mutators | 严格模式拒绝；原始受保护表 DML 由 SQL trigger 拒绝                                                                         | subscription-runtime-core、subscription-domain-core                      |
+| 旧在线迁移/自动 DDL                           | 明确拒绝，运行请求不执行 schema 初始化                                                                                     | atomic-subscription-api、subscription-runtime-migration-d1               |
+| 离线迁移规划器                                | legacy main/独立行合成展开；冲突重复、坏数据和悬空引用停止；已初始化目标拒绝                                               | subscription-runtime-migration-d1                                        |
+| 内部 schema 1                                 | 读取及提交拒绝；不包含 1→2 升级器                                                                                          | subscription-domain-core                                                 |
+| 登录认证 KV、节点缓存、下载计数、消息         | 不属于权威业务域；不承诺与业务事务原子，不能用它们推导规范节点状态                                                         | 对应既有回归及静态 writer 检查                                           |
 
-| 入口 / 实际函数                                            | 严格模式状态                                                                            | 验证位置                                                         |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `/api/data` / handleDataRequest                            | 单 SQL 双集合快照；禁止 profile ID 隐式迁移、lazy scheduled task；不填补下载计数        | atomic-subscription-api、api-handler-authoritative-reads         |
-| `/api/misubs` / handleMisubsSave / saveAtomicSubscriptions | operations、客户端版本和固定操作 ID；旧 full/diff 请求拒绝；成功后才清缓存/通知         | atomic-subscription-api                                          |
-| 浏览器 useDataStore.saveData                               | 配置差异、稳定请求重试、409 停止、收据核验、提交后编辑重放；缓存不授予版本              | data-store-subscription-protocol、subscription-edit-operations   |
-| 网页单源/批量/自动刷新                                     | 按 ID、版本调用 node_count，未决保存或冲突时停止；旧配置结果不贴到新编辑配置            | data-store-subscription-protocol、subscriptions-auto-update      |
-| EditForm 代理测试                                          | inspectOnly，不匹配 URL 回写；读取真实 success/data 响应                                | subscription-proxy-inspection                                    |
-| external subscriptions/manual-nodes/profiles GET           | 每请求一个快照及 meta.version                                                           | atomic-subscription-api                                          |
-| 同三类 POST create                                         | 客户端稳定 ID，显式 create，运行字段拒绝                                                | atomic-subscription-api                                          |
-| 同三类 PATCH                                               | 允许字段 update，UA/代理别名规范化，不整体覆盖                                          | atomic-subscription-api                                          |
-| 同三类 DELETE                                              | remove 与双引用清理原子提交；支持版本请求头                                             | atomic-subscription-api                                          |
-| external profile link/unlink                               | 单引用操作，校验 remote/manual 类型                                                     | atomic-subscription-api                                          |
-| external subscription validate / manual-node validate      | 只读检查，远程检查显式 inspectOnly                                                      | atomic-subscription-api、external-manual-node-profile-operations |
-| external subscription/batch/profile refresh                | 固定规范观测参数与策略，逐节点 runtime 提交；部分成功分别报告，旧 HTTP 基线在获取前拒绝 | atomic-subscription-api                                          |
-| external 路由鉴权设置失败                                  | 脱敏失败，无 legacy fallback                                                            | atomic-subscription-api                                          |
-
-测试名指 `tests/unit/*.test.js`。现有路由鉴权和 external 启用开关/Bearer token 检查仍有效，协议版本不是身份认证。
-
-## 后台和下载
-
-| 入口 / 实际函数                                                                                | 严格模式状态                                                                                      | 验证位置                                                          |
-| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| handleNodeCountRequest 普通刷新                                                                | 捕获目标身份/策略，只写运行字段；删除、重建、URL、TLS 变化后拒绝；疑似截断返回未应用              | subscription-runtime-writers、subscription-runtime-writers-sqlite |
-| handleNodeCountRequest inspectOnly                                                             | 网络获取但不持久化；内部策略参数不能由 HTTP body 覆盖                                             | 同上                                                              |
-| handleBatchUpdateNodesRequest                                                                  | 只读批量获取；严格持久化刷新使用逐 ID node_count                                                  | subscription-runtime-writers                                      |
-| handleCleanNodesRequest / handleHealthCheckRequest                                             | 预览或格式检查，无订阅 writer                                                                     | 静态控制流检查                                                    |
-| handleCronTrigger / handleAtomicCron                                                           | 单快照、每批六个目标、逐节点条件 runtime 提交；没有整表回写                                       | subscription-runtime-writers、subscription-runtime-writers-sqlite |
-| checkAndNotify / lastNotifiedExpire、Traffic                                                   | 观测提交后发送预警，再条件提交时间；消息与数据库非原子                                            | subscription-runtime-writers                                      |
-| persistSubscriptionsForCron                                                                    | 严格专用路径提前分流，旧整体保存不可达                                                            | subscription-runtime-writers                                      |
-| Cron 旧节点变化消息/汇总消息                                                                   | 未接入；严格模式不发送                                                                            | 功能限制                                                          |
-| fetchSingleSubscription / scheduleSubscriptionRuntimeInfoUpdate / writeSubscriptionRuntimeInfo | 严格模式跳过所有下载 runtime 回写；客户端 UA/组覆盖结果不是全局规范观测                           | subscription-runtime-writers、subscription-runtime-writers-sqlite |
-| handleMisubRequest                                                                             | 两集合来自同一 snapshot；GET 不自动迁移或保存 profile ID                                          | subscription-runtime-writers                                      |
-| 节点缓存、独立下载计数                                                                         | 不属权威订阅集合，保留原行为，不赋予 CAS                                                          | 既有 subscription-service 测试及静态调用检查                      |
-| `_schedule.js` performSubscriptionSync / onRequest / 旧 cron trigger                           | 读取 raw binding、网络、SQL 前拒绝；_schedule.onRequest 返回 428，旧 /api/cron/trigger 包装为 500 | subscription-runtime-writers                                      |
-
-## Telegram
-
-webhook 先进行 secret 与用户权限验证。严格模式统一拒绝全部旧 callback（包括只读翻页），提示使用网页；不会使用旧按钮携带的数组索引推测当前目标。
-
-| 下游路径                                                             | 严格模式状态                                           |
-| -------------------------------------------------------------------- | ------------------------------------------------------ |
-| delete/del/rm → handleDeleteCommand                                  | 拒绝删除及引用清理                                     |
-| enable/on/disable/off、toggle 回调                                   | 拒绝启用和停用                                         |
-| rename → handleRenameCommand                                         | 拒绝重命名                                             |
-| grename / applyGroupOperation、gmrm_/gmcl_/gmrn_                     | 拒绝组重命名、删除、清空                               |
-| sort → handleSortCommand                                             | 拒绝排序                                               |
-| dup/dedup clean/remove、cmd_dup_clean                                | 拒绝去重写入；纯 dup 检查只读                          |
-| import → handleImportCommand                                         | 拒绝 JSON/命令导入                                     |
-| 普通 URL/节点文本 → handleNodeInput                                  | 拒绝导入与自动绑定                                     |
-| document/photo → handleFileInput                                     | 附件下载前拒绝                                         |
-| link/unlink node/sub、单项/批量 toggle、所有 confirm/delete 回调     | 统一 callback gate 拒绝                                |
-| bind/unbind、bind_profile_/unbind_profile                            | 拒绝默认组绑定及设置回写                               |
-| persistCachedSubscriptions / persistCachedProfiles                   | 当前只有定义、无调用；严格 adapter 仍拒绝旧 putAll     |
-| persistCachedSettings / 导入后缓存清理 / 限额计数                    | 对应 strict 写流程不可达；不宣称 settings/cache 事务化 |
-| start/help/menu/list/stats/search/sub/info/copy/export/groups 及别名 | 保留只读命令，生成的旧按钮不可用                       |
-
-测试为 `subscription-runtime-writers` 的各命令、callback、附件和只读 stats 合成用例；其他只读展示没有逐项重新实网验收。
-
-## 备份、设置与底层存储
-
-| 入口 / 函数                                                   | 严格模式状态                                                                          | 验证位置                                                     |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| buildBackupPayload / readBusinessData                         | 订阅/组同快照并记录 version；rules/settings 另读，非跨域原子备份                      | atomic-subscription-api                                      |
-| restoreBackupPayload / handleBackupRestore                    | 仅显式 subscriptions-only、两数组、客户端基线及新 epoch；拒绝多域恢复，不隐式补空数组 | atomic-subscription-api                                      |
-| handleWebdavRestore                                           | 远端读取前检查 scope/metadata，恢复语义同上                                           | atomic-subscription-api                                      |
-| WebDAV status/list/test/run                                   | 不写订阅集合；test/run 原有目录/上传行为属于明确功能调用，未在本轮实网执行            | atomic-subscription-api、webdav-backup                       |
-| handleSettingsSave                                            | 只写选定 D1；禁切换 storageType；无 KV mirror，不提供 settings CAS                    | atomic-subscription-api                                      |
-| handleSettingsReset                                           | 删除前拒绝                                                                            | atomic-subscription-api                                      |
-| migrate_to_d1 / migrate_legacy_d1 / migrate                   | 认证后拒绝，旧迁移副作用前退出                                                        | atomic-subscription-api                                      |
-| detect_legacy_d1                                              | 只读检查，无迁移                                                                      | 静态检查                                                     |
-| SettingsCache / StorageFactory                                | gate 先于缓存/存储类型选择，authority 匹配，无 KV 业务 fallback                       | subscription-runtime-core                                    |
-| adapter put/delete 集合键及 putAll/put/update/delete 单行方法 | 严格统一拒绝；不暴露 db/kv 原始句柄                                                   | subscription-runtime-core                                    |
-| ensureD1Settings / migrateKVToD1 / migrateLegacyD1MainRows    | 严格模式拒绝，绝不自动 DDL                                                            | subscription-runtime-core                                    |
-| raw 旧 main INSERT/UPDATE/DELETE                              | schema trigger 阻断；非通用数据库管理员隔离                                           | subscription-runtime-core、subscription-runtime-migration-d1 |
-| offline migration planner                                     | 只生成隔离副本计划；歧义/损坏/悬空引用停止，各迁移 SQL 失败回滚                       | subscription-runtime-migration-d1                            |
-| 登录/password、rules、独立任务/缓存/日志                      | 非本协议业务集合域，不提供跨域原子保证                                                | 既有回归及静态写调用清单                                     |
-
-本轮全部执行证据来自合成 fixture/mock、真实内存 SQLite 或本地 Miniflare D1；没有生产数据、真实网络检测、Telegram 消息或 WebDAV 上传。不能把安全拒绝、单域事务、消息发送或缓存操作统称为“全部 writer 功能等价”。
+所有验证使用合成 fixture/mock、真实内存 SQLite 或本地 Miniflare D1。未读取生产数据、发送真实 Telegram 消息或执行 WebDAV 上传；CI 成功不代表生产迁移、发布或实网验收成功。生产冻结保持。

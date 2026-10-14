@@ -1,5 +1,12 @@
 import { StorageFactory } from '../storage-adapter.js';
 import {
+    isAtomicSubscriptionStorage,
+    isAtomicSubscriptionRequested,
+    requireMutationMetadata,
+    protocolError,
+    getProtocolError,
+} from '../services/subscription-protocol/index.js';
+import {
     createJsonResponse,
     createErrorResponse,
     JSON_BODY_LIMITS,
@@ -75,6 +82,42 @@ export function normalizeCustomRuleTemplates(input = []) {
     return normalized;
 }
 
+export function validateStrictRuleTemplates(input) {
+    if (!Array.isArray(input) || input.length > MAX_TEMPLATE_COUNT)
+        throw protocolError('invalid_data');
+    const ids = new Set();
+    for (const item of input) {
+        if (
+            !item ||
+            typeof item !== 'object' ||
+            Array.isArray(item) ||
+            typeof item.id !== 'string' ||
+            !item.id ||
+            sanitizeId(item.id) !== item.id ||
+            ids.has(item.id) ||
+            typeof item.name !== 'string' ||
+            !item.name.trim() ||
+            item.name.length > 80 ||
+            typeof item.content !== 'string' ||
+            !item.content.trim() ||
+            item.content.length > MAX_TEMPLATE_CONTENT_LENGTH ||
+            !hasIniShape(item.content) ||
+            (item.type !== undefined && item.type !== 'ini') ||
+            (item.enabled !== undefined && typeof item.enabled !== 'boolean') ||
+            (item.description !== undefined &&
+                (typeof item.description !== 'string' || item.description.length > 300)) ||
+            ['createdAt', 'updatedAt'].some(
+                (key) =>
+                    item[key] !== undefined &&
+                    (typeof item[key] !== 'string' || Number.isNaN(Date.parse(item[key])))
+            )
+        )
+            throw protocolError('invalid_data');
+        ids.add(item.id);
+    }
+    return input;
+}
+
 async function getStorageAdapter(env) {
     if (env?.__TEST_STORAGE_ADAPTER) return env.__TEST_STORAGE_ADAPTER;
     const storageType = await StorageFactory.getStorageType(env);
@@ -82,6 +125,8 @@ async function getStorageAdapter(env) {
 }
 
 export async function listRuleTemplates(storageAdapter) {
+    if (isAtomicSubscriptionStorage(storageAdapter))
+        return (await storageAdapter.readDomainSnapshot()).ruleTemplates;
     const raw = await storageAdapter.get(KV_KEY_RULE_TEMPLATES);
     return normalizeCustomRuleTemplates(Array.isArray(raw) ? raw : []);
 }
@@ -107,6 +152,15 @@ export async function handleRuleTemplatesRequest(request, env) {
         const storageAdapter = await getStorageAdapter(env);
 
         if (request.method === 'GET') {
+            if (isAtomicSubscriptionStorage(storageAdapter)) {
+                const snapshot = await storageAdapter.readDomainSnapshot();
+                return createJsonResponse({
+                    success: true,
+                    data: snapshot.ruleTemplates,
+                    version: snapshot.version,
+                    subscriptionProtocol: storageAdapter.subscriptionProtocol,
+                });
+            }
             const templates = await listRuleTemplates(storageAdapter);
             return createJsonResponse({ success: true, data: templates });
         }
@@ -125,6 +179,22 @@ export async function handleRuleTemplatesRequest(request, env) {
                 return createJsonResponse({ success: false, message: '请求数据格式错误' }, 400);
             }
 
+            if (isAtomicSubscriptionStorage(storageAdapter)) {
+                const metadata = requireMutationMetadata(body, request);
+                const templates = validateStrictRuleTemplates(body?.templates);
+                const result = await storageAdapter.commitDomainOperations({
+                    ...metadata,
+                    domains: { ruleTemplates: templates },
+                });
+                return createJsonResponse({
+                    success: true,
+                    data: result.snapshot.ruleTemplates,
+                    version: result.snapshot.version,
+                    receipt: result.receipt,
+                    replayed: result.replayed,
+                    subscriptionProtocol: storageAdapter.subscriptionProtocol,
+                });
+            }
             const templates = normalizeCustomRuleTemplates(body?.templates || body?.data || []);
             await storageAdapter.put(KV_KEY_RULE_TEMPLATES, templates);
             return createJsonResponse({
@@ -136,6 +206,13 @@ export async function handleRuleTemplatesRequest(request, env) {
 
         return createErrorResponse('Method Not Allowed', 405);
     } catch (error) {
+        if (isAtomicSubscriptionRequested(env)) {
+            const failure = getProtocolError(error);
+            return createJsonResponse(
+                { success: false, code: failure.code, message: failure.message },
+                failure.status
+            );
+        }
         console.error('[RuleTemplates] request failed:', error);
         return createJsonResponse(
             {

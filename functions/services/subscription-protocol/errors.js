@@ -19,6 +19,9 @@ const statuses = {
     authority_mismatch: 503,
     schema_not_ready: 503,
     receipt_capacity: 503,
+    preview_capacity: 503,
+    preview_expired: 409,
+    preview_forbidden: 403,
     invalid_protocol_mode: 503,
     migration_required: 503,
 };

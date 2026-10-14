@@ -44,7 +44,7 @@ describe('gated subscription runtime protocol', () => {
     it('uses the existing D1 settings row for adapter writes, reads, cache and request policy', async () => {
         const { storage, env, sql } = await fixture();
         const settings = { builtinSkipCertVerify: true, marker: 'synthetic-settings' };
-        await storage.put('worker_settings_v1', settings);
+        await storage.commitDomainOperations({ ...edit([]), domains: { settings } });
         expect(
             sql
                 .prepare('SELECT key FROM settings')
@@ -59,8 +59,7 @@ describe('gated subscription runtime protocol', () => {
     it.each([undefined, null, false, 'true', 1, true])(
         'captures only the literal true TLS request policy: %s',
         async (builtinSkipCertVerify) => {
-            const { storage } = await fixture();
-            await storage.put('worker_settings_v1', { builtinSkipCertVerify });
+            const { storage } = await fixture({ settings: { builtinSkipCertVerify } });
             expect((await storage.readSubscriptionSnapshot()).requestPolicy).toBe(
                 builtinSkipCertVerify === true ? 1 : 0
             );
@@ -72,7 +71,11 @@ describe('gated subscription runtime protocol', () => {
         const before = await storage.readSubscriptionSnapshot();
         const originalBatch = db.batch.bind(db);
         db.batch = async (statements) => {
-            await storage.put('worker_settings_v1', { builtinSkipCertVerify: true });
+            db.batch = originalBatch;
+            await storage.commitDomainOperations({
+                ...edit([], 0, 'settings-race'),
+                domains: { settings: { builtinSkipCertVerify: true } },
+            });
             return originalBatch(statements);
         };
         expect(
@@ -80,17 +83,18 @@ describe('gated subscription runtime protocol', () => {
                 operationId: 'policy-race',
                 id: 'a',
                 identity: await captureSubscriptionIdentity(before.subscriptions[0]),
+                epoch: 'fixture-epoch',
                 requestPolicy: before.requestPolicy,
                 observedAt: 10,
                 fields: { nodeCount: 4 },
             })
         ).toEqual({ applied: false, reason: 'identity_conflict' });
         const after = await storage.readSubscriptionSnapshot();
-        expect(after.version).toEqual(before.version);
+        expect(after.version).toEqual({ ...before.version, revision: 1 });
         expect(after.subscriptions).toEqual(before.subscriptions);
         expect(after.requestPolicy).toBe(1);
         expect(rowCount(sql, 'subscription_protocol_gate')).toBe(0);
-        expect(rowCount(sql, 'subscription_protocol_receipts')).toBe(0);
+        expect(rowCount(sql, 'subscription_protocol_receipts')).toBe(1);
     });
 
     it('requires and digests request policy while allowing a committed receipt replay', async () => {
@@ -98,6 +102,7 @@ describe('gated subscription runtime protocol', () => {
         const snapshot = await storage.readSubscriptionSnapshot();
         const observation = {
             operationId: 'policy-replay',
+            epoch: 'fixture-epoch',
             id: 'a',
             identity: await captureSubscriptionIdentity(snapshot.subscriptions[0]),
             observedAt: 10,
@@ -108,11 +113,16 @@ describe('gated subscription runtime protocol', () => {
         );
         const committed = await commitRuntimeObservation(storage, {
             ...observation,
+            epoch: 'fixture-epoch',
             requestPolicy: 0,
         });
-        await storage.put('worker_settings_v1', { builtinSkipCertVerify: true });
+        await storage.commitDomainOperations({
+            ...edit([], 1, 'settings-replay'),
+            domains: { settings: { builtinSkipCertVerify: true } },
+        });
         const replay = await commitRuntimeObservation(storage, {
             ...observation,
+            epoch: 'fixture-epoch',
             requestPolicy: 0,
         });
         expect(replay.replayed).toBe(true);
@@ -151,10 +161,7 @@ describe('gated subscription runtime protocol', () => {
     });
 
     it('pins authority before settings cache and refuses a mismatched initialized database', async () => {
-        const { env, sql } = await fixture();
-        await sql
-            .prepare('INSERT INTO settings(key,value) VALUES(?,?)')
-            .run('main', JSON.stringify({ storageType: 'kv', marker: 'fixture' }));
+        const { env } = await fixture({ settings: { storageType: 'kv', marker: 'fixture' } });
         expect(await StorageFactory.getStorageType(env)).toBe('d1');
         expect(await SettingsCache.get(env)).toMatchObject({
             storageType: 'd1',
@@ -272,9 +279,15 @@ describe('gated subscription runtime protocol', () => {
     it('does not allow settings or old migration helpers to change authority', async () => {
         const { storage, env } = await fixture();
         await expect(storage.put('worker_settings_v1', { storageType: 'kv' })).rejects.toThrow(
-            'authority_mismatch'
+            'legacy_write_blocked'
         );
-        await expect(storage.delete('worker_settings_v1')).rejects.toThrow('authority_mismatch');
+        await expect(storage.delete('worker_settings_v1')).rejects.toThrow('legacy_write_blocked');
+        await expect(
+            storage.commitDomainOperations({
+                ...edit([]),
+                domains: { settings: { storageType: 'kv' } },
+            })
+        ).rejects.toThrow('authority_mismatch');
         await expect(DataMigrator.migrateLegacyD1MainRows(env)).rejects.toThrow(
             'migration_required'
         );
@@ -329,7 +342,7 @@ describe('gated subscription runtime protocol', () => {
             operationId: 'observation',
             id: 'a',
             identity: await captureSubscriptionIdentity(original),
-            requestPolicy: 0,
+            epoch: 'fixture-epoch',
             requestPolicy: 0,
             observedAt: 10,
             fields: { nodeCount: 4 },
@@ -352,7 +365,7 @@ describe('gated subscription runtime protocol', () => {
             await commitRuntimeObservation(storage, {
                 ...observation,
                 operationId: 'old-url',
-                requestPolicy: 0,
+                epoch: 'fixture-epoch',
                 requestPolicy: 0,
                 observedAt: 20,
             })
@@ -366,7 +379,7 @@ describe('gated subscription runtime protocol', () => {
             operationId: 'delayed',
             id: 'a',
             identity: await captureSubscriptionIdentity(original),
-            requestPolicy: 0,
+            epoch: 'fixture-epoch',
             requestPolicy: 0,
             observedAt: 10,
             fields: { nodeCount: 4 },
@@ -406,7 +419,7 @@ describe('gated subscription runtime protocol', () => {
             operationId: 'new',
             id: 'a',
             identity,
-            requestPolicy: 0,
+            epoch: 'fixture-epoch',
             requestPolicy: 0,
             observedAt: 20,
             fields: { nodeCount: 8 },
@@ -416,7 +429,7 @@ describe('gated subscription runtime protocol', () => {
                 operationId: 'old',
                 id: 'a',
                 identity,
-                requestPolicy: 0,
+                epoch: 'fixture-epoch',
                 requestPolicy: 0,
                 observedAt: 10,
                 fields: { nodeCount: 1 },
@@ -426,7 +439,7 @@ describe('gated subscription runtime protocol', () => {
             operationId: 'traffic',
             id: 'a',
             identity,
-            requestPolicy: 0,
+            epoch: 'fixture-epoch',
             requestPolicy: 0,
             observedAt: 20,
             fields: { userInfo: { total: 100 } },
