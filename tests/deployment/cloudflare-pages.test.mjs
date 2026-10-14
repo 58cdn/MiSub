@@ -160,3 +160,80 @@ test('authorization errors do not trigger project creation', (t) => {
     assert.deepEqual(result.calls, []);
     assert.match(result.output, /HTTP 403/);
 });
+
+const automatic = { GITHUB_ACTIONS: 'true', GITHUB_EVENT_NAME: 'push', GITHUB_REF: 'refs/heads/main' };
+const existingProduction = () => ({
+    kv_namespaces: { MISUB_KV: { namespace_id: kvId } },
+    env_vars: { ADMIN_PASSWORD: { type: 'secret_text' } },
+});
+
+test('automatic release preserves credentials and all existing resource IDs', (t) => {
+    const production = existingProduction();
+    const probeId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    production.env_vars.COOKIE_SECRET = { type: 'secret_text' };
+    production.d1_databases = { MISUB_DB: { id: d1Id }, MISUB_PROBE_DB: { id: probeId } };
+    const result = runScript(t, [project(production)], {
+        ...automatic, COOKIE_SECRET: 'test-only-different-cookie',
+    });
+    expectDeployed(result);
+    assert.equal(result.calls.length, 1);
+    assert.ok(result.config.includes(`database_id = "${d1Id}"`));
+    assert.ok(result.config.includes(`database_id = "${probeId}"`));
+    assert.match(result.output, /Preserving existing production secret bindings/);
+});
+
+test('automatic release needs no repository copy of the current admin password', (t) => {
+    const result = runScript(t, [project(existingProduction())], {
+        ...automatic, ADMIN_PASSWORD: '', COOKIE_SECRET: 'test-only-unused-cookie',
+    });
+    expectDeployed(result);
+    assert.equal(result.calls.length, 1);
+});
+
+test('automatic release never creates a missing project', (t) => {
+    const result = runScript(t, [project({}, 404)], automatic);
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(result.calls, []);
+    assert.deepEqual(result.remaining, []);
+    assert.match(result.output, /requires an existing Pages project/);
+});
+
+test('automatic release never discovers or creates a missing KV binding', (t) => {
+    const production = existingProduction();
+    delete production.kv_namespaces;
+    const result = runScript(t, [project(production)], automatic);
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(result.calls, []);
+    assert.deepEqual(result.remaining, []);
+    assert.match(result.output, /requires the existing MISUB_KV/);
+});
+
+test('automatic release refuses missing or plaintext production credentials', (t) => {
+    for (const env_vars of [{}, { ADMIN_PASSWORD: { type: 'plain_text' } }, {
+        ADMIN_PASSWORD: { type: 'secret_text' }, COOKIE_SECRET: { type: 'plain_text' },
+    }]) {
+        const result = runScript(t, [project({ ...existingProduction(), env_vars })], automatic);
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.match(result.output, /requires existing production secret bindings/);
+    }
+});
+
+test('automatic release refuses a new business database binding', (t) => {
+    const result = runScript(t, [project(existingProduction())], {
+        ...automatic, CLOUDFLARE_D1_DATABASE_ID: d1Id,
+    });
+    assert.notEqual(result.status, 0);
+    assert.deepEqual(result.calls, []);
+    assert.match(result.output, /cannot add a MISUB_DB binding/);
+});
+
+test('automatic release refuses probe provisioning and a new explicit binding', (t) => {
+    for (const override of [{ PROVISION_NODE_PROBES: 'true' }, { CLOUDFLARE_PROBE_D1_DATABASE_ID: d1Id }]) {
+        const result = runScript(t, [project(existingProduction())], { ...automatic, ...override });
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.calls, []);
+        assert.deepEqual(result.remaining, []);
+        assert.match(result.output, /cannot provision or add a probe database binding/);
+    }
+});

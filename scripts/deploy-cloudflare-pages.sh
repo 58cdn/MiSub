@@ -2,14 +2,21 @@
 # Called by .github/workflows/cloudflare-pages.yml after npm ci/test/build.
 set -euo pipefail
 
-for key in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID ADMIN_PASSWORD; do
+# Automatic releases only publish code against the current production resources.
+existing_only=false
+if [[ "${GITHUB_ACTIONS:-false}" == 'true' && "${GITHUB_EVENT_NAME:-}" == 'push' ]]; then
+  existing_only=true
+fi
+required_keys=(CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID)
+if [[ "$existing_only" != true ]]; then required_keys+=(ADMIN_PASSWORD); fi
+for key in "${required_keys[@]}"; do
   if [[ -z "${!key:-}" ]]; then
     echo "::error::Missing Repository secret: ${key}"
     exit 1
   fi
 done
 
-if [[ "$ADMIN_PASSWORD" == "admin" ]]; then
+if [[ "$existing_only" != true && "${ADMIN_PASSWORD:-}" == "admin" ]]; then
   echo "::error::ADMIN_PASSWORD must not be the insecure default 'admin'."
   exit 1
 fi
@@ -34,6 +41,10 @@ case "$status" in
     echo "Using existing Pages project: $project_name"
     ;;
   404)
+    if [[ "$existing_only" == true ]]; then
+      echo '::error::Automatic release requires an existing Pages project.'
+      exit 1
+    fi
     echo "Creating Pages project: $project_name"
     npx wrangler pages project create "$project_name" --production-branch=main
     # A new project's settings have no production resource bindings.
@@ -44,6 +55,17 @@ case "$status" in
     exit 1
     ;;
 esac
+
+if [[ "$existing_only" == true ]]; then
+  if ! jq -e '
+    (.result.deployment_configs.production.env_vars // {}) as $vars |
+    $vars.ADMIN_PASSWORD.type == "secret_text" and
+    (($vars | has("COOKIE_SECRET") | not) or $vars.COOKIE_SECRET.type == "secret_text")
+  ' "$project_json" >/dev/null; then
+    echo '::error::Automatic release requires existing production secret bindings; it cannot provision or replace credentials.'
+    exit 1
+  fi
+fi
 
 # A Wrangler config is authoritative. Refuse to silently remove other KV/D1 bindings.
 if jq -e '[
@@ -77,6 +99,10 @@ if jq -e '
 fi
 
 existing_kv="$(jq -r '.result.deployment_configs.production.kv_namespaces.MISUB_KV.namespace_id // empty' "$project_json")"
+if [[ "$existing_only" == true && -z "$existing_kv" ]]; then
+  echo '::error::Automatic release requires the existing MISUB_KV binding.'
+  exit 1
+fi
 kv_id="${CLOUDFLARE_KV_NAMESPACE_ID:-$existing_kv}"
 if [[ -n "$existing_kv" && -n "${CLOUDFLARE_KV_NAMESPACE_ID:-}" && "$existing_kv" != "$kv_id" ]]; then
   echo "::error::MISUB_KV already points at another namespace. Refusing to switch storage."
@@ -110,6 +136,10 @@ if [[ ! "$kv_id" =~ ^[a-fA-F0-9]{32}$ ]]; then
 fi
 
 existing_d1="$(jq -r '.result.deployment_configs.production.d1_databases.MISUB_DB.id // empty' "$project_json")"
+if [[ "$existing_only" == true && -z "$existing_d1" && -n "${CLOUDFLARE_D1_DATABASE_ID:-}" ]]; then
+  echo '::error::Automatic release cannot add a MISUB_DB binding.'
+  exit 1
+fi
 d1_id="${CLOUDFLARE_D1_DATABASE_ID:-$existing_d1}"
 if [[ -n "$existing_d1" && -n "${CLOUDFLARE_D1_DATABASE_ID:-}" && "$existing_d1" != "$d1_id" ]]; then
   echo "::error::MISUB_DB already points at another D1 database. Refusing to switch storage."
@@ -122,6 +152,12 @@ fi
 
 # Probe tasks use a separate database; never migrate or replace subscription storage.
 existing_probe_d1="$(jq -r '.result.deployment_configs.production.d1_databases.MISUB_PROBE_DB.id // empty' "$project_json")"
+if [[ "$existing_only" == true ]]; then
+  if [[ "${PROVISION_NODE_PROBES:-false}" == true || ( -z "$existing_probe_d1" && -n "${CLOUDFLARE_PROBE_D1_DATABASE_ID:-}" ) ]]; then
+    echo '::error::Automatic release cannot provision or add a probe database binding.'
+    exit 1
+  fi
+fi
 probe_d1_id="$(bash "$(dirname "${BASH_SOURCE[0]}")/provision-probe-d1.sh" "$project_name" "$existing_probe_d1")"
 if [[ -n "$probe_d1_id" && "$probe_d1_id" == "$d1_id" ]]; then
   echo '::error::MISUB_PROBE_DB must be separate from MISUB_DB. Refusing to share business storage.'
@@ -166,11 +202,15 @@ database_id = "${probe_d1_id}"
 CFG
 fi
 
-# Secrets are provisioned before the deployment that consumes them.
-# Avoid printing secret values (do not enable shell tracing).
-printf '%s' "$ADMIN_PASSWORD" | npx wrangler pages secret put ADMIN_PASSWORD --project-name="$project_name"
-if [[ -n "${COOKIE_SECRET:-}" ]]; then
-  printf '%s' "$COOKIE_SECRET" | npx wrangler pages secret put COOKIE_SECRET --project-name="$project_name"
+# Secret provisioning belongs to explicit bootstrap/manual deployment.
+# Ordinary push releases preserve the existing production credentials.
+if [[ "$existing_only" == true ]]; then
+  echo 'Preserving existing production secret bindings.'
+else
+  printf '%s' "$ADMIN_PASSWORD" | npx wrangler pages secret put ADMIN_PASSWORD --project-name="$project_name"
+  if [[ -n "${COOKIE_SECRET:-}" ]]; then
+    printf '%s' "$COOKIE_SECRET" | npx wrangler pages secret put COOKIE_SECRET --project-name="$project_name"
+  fi
 fi
 
 # Pages discovers ./wrangler.toml automatically; an explicit --config is unsupported.
