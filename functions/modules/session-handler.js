@@ -1,5 +1,11 @@
 import { SessionAuthority, sessionProtocol } from './session-authority.js';
 import {
+    loginSecurityContext,
+    loginLocked,
+    securityUnavailable,
+} from '../services/login-security.js';
+import { loginDevice } from '../services/login-security-metadata.js';
+import {
     getAdminPassword,
     getAuthDebugInfo,
     readJsonWithLimit,
@@ -46,12 +52,35 @@ const normalize = (value) =>
         .replace(/[\u200B-\u200D]/g, '')
         .trim()
         .replace(/^['"]|['"]$/g, '');
-async function requirePassword(payload, env) {
-    if (
-        typeof payload?.password !== 'string' ||
-        normalize(payload.password) !== normalize(await getAdminPassword(env))
-    )
-        throw fail(401, 'wrong_password');
+async function passwordAccess(request, payload, env, recordSuccess) {
+    let security;
+    try {
+        security = await loginSecurityContext(request, env);
+        if (security.response) return security;
+    } catch {
+        return { response: securityUnavailable() };
+    }
+    const matched =
+        typeof payload?.password === 'string' &&
+        normalize(payload.password) === normalize(await getAdminPassword(env));
+    let summary = { enabled: false, warning: null };
+    // Ticket preparation shares the failure/lock guard but does not consume a
+    // success warning. The actual password login records success exactly once.
+    if (security.store && (!matched || recordSuccess)) {
+        try {
+            const result = await security.store.record(
+                security.ip,
+                matched,
+                matched ? loginDevice(request) : undefined
+            );
+            if (result.lockedUntil) return { response: loginLocked(result.lockedUntil) };
+            summary = { enabled: result.enabled, warning: result.warning };
+        } catch {
+            return { response: securityUnavailable() };
+        }
+    }
+    if (!matched) throw fail(401, 'wrong_password');
+    return { summary };
 }
 
 export async function handleSessionRequest(request, env, path) {
@@ -77,12 +106,15 @@ export async function handleSessionRequest(request, env, path) {
         requireMutation(request);
         const payload = await readJsonWithLimit(request, JSON_BODY_LIMITS.auth);
         if (path === '/session/prepare') {
-            await requirePassword(payload, env);
+            const access = await passwordAccess(request, payload, env, false);
+            if (access.response) return access.response;
             return sessionResponse(await authority.issueTicket());
         }
         if (path === '/login') {
-            await requirePassword(payload, env);
+            const access = await passwordAccess(request, payload, env, true);
+            if (access.response) return access.response;
             const result = await authority.login(payload, header);
+            result.loginSecurity = access.summary;
             if ((await getAuthDebugInfo(env))?.adminPassword?.isDefaultFallback) {
                 result.securityWarning = {
                     type: 'default_admin_password',
