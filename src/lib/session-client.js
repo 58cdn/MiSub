@@ -10,6 +10,7 @@ export function createSessionClient({
     notify = () => {},
 } = {}) {
     let registry;
+    let userOperation = 0;
     let serverOffset = 0;
     const local = () => (registry ||= createSessionRegistry(indexedDB));
     const fenceKey = 'misub-session-logout-generation';
@@ -111,8 +112,14 @@ export function createSessionClient({
     }
     return {
         protocol,
-        deliverEvent: (message, listener) => local().deliverEvent(message, listener),
+        deliverEvent(message, listener) {
+            const operation = userOperation;
+            return local().deliverEvent(message, (type) => {
+                if (operation === userOperation) listener(type);
+            });
+        },
         async login(password) {
+            userOperation++;
             // Register before the first HTTP request. The synchronous cross-tab fence
             // also covers IndexedDB opening and protocol-discovery response delays.
             const fence = readFence();
@@ -169,6 +176,7 @@ export function createSessionClient({
             return result;
         },
         async logout() {
+            userOperation++;
             let fenceError;
             try {
                 storage.setItem(fenceKey, crypto.randomUUID());
