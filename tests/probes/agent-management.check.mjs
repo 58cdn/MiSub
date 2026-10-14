@@ -155,6 +155,7 @@ test('persisted task history separates creation and result receipt, preserves fa
             createdAt: secondCreatedAt,
             completedAt: null,
             checks: null,
+            executionMetadata: null,
         },
     ]);
     const completed = await read(`agents/${a.id}/history?offset=1&limit=1`);
@@ -170,6 +171,7 @@ test('persisted task history separates creation and result receipt, preserves fa
             createdAt,
             completedAt,
             checks: { tcp: { status: 'failed', code: 'connect_failed' } },
+            executionMetadata: null,
         },
     ]);
     assert.equal((await read(`agents/${b.id}/history`)).total, 1);

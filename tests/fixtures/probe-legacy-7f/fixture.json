@@ -1,0 +1,40 @@
+{
+  "commit": "7f794ec5fb6ab0b5cc51e75f1f24334035355bbc",
+  "description": "Legacy result HTTP routing, store completion and reads. Shared result dependencies must match this fixed baseline before compatibility assertions run.",
+  "files": [
+    {
+      "path": "probe-store.js",
+      "source": "functions/services/probe-store.js",
+      "sourceSha256": "f2dc8897834278b164dc593879e25e6a4e81465bcc3b797c3c0a2d14e902115a",
+      "fixtureSha256": "c19464a3408f5e930b0ecb0c353942183f40ae441f54b666b4d1be1ac93afa8d"
+    },
+    {
+      "path": "probe-http.js",
+      "source": "functions/services/probe-http.js",
+      "sourceSha256": "e20c068a897ebb074237998e1d146ad65d4b7cf9bc31670a6b0a97e10eb8d71c",
+      "fixtureSha256": "56c520d71f9023a9645cd46d3909ba8965f4ff663caf7a542313a2dc22d52b81"
+    }
+  ],
+  "dependencies": [
+    {
+      "path": "functions/services/probe-contract.js",
+      "sha256": "e1757e1903ef1235c97907e466513d9896eac99cf1221b56f8c4145482b5b522"
+    },
+    {
+      "path": "functions/services/probe-result-rules.js",
+      "sha256": "d9917c636d3dfd6a10c8d3a9f86551e2b8df8550e7d49635ae14e220e65e6836"
+    },
+    {
+      "path": "functions/services/probe-observations.js",
+      "sha256": "d4f096d5c8bbe220bf7c0d688ad08de0597389e7f09206c6331c100b15487ff9"
+    },
+    {
+      "path": "functions/services/diagnostics/contract.js",
+      "sha256": "8d05b10dd47887ccb55ae33245ac06d6ef52bf395e6f461aff716c0663cfe835"
+    },
+    {
+      "path": "functions/services/probe-agent-management.js",
+      "sha256": "ec60480789a2fa998a7e381bb97431b6076afccbaa5ac2e57ee2ae6ca9bc7a2b"
+    }
+  ]
+}

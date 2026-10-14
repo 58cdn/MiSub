@@ -93,7 +93,7 @@ export function createProbeHandler({ authorizeAdmin, prepareNodes, loadManualNod
                 if (path.length === 2 && path[1] === 'claim') return json({ success: true, data: await store.claim(agent, body) });
                 requireValue(path.length === 4 && path[1] === 'tasks' && /^[\w-]{1,128}$/.test(path[2]), 'not_found', 404);
                 if (path[3] === 'heartbeat') return json({ success: true, data: await store.heartbeat(agent, path[2], body.leaseToken) });
-                if (path[3] === 'result') return json({ success: true, data: await store.finish(agent, path[2], body.leaseToken, body.checks) });
+                if (path[3] === 'result') return json({ success: true, data: await store.finish(agent, path[2], body.leaseToken, body.checks, body.executionMetadata) });
                 throw probeError('not_found', 404);
             }
             requireValue(await authorizeAdmin(request, env), 'unauthorized', 401);
