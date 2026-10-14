@@ -5,7 +5,30 @@ on:
     branches: [main]
 permissions:
   contents: read
+env:
+  TEST_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
 jobs:
+  vitest-windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Test acceptance gates on Windows
+        run: npm run test:gates
+      - name: Run complete Vitest suite including Windows PowerShell syntax
+        run: npm run test:ci
+      - name: Retain Windows completion summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-windows-summary
+          path: tmp/test-gates/vitest-summary.json
+          if-no-files-found: error
   contracts:
     runs-on: ubuntu-latest
     steps:
@@ -13,8 +36,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Test HTTP boundaries and real SQLite lease transitions
-        run: node --test tests/probes/*.check.mjs
+      - name: Test acceptance gate failure boundaries
+        run: node --test tests/gates/*.test.mjs
+      - name: Test every registered HTTP and SQLite entry
+        run: node scripts/test-gates/node.mjs
+      - name: Retain Node completion summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-node-summary
+          path: tmp/test-gates/node-summary.json
+          if-no-files-found: error
   browser-fixtures:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -27,9 +59,12 @@ jobs:
       - run: npm ci
       - name: Prepare Chromium for isolated browser fixtures
         run: npx playwright install --with-deps chromium
-      - name: Check management, pairing, table and connectivity interactions against mock APIs
-        run: |
-          node tests/browser/detector-management.mjs
-          node tests/browser/detector-pairing.mjs
-          node tests/browser/detector-table-archive.mjs
-          node tests/browser/node-connectivity.mjs
+      - name: Check every registered browser entry against mock APIs
+        run: node scripts/test-gates/browser.mjs
+      - name: Retain browser completion summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-browser-summary
+          path: tmp/test-gates/browser-summary.json
+          if-no-files-found: error

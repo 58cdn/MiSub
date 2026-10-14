@@ -1,0 +1,53 @@
+{
+    "node": [
+        "tests/probes/agent-archive.check.mjs",
+        "tests/probes/agent-management.check.mjs",
+        "tests/probes/client.check.mjs",
+        "tests/probes/contract.check.mjs",
+        "tests/probes/http.check.mjs",
+        "tests/probes/observations.check.mjs",
+        "tests/probes/pairing.check.mjs",
+        "tests/probes/result-contract.check.mjs",
+        "tests/probes/store.check.mjs"
+    ],
+    "helpers": ["tests/probes/sqlite-helper.mjs"],
+    "browser": [
+        {
+            "file": "tests/browser/detector-management.mjs",
+            "report": "detector-manager-browser.json",
+            "cases": "tests",
+            "errors": ["pageErrors", "externalRequests"]
+        },
+        {
+            "file": "tests/browser/detector-pairing.mjs",
+            "report": "detector-pairing-browser.json",
+            "cases": "tests",
+            "errors": ["pageErrors", "externalRequests"]
+        },
+        {
+            "file": "tests/browser/detector-table-archive.mjs",
+            "report": "report.json",
+            "cases": "layouts",
+            "errors": ["errors", "external"],
+            "passed": true
+        },
+        {
+            "file": "tests/browser/groups-pagination.mjs",
+            "report": "results.json",
+            "cases": "checks",
+            "errors": ["errors"]
+        },
+        {
+            "file": "tests/browser/node-connectivity.mjs",
+            "report": "report.json",
+            "cases": "cases",
+            "errors": ["errors", "external"]
+        },
+        {
+            "file": "tests/browser/probe-observations.mjs",
+            "report": "observations-browser.json",
+            "cases": "tests",
+            "errors": ["pageErrors", "externalRequestsBlocked"]
+        }
+    ]
+}
