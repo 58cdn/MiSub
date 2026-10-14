@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
@@ -8,6 +9,26 @@ import { chromium } from 'playwright';
 // Full built app, isolated browser profile and synthetic APIs. No external traffic.
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const dist = resolve(root, 'dist');
+execFileSync(
+    'git',
+    [
+        'diff',
+        '--exit-code',
+        'HEAD',
+        '--',
+        'src',
+        'public',
+        'index.html',
+        'vite.config.js',
+        'package.json',
+        'package-lock.json',
+    ],
+    { cwd: root, stdio: 'pipe' }
+);
+execFileSync(process.execPath, [resolve(root, 'node_modules/vite/bin/vite.js'), 'build'], {
+    cwd: root,
+    stdio: 'pipe',
+});
 const evidence = resolve(process.argv[2] || resolve(root, 'tmp/notification-evidence'));
 await mkdir(evidence, { recursive: true });
 const server = createServer(async (request, response) => {
@@ -82,6 +103,7 @@ await context.route('**/*', async (route) => {
         return route.abort();
     }
     if (!url.pathname.startsWith('/api/')) return route.continue();
+    if (url.pathname === '/api/session/protocol') return json({ protocol: 'legacy' });
     if (url.pathname === '/api/public_config')
         return json({ enablePublicPage: true, isLoginPath: true, customLoginPath: 'login' });
     if (url.pathname === '/api/data')

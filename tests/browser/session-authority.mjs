@@ -178,7 +178,7 @@ const start = (page, method) =>
     }, method);
 async function test(name, action) {
     await action();
-    report.checks.push({ name, passed: true });
+    report.checks.push(name);
 }
 try {
     browser = await chromium.launch({
@@ -550,6 +550,7 @@ try {
     assert.equal(report.external.length, 0);
     assert.equal(report.pageErrors.length, 0);
     report.success = true;
+    report.passed = true;
 } catch (error) {
     report.success = false;
     report.failure = error.stack;

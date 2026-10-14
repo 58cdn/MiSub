@@ -7,10 +7,13 @@ import { resolve, extname, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright';
 
-// Opt-in local integration: built frontend + pinned backend handlers + in-memory SQLite.
-// The separate backend checkout must contain PR #38. No ambient credentials are loaded.
+// Current clean checkout: freshly built frontend + actual backend + memory SQLite.
+// No separate historical build, ambient credentials or production storage.
 const root = fileURLToPath(new URL('../..', import.meta.url));
-const frontendCommit = '344b613b2163aebe6122a5944ea75c1501075c1c';
+const frontendCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd: root,
+    encoding: 'utf8',
+}).trim();
 const frontendPaths = [
     'src',
     'public',
@@ -23,12 +26,13 @@ execFileSync('git', ['diff', '--exit-code', frontendCommit, '--', ...frontendPat
     cwd: root,
     stdio: 'pipe',
 });
-const backendRoot = process.env.MISUB_LOGIN_SECURITY_BACKEND_ROOT;
+const backendRoot = root;
 assert.ok(
-    backendRoot,
-    'Set MISUB_LOGIN_SECURITY_BACKEND_ROOT to the isolated integration worktree'
+    !process.env.MISUB_LOGIN_SECURITY_BACKEND_ROOT ||
+        resolve(process.env.MISUB_LOGIN_SECURITY_BACKEND_ROOT) === resolve(root),
+    'Backend must be the current checkout'
 );
-const backendCommit = '8b9d52cafc3d7a6c8358d7476476716d1a11ffbc';
+const backendCommit = frontendCommit;
 const backendFiles = [
     'functions/modules/api-router.js',
     'functions/modules/auth-middleware.js',
@@ -49,7 +53,15 @@ for (const path of backendFiles) {
         `Backend source differs: ${path}`
     );
 }
-const dist = resolve(process.env.MISUB_INTEGRATION_DIST || resolve(root, 'dist'));
+const dist = resolve(root, 'dist');
+assert.ok(
+    !process.env.MISUB_INTEGRATION_DIST || resolve(process.env.MISUB_INTEGRATION_DIST) === dist,
+    'Build must be in the current checkout'
+);
+execFileSync(process.execPath, [resolve(root, 'node_modules/vite/bin/vite.js'), 'build'], {
+    cwd: root,
+    stdio: 'pipe',
+});
 const evidence = resolve(process.argv[2] || resolve(root, 'tmp/notification-integration'));
 await mkdir(evidence, { recursive: true });
 const report = {
@@ -68,7 +80,7 @@ const report = {
         .update(await readFile(resolve(dist, 'index.html')))
         .digest('hex'),
     buildProvenance:
-        'Build must be performed separately in the integration worktree; the entry hash identifies this run but does not independently attest source-to-build correspondence',
+        'Vite build executed by this entry on the clean current checkout immediately before serving the resulting dist',
     backendCommit,
     backendFiles,
     storage:
@@ -192,6 +204,7 @@ await context.route('**/*', async (route) => {
     Object.defineProperty(request, 'cf', { value: { colo: 'LOCAL_FIXTURE' } });
     if (
         [
+            '/api/session/protocol',
             '/api/login',
             '/api/logout',
             '/api/admin/notifications',
