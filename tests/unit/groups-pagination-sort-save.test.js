@@ -28,11 +28,14 @@ describe('groups view pagination, sorting and save integrity', () => {
                 enabled: i % 2 === 0,
                 nodeCount: 1,
             }));
-            store.hydrateFromData({
-                misubs: original,
-                profiles: [],
-                config: { groupsPageSize: 10 },
-            });
+            expect(
+                store.hydrateFromData({
+                    misubs: original,
+                    profiles: [],
+                    ruleTemplates: [],
+                    config: { groupsPageSize: 10 },
+                })
+            ).toBe(true);
             const posted = [];
             vi.stubGlobal(
                 'fetch',
