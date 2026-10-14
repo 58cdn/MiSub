@@ -7,7 +7,7 @@
 - #37/#41/#42/#48 的排序、权威读取及保存期间编辑保护已部署；legacy 仍不具备跨请求原子事务。生产 4→3 根因未知，不能用代码复现推断现场删除。
 - #40（包含 #38）已合并为 `b025714dcd9da63597deb9756cf47cdfc5225916`。实际持久会话、登录安全及通知实现独审通过；[准确 HEAD 控制面 CI](https://github.com/58cdn/MiSub/actions/runs/38571418714) 验证 10 个浏览器入口、173 场景、Windows 1818 项与 Node 95 项，[Pages CI](https://github.com/58cdn/MiSub/actions/runs/38571418445) 构建及 34 项离线部署保护通过。[main 发布](https://github.com/58cdn/MiSub/actions/runs/38573254738)单独核对。默认关闭模式的代码发布不代表生产漏洞已修复。
 - #44 包含 #43 已合并为 `866e0b3403d47fbfd8cb72180b5f11d7040ca419`，[Pages 发布](https://github.com/58cdn/MiSub/actions/runs/38576470821)成功；事务、完整 writer 清单、离线迁移、双模式表单及设置竞态修复通过组合验收。生产业务模式和迁移未由代码合并启用。
-- #36/#39/#45/#47/#49/#50/#51 已合并部署；#51 的[最终发布](https://github.com/58cdn/MiSub/actions/runs/38578088220)成功。#25 恢复推进，R3 默认关闭实现 #53 已合并为 `630cb5aac068d086eea54d4217b9e443aeea9b2c`，准确 HEAD Windows2692、Node182、13浏览器入口230场景通过。#52 提供 0.3.0 发行准备，现有 catalog 仍为固定 Probe 0.2.0；代码发布、开关激活和真实验收分别记账。
+- #36/#39/#45/#47/#49/#50/#51 已合并部署。R3 默认关闭实现 #53 和发行准备 #52 已串行合并为 `db2bb5459502a9999b3f6cb84554848cb94e11ae`，准确 HEAD Windows2692、Node182、13浏览器入口230场景通过，main四工作流及[实际Pages部署](https://github.com/58cdn/MiSub/actions/runs/38591001564)成功。[R1–R5交付记录](rea-diagnostics-review.md)与可选扩展 #54 分开跟踪。现有 catalog 仍为固定 Probe 0.2.0；代码发布、开关激活、正式发行和真实验收分别记账。
 
 ## 只读访问
 
