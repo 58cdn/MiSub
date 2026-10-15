@@ -12,6 +12,8 @@
 
 ## 测试与审查门禁
 
+`Upstream sync tests` 在同步脚本、测试或工作流变更的 PR 与 main push 上，使用 Node.js 22 分别运行 Ubuntu 和 Windows 同步场景测试。PR 测试检出 GitHub 的合并结果，只读运行本地临时仓库与模拟 API，不访问真实上游或执行同步准备。
+
 准备 job 只执行工作流检出的可信脚本。独立的只读 validate job 检出完整候选 SHA，确认候选含固定 main SHA，再执行同步场景、部署脚本、测试门禁自测、完整 Vitest discovery/completion gate 和构建。Windows 只读 job 对相同候选执行同步场景及完整 Vitest gate，覆盖 Linux 明确列为平台跳过的 Windows 原生用例；两端都成功才允许发布成功状态。候选已经合并该 main，因此它的树就是该 base 与 head 的合并结果；不将 main 工作流自身的成功误当成候选验证成功。完成证据以候选 SHA 和平台命名保留在 Actions artifacts。
 
 publish job 重新检出可信工作流 SHA，不执行候选代码；仅在 Linux 与 Windows 校验均完整成功、PR head 和 main base 未变时，向该候选 SHA 发布 `upstream-sync/validated-merge=success`。失败、取消、跳过和过期均不能发布成功；准备后中断可能保留 pending，需要手动重跑。PR 正文的 pending 是指向实时状态的提示，不是测试报告。
