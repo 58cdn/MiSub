@@ -49,7 +49,7 @@
                     v-if="isLatest"
                     class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-300"
                 >
-                    {{ L('当前测试发行', 'Current test release') }}
+                    {{ L('产品版本一致', 'Same product version') }}
                 </span>
                 <span
                     v-else-if="hasCandidate"
@@ -60,7 +60,16 @@
             </div>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 <template v-if="isLatest">{{
-                    t('changelog.upToDate', { version: currentVersion })
+                    L(
+                        '产品版本与已公开测试发行一致；具体构建身份见下方。',
+                        'The product version matches the published test release; see the build identity below.'
+                    )
+                }}</template>
+                <template v-else-if="transition === 'ahead'">{{
+                    L(
+                        '当前产品版本高于已公开测试发行；当前构建尚不能由该发行记录确认。',
+                        'The product version is ahead of the published test release; that release cannot confirm this build.'
+                    )
                 }}</template>
                 <template v-else-if="hasCandidate">
                     {{

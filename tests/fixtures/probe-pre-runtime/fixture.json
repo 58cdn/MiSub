@@ -1,6 +1,6 @@
 {
   "commit": "553f190d10c8f6e990b622291c03b18d8f3b77f3",
-  "description": "Raw pre-runtime ProbeStore bytes. Tests verify the source and unchanged shared dependency bytes before rewriting only the three relative import targets in memory.",
+  "description": "Raw pre-runtime ProbeStore and execution-metadata bytes. Tests verify historical bytes and unchanged shared dependencies before rewriting relative import targets in memory.",
   "source": {
     "file": "probe-store.js",
     "path": "functions/services/probe-store.js",

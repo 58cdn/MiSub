@@ -55,8 +55,14 @@ async function preRuntimeStore() {
         manifest.dependencies.map((entry) => entry.path),
         expectedDependencies
     );
+    const metadataPath = 'functions/services/probe-execution-metadata.js';
+    const metadataFile = new URL('probe-execution-metadata.js', directory);
     for (const entry of manifest.dependencies) {
-        const bytes = readFileSync(new URL(`../../${entry.path}`, import.meta.url));
+        const bytes = readFileSync(
+            entry.path === metadataPath
+                ? metadataFile
+                : new URL(`../../${entry.path}`, import.meta.url)
+        );
         assert.equal(bytes.length, entry.bytes, `Pre-runtime dependency size drift: ${entry.path}`);
         assert.equal(
             sha256(bytes),
@@ -68,6 +74,15 @@ async function preRuntimeStore() {
         .slice(0, 3)
         .map((path) => ({ specifier: `./${path.split('/').at(-1)}`, path }));
     assert.deepEqual(manifest.imports, imports);
+    // Execute the historical dependency's exact bytes, with its verified contract import.
+    const oldMetadata = readFileSync(metadataFile, 'utf8');
+    const contractImport = "from './probe-contract.js'";
+    assert.equal(oldMetadata.split(contractImport).length, 2);
+    const metadataModule = oldMetadata.replace(
+        contractImport,
+        `from '${new URL('../../functions/services/probe-contract.js', import.meta.url).href}'`
+    );
+    const metadataUrl = `data:text/javascript;base64,${Buffer.from(metadataModule).toString('base64')}`;
     let rewritten = source.toString('utf8');
     for (const entry of imports) {
         const target = `from '${entry.specifier}'`;
@@ -78,7 +93,7 @@ async function preRuntimeStore() {
         );
         rewritten = rewritten.replace(
             target,
-            `from '${new URL(`../../${entry.path}`, import.meta.url).href}'`
+            `from '${entry.path === metadataPath ? metadataUrl : new URL(`../../${entry.path}`, import.meta.url).href}'`
         );
     }
     assert.equal(/from\s+['"]\.\//.test(rewritten), false);
