@@ -43,6 +43,7 @@ jobs:
           bash -n scripts/deploy-cloudflare-pages.sh
           bash -n scripts/provision-probe-d1.sh
           node --check scripts/smoke-node-probes.mjs
+          node --check scripts/probe-acceptance-candidate.mjs
 
       - name: Test deployment scripts (offline)
         run: node --test tests/deployment/*.test.mjs
@@ -75,13 +76,7 @@ jobs:
 
       - name: Build real detector for production acceptance
         if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.accept_node_probes
-        working-directory: detector
-        env:
-          CGO_ENABLED: '0'
-        run: |
-          python3 scripts/bundle.py linux-amd64
-          go build -trimpath -ldflags "-s -w -X main.version=0.1.0 -X main.commit=${GITHUB_SHA}" -o misub-probe .
-          ./misub-probe --self-test
+        run: node scripts/probe-acceptance-candidate.mjs
 
       # PRs from forks must never receive production credentials.
       - name: Deploy to Cloudflare Pages
@@ -107,3 +102,19 @@ jobs:
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           CLOUDFLARE_PAGES_PROJECT_NAME: ${{ secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
         run: node scripts/smoke-node-probes.mjs
+
+  acceptance-candidate:
+    name: Build acceptance candidate without production access
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Build and identify the checked-out candidate without production access
+        run: node scripts/probe-acceptance-candidate.mjs
