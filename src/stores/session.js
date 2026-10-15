@@ -134,7 +134,7 @@ export const useSessionStore = defineStore('session', () => {
             logoutPending.value = false;
             securityWarning.value = result.data?.securityWarning || null;
             loginSecurity.value = result.data?.loginSecurity || null;
-            sessionState.value = 'loading';
+            // The form owns its pending state so confirmation failures remain visible.
             const authenticated = await checkSession();
             if (
                 authenticated === null ||

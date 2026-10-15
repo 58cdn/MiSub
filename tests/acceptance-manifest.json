@@ -80,6 +80,13 @@
             "passed": true
         },
         {
+            "file": "tests/browser/login-feedback.mjs",
+            "report": "report.json",
+            "cases": "checks",
+            "errors": ["external", "unexpectedApi", "pageErrors"],
+            "passed": true
+        },
+        {
             "file": "tests/browser/session-authority.mjs",
             "report": "report.json",
             "cases": "checks",
