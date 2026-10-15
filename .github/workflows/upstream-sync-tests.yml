@@ -1,0 +1,38 @@
+name: Upstream sync tests
+
+on:
+    pull_request:
+        branches: [main]
+        paths:
+            - '.github/workflows/sync-upstream.yml'
+            - '.github/workflows/upstream-sync-tests.yml'
+            - 'scripts/upstream-sync/**'
+            - 'tests/upstream-sync/**'
+    push:
+        branches: [main]
+        paths:
+            - '.github/workflows/sync-upstream.yml'
+            - '.github/workflows/upstream-sync-tests.yml'
+            - 'scripts/upstream-sync/**'
+            - 'tests/upstream-sync/**'
+
+permissions:
+    contents: read
+
+jobs:
+    sync-scenarios:
+        strategy:
+            fail-fast: false
+            matrix:
+                os: [ubuntu-latest, windows-latest]
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 10
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '22'
+            - name: Test sync scenarios against local repositories
+              run: node --test tests/upstream-sync/*.test.mjs

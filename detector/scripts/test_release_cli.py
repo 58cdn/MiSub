@@ -11,7 +11,7 @@ from unittest import mock
 import release_gate as gate
 
 
-VERSION, COMMIT, TARGET, KERNEL = '0.0.1.261015.1', 'b' * 40, 'windows-amd64', 'v1.19.32-misub-source'
+VERSION, COMMIT, TARGET, KERNEL = '0.0.1-alpha.1', 'b' * 40, 'windows-amd64', 'v1.19.32-misub-source'
 
 
 def doctor_fixture(elevated=False):
@@ -21,7 +21,7 @@ def doctor_fixture(elevated=False):
               ('configuration', 'error', 'configuration_missing'), ('service', 'not_run', 'service_status_not_checked'),
               ('kernel_execution', 'not_run', 'kernel_execution_not_checked'), ('network', 'not_run', 'network_not_checked')]
     return {'schemaVersion': 1, 'checkedAt': '2026-10-14T12:00:00Z', 'scope': 'local_read_only', 'status': 'issues_found',
-            'platform': TARGET, 'version': VERSION, 'revision': COMMIT, 'kernelLockVersion': KERNEL,
+            'platform': TARGET, 'version': VERSION, 'displayVersion': VERSION, 'buildChannel': 'testing', 'sourceState': 'clean', 'revision': COMMIT, 'kernelLockVersion': KERNEL,
             'checks': [dict(id=name, state=state, code=code, **({'source': 'explicit_config'} if name == 'configuration' else {}))
                        for name, state, code in checks]}
 
@@ -75,6 +75,17 @@ class ReleaseCLITests(unittest.TestCase):
             with self.assertRaisesRegex(gate.GateError, 'checks_invalid'):
                 gate.verify_doctor_report(report, VERSION, COMMIT, TARGET, KERNEL, not elevated)
 
+    def test_development_cli_identity_requires_actual_sha_and_clean_source(self):
+        report = doctor_fixture()
+        display = VERSION + '.sha.' + COMMIT[:12]
+        report.update(displayVersion=display, buildChannel='development')
+        gate.verify_doctor_report(report, VERSION, COMMIT, TARGET, KERNEL, False, display, 'development')
+        for change in ({'displayVersion': VERSION + '.sha.' + 'a' * 12}, {'sourceState': 'dirty'},
+                       {'sourceState': 'unknown'}, {'buildChannel': 'testing'}):
+            altered = dict(report, **change)
+            with self.assertRaisesRegex(gate.GateError, 'display_version'):
+                gate.verify_doctor_report(altered, VERSION, COMMIT, TARGET, KERNEL, False, display, 'development')
+
     def test_identity_and_report_shape_cannot_be_substituted(self):
         for key, value in [('version', '0.2.0'), ('revision', 'a' * 40), ('platform', 'linux-amd64'),
                            ('kernelLockVersion', 'v0.0.0'), ('scope', 'network'), ('status', 'local_checks_passed'),
@@ -97,11 +108,11 @@ class ReleaseCLITests(unittest.TestCase):
                 gate.verify_doctor_report(report, VERSION, COMMIT, TARGET, KERNEL, False)
 
     def test_assembly_requires_exact_version_doctor_and_no_created_files(self):
-        evidence = {'schemaVersion': 2, 'versionOutput': f'misub-probe {VERSION} ({COMMIT}); mihomo {KERNEL}',
+        evidence = {'schemaVersion': 2, 'buildChannel': 'testing', 'versionOutput': f'misub-probe {VERSION} ({COMMIT}); mihomo {KERNEL}',
                     'doctor': doctor_fixture(), 'doctorHomeUnchanged': True, 'installationTokenElevated': False}
         gate.verify_cli_evidence(evidence, VERSION, COMMIT, TARGET, KERNEL)
         for key, value in [('versionOutput', 'misub-probe dev'), ('doctor', None), ('doctorHomeUnchanged', False),
-                           ('installationTokenElevated', 'false'), ('schemaVersion', 1), ('schemaVersion', True)]:
+                           ('installationTokenElevated', 'false'), ('buildChannel', 'development'), ('schemaVersion', 1), ('schemaVersion', True)]:
             with self.subTest(key=key), self.assertRaises(gate.GateError):
                 changed = copy.deepcopy(evidence)
                 changed[key] = value

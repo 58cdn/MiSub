@@ -1,5 +1,3 @@
-import { isProbeReleaseVersion as versionIsValid } from './probe-version.js';
-
 export const PROBE_RELEASE_TARGETS = Object.freeze([
     'linux-amd64',
     'linux-arm64',
@@ -21,6 +19,9 @@ const keysAre = (value, expected) =>
     plain(value) &&
     Object.keys(value).length === expected.length &&
     expected.every((key) => Object.hasOwn(value, key));
+const versionIsValid = (value) =>
+    typeof value === 'string' &&
+    /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$/.test(value);
 const exactSet = (value, expected) =>
     Array.isArray(value) &&
     value.length === expected.length &&

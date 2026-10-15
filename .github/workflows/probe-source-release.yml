@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Probe version: 0.0.1.yymmdd.sequence (UTC+8; next unused daily sequence)'
+        description: 'Probe version: 0.0.1-alpha.N (next unused Probe sequence; testing prerelease)'
         type: string
         required: true
       source_commit:
@@ -41,7 +41,7 @@ jobs:
           persist-credentials: false
       - name: Verify offline build, archive and release-gate fixtures
         run: python3 -B -m unittest discover -s detector/scripts -p 'test_*.py' -v
-      - name: Verify exact main and next UTC+8 version before building a release
+      - name: Verify exact main and next Probe alpha sequence before building a release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -67,7 +67,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
-      RELEASE_VERSION: ${{ inputs.version || '0.0.1.260101.1' }}
+      RELEASE_VERSION: ${{ inputs.version || '' }}
       RELEASE_COMMIT: ${{ github.sha }}
       RELEASE_TARGET: ${{ matrix.target }}
       MISUB_PUBLISH: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish && 'true' || 'false' }}

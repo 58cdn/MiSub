@@ -1,9 +1,11 @@
 import { PROBE_TYPES, requireValue } from './probe-contract.js';
-import { isProbeBuildVersion as version } from '../../src/shared/probe-version.js';
 
 export const EXECUTION_METADATA_VERSION = 1;
+const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$(?![\s\S])/;
 const REVISION = /^(?:[a-f0-9]{40}|source)$(?![\s\S])/;
 const PLATFORMS = new Set(['linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64', 'windows-amd64']);
+const version = (value, prefix = false) => typeof value === 'string' && value.length <= 64
+    && VERSION.test(prefix && value.startsWith('v') ? value.slice(1) : value);
 
 // Declarations identify the submitting build; they do not attest kernel execution
 // or negotiate capabilities. Never copy arbitrary fields from the detector.

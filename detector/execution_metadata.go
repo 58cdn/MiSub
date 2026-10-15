@@ -1,7 +1,5 @@
 package main
 
-import "strings"
-
 const executionMetadataSchemaVersion = 1
 
 // This explicit build rule-set baseline must advance when interpretation rules
@@ -12,6 +10,8 @@ type executionMetadata struct {
 	SchemaVersion     int    `json:"schemaVersion"`
 	WrapperVersion    string `json:"wrapperVersion"`
 	WrapperRevision   string `json:"wrapperRevision"`
+	BuildChannel      string `json:"buildChannel,omitempty"`
+	SourceState       string `json:"sourceState,omitempty"`
 	Platform          string `json:"platform"`
 	KernelLockVersion string `json:"kernelLockVersion,omitempty"`
 	RuleSetVersion    int    `json:"ruleSetVersion"`
@@ -22,7 +22,7 @@ func executionBuildVersionValid(value string) bool {
 }
 
 func newExecutionMetadata(buildVersion, revision, platform, kernelVersion string) *executionMetadata {
-	if !executionBuildVersionValid(buildVersion) || !bootstrapCommitPattern.MatchString(revision) {
+	if !executionBuildVersionValid(buildVersion) || !probeRevisionValid(buildVersion, revision) {
 		return nil
 	}
 	switch platform {
@@ -34,7 +34,7 @@ func newExecutionMetadata(buildVersion, revision, platform, kernelVersion string
 		SchemaVersion: executionMetadataSchemaVersion, WrapperVersion: buildVersion,
 		WrapperRevision: revision, Platform: platform, RuleSetVersion: executionRuleSetVersion,
 	}
-	if len(kernelVersion) <= 64 && bootstrapVersionPattern.MatchString(strings.TrimPrefix(kernelVersion, "v")) {
+	if kernelBuildVersionValid(kernelVersion) {
 		metadata.KernelLockVersion = kernelVersion
 	}
 	return metadata
@@ -47,5 +47,15 @@ func currentExecutionMetadata() *executionMetadata {
 		// The lock declaration does not attest which kernel actually executed.
 		kernelVersion = lock.Version
 	}
-	return newExecutionMetadata(buildVersion, revision, platform, kernelVersion)
+	metadata := newExecutionMetadata(buildVersion, revision, platform, kernelVersion)
+	if metadata != nil && probeAlphaVersionValid(buildVersion) {
+		if probeBuildChannelValid(buildChannel) {
+			metadata.BuildChannel = buildChannel
+		}
+		switch buildSourceState {
+		case "clean", "dirty", "unknown":
+			metadata.SourceState = buildSourceState
+		}
+	}
+	return metadata
 }

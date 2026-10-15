@@ -48,7 +48,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "probe:", err)
 			os.Exit(2)
 		}
-		report := collectDoctor(nativeDoctorHost{}, doctorEnvironment{Target: nativeBootstrapTarget(), Version: version, Revision: commit, Now: time.Now()}, doctorOptions{ConfigPath: *path, ConfigExplicit: visited["config"]})
+		report := collectDoctor(nativeDoctorHost{}, doctorEnvironment{Target: nativeBootstrapTarget(), Version: version, Revision: commit, BuildChannel: buildChannel, SourceState: buildSourceState, Now: time.Now()}, doctorOptions{ConfigPath: *path, ConfigExplicit: visited["config"]})
 		if err := writeDoctorReport(os.Stdout, report, *jsonOutput); err != nil {
 			fmt.Fprintln(os.Stderr, "probe:", err)
 			os.Exit(1)
@@ -134,7 +134,7 @@ func main() {
 	}
 	lock, _ := loadKernelLock()
 	if *showVersion {
-		fmt.Printf("misub-probe %s (%s); mihomo %s\n", version, commit, lock.Version)
+		fmt.Printf("misub-probe %s (%s); mihomo %s\n", probeDisplayVersion(version, commit, buildChannel, buildSourceState), commit, lock.Version)
 		return
 	}
 	if *selfTest {

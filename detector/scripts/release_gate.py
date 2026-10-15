@@ -293,10 +293,15 @@ def installation_token_elevated():
         kernel.CloseHandle(token)
 
 
-def verify_doctor_report(report, version, commit, target, kernel_version, elevated):
+def verify_doctor_report(report, version, commit, target, kernel_version, elevated, display_version=None, build_channel="testing"):
     require(type(elevated) is bool, "native_token_evidence_invalid")
-    require(isinstance(report, dict) and set(report) == {"schemaVersion", "checkedAt", "scope", "status",
-            "platform", "version", "revision", "kernelLockVersion", "checks"}, "native_doctor_report_invalid")
+    fields = {"schemaVersion", "checkedAt", "scope", "status", "platform", "version", "revision", "kernelLockVersion", "checks"}
+    if probe_version.alpha_number(version) is not None:
+        fields.update(("displayVersion", "buildChannel", "sourceState"))
+    require(isinstance(report, dict) and set(report) == fields, "native_doctor_report_invalid")
+    if "displayVersion" in fields:
+        require(report["displayVersion"] == (display_version or version)
+                and report["buildChannel"] == build_channel and report["sourceState"] == "clean", "native_doctor_display_version_mismatch")
     require(type(report["schemaVersion"]) is int and report["schemaVersion"] == 1
             and (report["scope"], report["status"], report["platform"], report["version"], report["revision"], report["kernelLockVersion"])
             == ("local_read_only", "issues_found", target, version, commit, kernel_version), "native_doctor_identity_mismatch")
@@ -328,13 +333,18 @@ def verify_cli_evidence(evidence, version, commit, target, kernel_version):
         require((version, commit) == ("0.2.0", "9ccee76c3cab149f34dca96c304310c9574c0d29"), "native_cli_evidence_required")
         return
     require(evidence.get("schemaVersion") == 2, "invalid_native_evidence")
+    if probe_version.alpha_number(version) is not None:
+        require(evidence.get("buildChannel") == "testing", "testing_build_channel_required")
     require(evidence.get("versionOutput") == f"misub-probe {version} ({commit}); mihomo {kernel_version}", "native_cli_version_mismatch")
     require(evidence.get("doctorHomeUnchanged") is True, "native_doctor_side_effects")
     verify_doctor_report(evidence.get("doctor"), version, commit, target, kernel_version, evidence.get("installationTokenElevated"))
 
 
 def native(repo, work, target, version, commit, require_materials=False):
+    version = version or probe_version.read_version(repo)
+    probe_version.verify_source_version(version, repo)
     identity(version, commit)
+    require(probe_version.alpha_number(version) is not None, "alpha_release_version_required")
     require(target in TARGETS and source.host_target() == target, "native_target_mismatch")
     snapshot, files, tree = wrapper_snapshot(repo, commit)
     work.mkdir(parents=True, exist_ok=False)
@@ -378,7 +388,10 @@ def native(repo, work, target, version, commit, require_materials=False):
     output.mkdir()
     binary_name = "misub-probe-" + target + (".exe" if target.startswith("windows-") else "")
     binary = output / binary_name
-    recipe = ["build", "-buildvcs=false", "-trimpath", "-ldflags", "-buildid= -s -w -X main.version=" + version + " -X main.commit=" + commit]
+    build_channel = "testing" if require_materials else "development"
+    display_version = version if require_materials else version + ".sha." + commit[:12]
+    recipe = ["build", "-buildvcs=false", "-trimpath", "-ldflags", "-buildid= -s -w -X main.version=" + version
+              + " -X main.commit=" + commit + " -X main.buildChannel=" + build_channel + " -X main.buildSourceState=clean"]
     run([go, *recipe, "-o", binary, "."], wrapper / "detector", env, logs / "wrapper-build.txt")
     run([go, *recipe, "-o", work / "wrapper.repeat", "."], wrapper / "detector", env, logs / "wrapper-repeat.txt")
     require(read(binary) == read(work / "wrapper.repeat"), "wrapper_repeat_build_mismatch")
@@ -389,10 +402,10 @@ def native(repo, work, target, version, commit, require_materials=False):
     capabilities = run([binary, "--capabilities"], cli_home, cli_env, logs / "capabilities.txt", timeout=30).decode().strip()
     require(capabilities == f"misub-probe-bootstrap-v1 {version} {commit} {target}", "native_cli_capability_mismatch")
     version_output = run([binary, "--version"], cli_home, cli_env, logs / "version.txt", timeout=30).decode().strip()
-    require(version_output == f"misub-probe {version} ({commit}); mihomo {lock['source']['version']}", "native_cli_version_mismatch")
+    require(version_output == f"misub-probe {display_version} ({commit}); mihomo {lock['source']['version']}", "native_cli_version_mismatch")
     doctor_output = run([binary, "--doctor", "--json", "--config", cli_home / "missing-probe.json"],
                         cli_home, cli_env, logs / "doctor.json", timeout=30, expected_returncode=1)
-    doctor = verify_doctor_report(json.loads(doctor_output, object_pairs_hook=audit.unique_object), version, commit, target, lock["source"]["version"], elevated)
+    doctor = verify_doctor_report(json.loads(doctor_output, object_pairs_hook=audit.unique_object), version, commit, target, lock["source"]["version"], elevated, display_version, build_channel)
     require(not any(cli_home.iterdir()), "native_doctor_side_effects")
     run([binary, "--self-test"], cli_home, cli_env, logs / "self-test.txt")
     source.load_prepared(prepared, lock)
@@ -408,7 +421,7 @@ def native(repo, work, target, version, commit, require_materials=False):
         coverage = review_coverage(read_json(review_path), inventory, linked, lock_sha, manifest["modules"])
     else:
         blockers.append("reviewed_license_coverage_missing")
-    evidence = {"schemaVersion": 2, "kind": "misub-native-source-candidate", "version": version, "commit": commit,
+    evidence = {"schemaVersion": 2, "kind": "misub-native-source-candidate", "version": version, "commit": commit, "buildChannel": build_channel,
                 "target": target, "wrapperTree": tree, "lockSha256": lock_sha, "coreBuild": build,
                 "generatedKernelLock": generated, "wrapperRecipe": recipe, "wrapperStandardDependencies": wrapper_standard_dependencies(deps, prepared),
                 "asset": record(binary), "wrapperSource": record(wrapper_pack), "coreSource": record(core_pack),
@@ -456,7 +469,8 @@ def render_bootstrap(unix, windows, assets, version, commit):
 
 def release_context(version, commit, environment=None):
     identity(version, commit)
-    require(probe_version.dated_parts(version) is not None, "dated_release_version_required")
+    require(probe_version.alpha_number(version) is not None, "alpha_release_version_required")
+    probe_version.verify_source_version(version, ROOT)
     env = os.environ if environment is None else environment
     expected = {"GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REPOSITORY": REPOSITORY,
                 "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": commit, "REQUESTED_COMMIT": commit,
@@ -506,6 +520,8 @@ def assemble_materials(repo, inputs, output, version, commit):
     identity(version, commit)
     _, wrapper_files, tree = wrapper_snapshot(repo, commit)
     source_files = {name: data for name, data, _ in wrapper_files}
+    if probe_version.alpha_number(version) is not None:
+        require(probe_version.source_version(source_files.get("detector/VERSION", b"")) == version, "source_product_version_mismatch")
     lock = source.load_lock(repo / "detector/source-build-lock.json")
     lock_sha = source.digest(source.json_bytes(lock))
     review = read_json(repo / "detector/source-license-review.json")
@@ -553,6 +569,9 @@ def assemble_materials(repo, inputs, output, version, commit):
                "release": {"version": version, "tag": "probe-v" + version, "sourceCommit": commit, "bootstrapProtocol": 1, "capabilities": CAPABILITIES,
                            "assets": [dict(public_record(assets[t]), target=t) for t in TARGETS],
                            "bootstrap": {"unix": public_record(record(output / "install.sh")), "windows": public_record(record(output / "install.ps1"))}}}
+    if probe_version.alpha_number(version) is not None:
+        catalog["distributionReady"] = False
+        catalog["release"].update(channel="testing", prerelease=True)
     # This is a candidate catalog, not an application update. It is published only
     # after authenticated verification; enabling the UI is a separate reviewed PR.
     save(output / "release-catalog.json", catalog)
@@ -562,6 +581,8 @@ def assemble_materials(repo, inputs, output, version, commit):
                   "The clean core uses the operating system certificate pool with TLS verification enabled. Linux requires system CA certificates; macOS 13+ and Windows 10/Server 2016+ are supported.\n\n"
                   "Rebuild using detector/scripts/release_gate.py native from the wrapper source commit. The build downloads only the reviewed, hash-pinned public source/vendor/Go materials and uses offline Go module resolution. It performs loopback and mock tests without pairing or installing a service.\n\n"
                   f"Verify artifact attestations with gh attestation verify FILE --repo {REPOSITORY} --signer-workflow {REPOSITORY}/{WORKFLOW} --source-ref refs/heads/main --source-digest {commit} --signer-digest {commit} --deny-self-hosted-runners. SHA256SUMS alone does not authenticate provenance.\n")
+    if probe_version.alpha_number(version) is not None:
+        source_doc += "\nChannel: testing (alpha prerelease). These artifacts do not establish real installation, pairing, task execution or result-page acceptance and are not a stable recommendation.\n"
     (output / "SOURCE.md").write_text(source_doc, encoding="utf-8", newline="\n")
     manifest = {"schemaVersion": 1, "kind": "misub-source-release", "version": version, "commit": commit, "workflow": WORKFLOW,
                 "files": [record(p) for p in sorted(output.iterdir(), key=lambda p: p.name)], "nativeEvidence": native_records,
@@ -614,7 +635,7 @@ def verify_remote_release(release, release_id, version, records, draft=True):
     require(release.get("id") == release_id and type(release.get("id")) is int
             and release.get("url") == "https://api.github.com/" + endpoint
             and release.get("draft") is draft and release.get("tag_name") == "probe-v" + version
-            and release.get("prerelease") is False, "draft_release_identity_mismatch")
+            and release.get("prerelease") is (probe_version.alpha_number(version) is not None), "draft_release_identity_mismatch")
     assets = release.get("assets")
     require(isinstance(assets, list), "release_asset_set_mismatch")
     uploaded, ids = {}, set()
@@ -646,6 +667,7 @@ def publish(output, version, commit, bundle, logs):
         existing = [item for page in pages for item in page]
         tag = "probe-v" + version
         require(not any(item.get("tag_name") == tag or item.get("ref") == "refs/tags/" + tag for item in existing), "release_or_tag_already_exists")
+    release_preflight.verify_next_version(version)
     # Creating the ref is atomic and refuses an existing tag, including a tag
     # created concurrently after the read-only checks. No force update is used.
     tag = "probe-v" + version
@@ -654,7 +676,7 @@ def publish(output, version, commit, bundle, logs):
     # Upload failure leaves the new draft for inspection; automatic retries do
     # not replace tags/releases/assets or make an incomplete catalog public.
     response = run(["gh", "api", "--hostname", "github.com", "--method", "POST", "https://api.github.com/repos/" + REPOSITORY + "/releases",
-                    "-f", "tag_name=" + tag, "-f", "target_commitish=" + commit, "-F", "draft=true", "-F", "prerelease=false",
+                    "-f", "tag_name=" + tag, "-f", "target_commitish=" + commit, "-F", "draft=true", "-F", "prerelease=true",
                     "-f", "make_latest=false", "-f", "name=MiSub Probe v" + version, "-F", "body=@" + str(output / "SOURCE.md")],
                    output, dict(os.environ), logs / "create-draft.json", timeout=120)
     release = json.loads(response, object_pairs_hook=audit.unique_object)
@@ -671,10 +693,11 @@ def publish(output, version, commit, bundle, logs):
     response = run(["gh", "api", "--hostname", "github.com", "https://api.github.com/" + endpoint], output, dict(os.environ), logs / "draft-assets.json", timeout=120)
     verify_remote_release(json.loads(response, object_pairs_hook=audit.unique_object), release_id, version, records)
     release_preflight.verify_live_main(commit)
-    response = run(["gh", "api", "--hostname", "github.com", "--method", "PATCH", "https://api.github.com/" + endpoint, "-F", "draft=false", "-f", "make_latest=false"],
+    release_preflight.verify_reserved_version(version)
+    response = run(["gh", "api", "--hostname", "github.com", "--method", "PATCH", "https://api.github.com/" + endpoint, "-F", "draft=false", "-F", "prerelease=true", "-f", "make_latest=false"],
                    output, dict(os.environ), logs / "publish.json", timeout=120)
     verify_remote_release(json.loads(response, object_pairs_hook=audit.unique_object), release_id, version, records, draft=False)
-    return {"tag": tag, "releaseId": release_id, "commit": commit, "assets": len(names), "releaseReady": True, "authenticatedProvenance": "verified-by-gh"}
+    return {"tag": tag, "releaseId": release_id, "commit": commit, "assets": len(names), "releaseReady": True, "channel": "testing", "prerelease": True, "acceptanceVerified": False, "authenticatedProvenance": "verified-by-gh"}
 
 
 def main(argv=None):

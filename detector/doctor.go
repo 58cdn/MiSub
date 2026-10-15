@@ -27,6 +27,9 @@ type doctorReport struct {
 	Platform          string        `json:"platform"`
 	Version           string        `json:"version"`
 	Revision          string        `json:"revision"`
+	DisplayVersion    string        `json:"displayVersion,omitempty"`
+	BuildChannel      string        `json:"buildChannel,omitempty"`
+	SourceState       string        `json:"sourceState,omitempty"`
 	KernelLockVersion string        `json:"kernelLockVersion,omitempty"`
 	InstalledVersion  string        `json:"installedVersion,omitempty"`
 	Checks            []doctorCheck `json:"checks"`
@@ -34,6 +37,7 @@ type doctorReport struct {
 
 type doctorEnvironment struct {
 	Target, Version, Revision string
+	BuildChannel, SourceState string
 	Now                       time.Time
 }
 
@@ -100,17 +104,35 @@ func collectDoctor(host doctorHost, environment doctorEnvironment, options docto
 			report.Status = "issues_found"
 		}
 	}
-	if doctorVersion(environment.Version) && bootstrapCommitPattern.MatchString(environment.Revision) {
+	if doctorVersion(environment.Version) && probeRevisionValid(strings.TrimPrefix(environment.Version, "v"), environment.Revision) {
 		report.Version, report.Revision = environment.Version, environment.Revision
 		add(doctorCheck{ID: "build", State: "ok", Code: "build_metadata_valid"})
 	} else {
 		add(doctorCheck{ID: "build", State: "error", Code: "build_metadata_invalid", Remediation: "Use a verifiable build with a version and source revision."})
 	}
+	if probeAlphaVersionValid(environment.Version) {
+		report.DisplayVersion = probeDisplayVersion(environment.Version, environment.Revision, environment.BuildChannel, environment.SourceState)
+		if probeBuildChannelValid(environment.BuildChannel) {
+			report.BuildChannel = environment.BuildChannel
+		}
+		switch environment.SourceState {
+		case "clean", "dirty", "unknown":
+			report.SourceState = environment.SourceState
+		}
+		if report.DisplayVersion == "unknown" {
+			report.Status = "issues_found"
+			for index := range report.Checks {
+				if report.Checks[index].ID == "build" {
+					report.Checks[index] = doctorCheck{ID: "build", State: "error", Code: "build_source_unverified", Remediation: "Build from a verified source revision or use an audited testing release."}
+				}
+			}
+		}
+	}
 	if doctorTarget(environment.Target) {
 		report.Platform = environment.Target
 		add(doctorCheck{ID: "platform", State: "ok", Code: "platform_supported"})
 		kernelVersion, kernelErr := host.Kernel()
-		if len(kernelVersion) <= 64 && bootstrapVersionPattern.MatchString(strings.TrimPrefix(kernelVersion, "v")) {
+		if kernelBuildVersionValid(kernelVersion) {
 			report.KernelLockVersion = kernelVersion
 		} else if kernelErr == nil {
 			kernelErr = errors.New("kernel_metadata_invalid")
@@ -218,7 +240,11 @@ func writeDoctorReport(output io.Writer, report doctorReport, asJSON bool) error
 		}
 		return nil
 	}
-	if _, err := fmt.Fprintf(output, "MiSub Probe doctor v%d: %s; %s; %s\nBuild: %s (%s); target: %s\n", report.SchemaVersion, report.Status, report.Scope, report.CheckedAt, report.Version, report.Revision, report.Platform); err != nil {
+	displayVersion := report.Version
+	if report.DisplayVersion != "" {
+		displayVersion = report.DisplayVersion
+	}
+	if _, err := fmt.Fprintf(output, "MiSub Probe doctor v%d: %s; %s; %s\nBuild: %s (%s); target: %s\n", report.SchemaVersion, report.Status, report.Scope, report.CheckedAt, displayVersion, report.Revision, report.Platform); err != nil {
 		return errors.New("doctor_output_failed")
 	}
 	for _, check := range report.Checks {
