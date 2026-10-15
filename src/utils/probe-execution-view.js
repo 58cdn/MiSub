@@ -1,4 +1,4 @@
-const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$(?![\s\S])/;
+import { isProbeBuildVersion as validVersion } from '../shared/probe-version.js';
 const REVISION = /^(?:[a-f0-9]{40}|source)$(?![\s\S])/;
 const PLATFORMS = new Set([
     'linux-amd64',
@@ -7,10 +7,6 @@ const PLATFORMS = new Set([
     'darwin-arm64',
     'windows-amd64',
 ]);
-const validVersion = (value, prefix = false) =>
-    typeof value === 'string' &&
-    value.length <= 64 &&
-    VERSION.test(prefix && value.startsWith('v') ? value.slice(1) : value);
 
 // Only completed tasks can display their own bounded detector declaration.
 export function executionSnapshotView(metadata, state) {

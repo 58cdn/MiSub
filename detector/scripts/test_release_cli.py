@@ -11,7 +11,7 @@ from unittest import mock
 import release_gate as gate
 
 
-VERSION, COMMIT, TARGET, KERNEL = '0.3.0', 'b' * 40, 'windows-amd64', 'v1.19.32-misub-source'
+VERSION, COMMIT, TARGET, KERNEL = '0.0.1.261015.1', 'b' * 40, 'windows-amd64', 'v1.19.32-misub-source'
 
 
 def doctor_fixture(elevated=False):
@@ -132,7 +132,17 @@ class ReleaseCLITests(unittest.TestCase):
         self.assertEqual(history[-1]['capabilities'], gate.CAPABILITIES)
         self.assertEqual(catalog['release']['version'], '0.2.0')
         catalog['distributionReady'] = False
-        self.assertEqual(len(gate.catalog_history(json.dumps(catalog), VERSION)), 1)
+        self.assertEqual(gate.catalog_history(json.dumps(catalog), VERSION), history)
+        self.assertFalse(catalog['distributionReady'])
+        catalog['release'] = None
+        self.assertEqual(gate.catalog_history(json.dumps(catalog), VERSION), history[:1])
+
+    def test_paused_catalog_rejects_malformed_current_identity(self):
+        catalog = catalog_fixture()
+        catalog['distributionReady'] = False
+        catalog['release']['tag'] = 'probe-v0.1.0'
+        with self.assertRaisesRegex(gate.GateError, 'invalid_source_catalog'):
+            gate.catalog_history(json.dumps(catalog), VERSION)
 
     def test_catalog_history_rejects_reuse_or_malformed_capabilities(self):
         catalog = catalog_fixture()

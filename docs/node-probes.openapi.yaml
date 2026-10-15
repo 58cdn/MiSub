@@ -670,7 +670,7 @@ components:
       additionalProperties: false
       required: [version, tag, sourceCommit, bootstrapProtocol, capabilities, assets, bootstrap]
       properties:
-        version: { type: string, pattern: '^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$', description: Stable release; legacy 0.1.0 is not bootstrap compatible. }
+        version: { type: string, pattern: '^(?:(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})|0\.0\.1\.[0-9]{6}\.[1-9][0-9]{0,5})$(?![\s\S])', description: 'New releases use 0.0.1.yymmdd.sequence with a real UTC+8 calendar date and positive daily sequence. Historical three-part versions remain readable; 0.1.0 is not bootstrap compatible.' }
         tag: { type: string, description: Exactly probe-v followed by version. }
         sourceCommit: { type: string, pattern: '^[a-f0-9]{40}$', description: Nonzero immutable wrapper revision. }
         bootstrapProtocol: { const: 1 }
@@ -956,7 +956,7 @@ components:
       required: [schemaVersion, wrapperVersion, wrapperRevision, platform, ruleSetVersion]
       properties:
         schemaVersion: { type: integer, const: 1 }
-        wrapperVersion: { type: string, maxLength: 64, pattern: '^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$(?![\s\S])' }
+        wrapperVersion: { type: string, maxLength: 64, pattern: '^(?:[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?|0\.0\.1\.[0-9]{6}\.[1-9][0-9]{0,5})$(?![\s\S])', description: Dated wrapper versions require a real calendar date. }
         wrapperRevision: { type: string, pattern: '^(?:[a-f0-9]{40}|source)$(?![\s\S])', description: Build revision or source for a local source build. }
         platform: { type: string, enum: [linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64] }
         kernelLockVersion: { type: string, maxLength: 64, pattern: '^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$(?![\s\S])', description: Optional embedded lock declaration; absent means unknown. }

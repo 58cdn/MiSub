@@ -133,7 +133,7 @@ done
 [ "$protocols" = '=https' ] && [ "$max_time" -le 45 ] && [ "$max_time" -gt 0 ] || exit 93
 [ "$range" = "0-$((max_size - 1))" ] || exit 94
 if [ "$n" = 1 ]; then
-    [ "$url" = "https://github.com/58cdn/MiSub/releases/download/probe-v9.9.9/misub-probe-$FIXTURE_TARGET" ] || exit 95
+    [ "$url" = "https://github.com/58cdn/MiSub/releases/download/probe-v0.0.1.261015.1/misub-probe-$FIXTURE_TARGET" ] || exit 95
 fi
 case "$FIXTURE_HTTP" in
     network-two) [ "$n" -gt 2 ] || exit 7 ;;
@@ -166,12 +166,12 @@ SH
 
 render() {
     export FIXTURE_TARGET=$1
-    local digest bytes
+    local digest bytes fixture_version=${2:-0.0.1.261015.1}
     case "$real_sha" in *sha256sum) digest=$("$real_sha" "$case_dir/client") ;; *) digest=$("$real_sha" -a 256 "$case_dir/client") ;; esac
     digest=${digest%% *}
     bytes=$(wc -c < "$case_dir/client")
     bytes=${bytes//[[:space:]]/}
-    sed -e "s/readonly MISUB_RELEASE_VERSION=''/readonly MISUB_RELEASE_VERSION='9.9.9'/" \
+    sed -e "s/readonly MISUB_RELEASE_VERSION=''/readonly MISUB_RELEASE_VERSION='$fixture_version'/" \
         -e "s/readonly MISUB_RELEASE_COMMIT=''/readonly MISUB_RELEASE_COMMIT='1111111111111111111111111111111111111111'/" \
         -e "s/readonly MISUB_RELEASE_ASSETS=''/readonly MISUB_RELEASE_ASSETS='$FIXTURE_TARGET $bytes $digest'/" \
         "$source_dir/install.sh" > "$case_dir/install.sh"
@@ -185,7 +185,7 @@ render() {
             mv "$case_dir/rendered" "$case_dir/install.sh"
             ;;
     esac
-    printf 'misub-probe-bootstrap-v1 9.9.9 1111111111111111111111111111111111111111 %s\n' "$FIXTURE_TARGET" > "$case_dir/capability"
+    printf 'misub-probe-bootstrap-v1 0.0.1.261015.1 1111111111111111111111111111111111111111 %s\n' "$FIXTURE_TARGET" > "$case_dir/capability"
 }
 
 run_installer() {
@@ -201,6 +201,10 @@ calls() { local actual=0; [ ! -e "$case_dir/state/client-calls" ] || actual=$(gr
 setup_modes() { local actual=0; [ ! -e "$case_dir/state/setup-modes" ] || actual=$(grep -c -e "^$1$" "$case_dir/state/setup-modes" || true); [ "$actual" = "$2" ] || fail "setup mode $1 used $actual times, expected $2"; }
 setup_stages() { local actual=0; [ ! -e "$case_dir/state/setup-stages" ] || actual=$(grep -c -e "^$1$" "$case_dir/state/setup-stages" || true); [ "$actual" = "$2" ] || fail "mock setup stage $1 reached $actual times, expected $2"; }
 downloads() { local actual=0; [ ! -e "$case_dir/state/curl-count" ] || actual=$(cat "$case_dir/state/curl-count"); [ "$actual" = "$1" ] || fail "downloads $actual, expected $1"; }
+
+for invalid_version in 0.0.1.230229.1 0.0.1.261332.1 0.0.1.260000.1 0.0.1.260431.1 0.0.1.261015.0 0.0.1.261015.01 0.0.1.261015.1000000 0.0.1.261015.1-dev; do
+    new_fixture; render linux-amd64 "$invalid_version"; pair_run; failure release_metadata_invalid; downloads 0
+done
 
 new_fixture
 cp "$source_dir/install.sh" "$case_dir/install.sh"

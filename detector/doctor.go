@@ -77,7 +77,7 @@ func doctorFlags(enabled bool, visited map[string]bool, arguments int) error {
 }
 
 func doctorVersion(value string) bool {
-	return len(value) <= 64 && bootstrapVersionPattern.MatchString(strings.TrimPrefix(value, "v"))
+	return probeBuildVersionValid(strings.TrimPrefix(value, "v"))
 }
 
 func doctorTarget(target string) bool {
@@ -110,7 +110,7 @@ func collectDoctor(host doctorHost, environment doctorEnvironment, options docto
 		report.Platform = environment.Target
 		add(doctorCheck{ID: "platform", State: "ok", Code: "platform_supported"})
 		kernelVersion, kernelErr := host.Kernel()
-		if doctorVersion(kernelVersion) {
+		if len(kernelVersion) <= 64 && bootstrapVersionPattern.MatchString(strings.TrimPrefix(kernelVersion, "v")) {
 			report.KernelLockVersion = kernelVersion
 		} else if kernelErr == nil {
 			kernelErr = errors.New("kernel_metadata_invalid")

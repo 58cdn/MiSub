@@ -29,7 +29,7 @@
 3. 登录审计：专用 `MISUB_SECURITY_DB` 与 enabled 开关独立决定。原 #32 明确不执行生产建库和启用；后续目标确认、具体授权与真实环境验收由 [#55](https://github.com/58cdn/MiSub/issues/55) 保持可见追踪，不能为关闭代码需求擅自执行。
 4. 业务事务：核实权威存储、完整副本和 writer 排空，再按[迁移验收](subscription-migration-readiness.md)决定 schema、authority/epoch、数据迁移与模式。
 5. R3：核实指定 `MISUB_PROBE_DB` 和恢复点，批准独立迁移后依次激活 `record`、`read`。**从确认 record 生效起连续至少完整 300 秒，再经读取阶段授权切换 read；每次关闭后重新启用都重新经过完整五分钟 record。**直接 off→read 不受支持，回退 off 保留表和记录。
-6. [Probe 0.3.0](detector-release-0.3.0.md)：固定最终 main，手动发行、全部公开资产字节和来源核验、独立 catalog 更新、指定设备与节点验收分别记账。源码或 Pages 发布不更新已安装的 0.2.0。
+6. [Probe 日期版本](detector-dated-release.md)：固定最终main，按UTC+8日期与远端已用序号分配版本；手动发行、公开资产核验、指定设备与节点验收通过后独立更新catalog。源码或Pages发布不更新已安装客户端。
 
 ## Issue 关闭条件
 

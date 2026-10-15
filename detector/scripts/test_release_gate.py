@@ -14,7 +14,7 @@ import release_gate as gate
 import source_build as source
 
 
-VERSION = "0.2.0"
+VERSION = "0.0.1.261015.1"
 COMMIT = "a" * 40
 
 
@@ -24,7 +24,7 @@ def fixture_file(path, data=b"fixture full source or license text\n"):
 
 def context():
     return {"GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REPOSITORY": "58cdn/MiSub",
-            "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": COMMIT, "MISUB_PUBLISH": "true",
+            "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": COMMIT, "REQUESTED_COMMIT": COMMIT, "MISUB_PUBLISH": "true",
             "GITHUB_WORKFLOW_REF": "58cdn/MiSub/.github/workflows/probe-source-release.yml@refs/heads/main"}
 
 
@@ -32,6 +32,8 @@ class ReleaseGateTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self.temp.name)
+        self.live_main = mock.patch.object(gate.release_preflight, "verify_live_main").start()
+        self.addCleanup(mock.patch.stopall)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -49,6 +51,21 @@ class ReleaseGateTests(unittest.TestCase):
             changed[key] = "forged"
             with self.subTest(key=key), self.assertRaisesRegex(gate.GateError, "manual_main"):
                 gate.release_context(VERSION, COMMIT, changed)
+
+    def test_new_publication_requires_dated_version_but_historical_identity_is_readable(self):
+        gate.identity("0.2.0", COMMIT)
+        with self.assertRaisesRegex(gate.GateError, "dated_release_version_required"):
+            gate.release_context("0.2.0", COMMIT, context())
+
+    def test_main_changes_during_upload_stop_before_publication(self):
+        output = self.release_fixture()
+        names = gate.verify_release_files(output, VERSION, COMMIT)
+        self.live_main.side_effect = [None, ValueError("main_or_execution_commit_changed")]
+        with mock.patch.object(gate, "verify_provenance", return_value=names), mock.patch.object(gate.subprocess, "run", return_value=mock.Mock(stdout=b"[[]]")), mock.patch.object(gate, "run", side_effect=self.publish_responses(output, names)) as mutate:
+            with self.assertRaisesRegex(ValueError, "main_or_execution_commit_changed"):
+                gate.publish(output, VERSION, COMMIT, self.root / "bundle", self.root / "logs")
+        self.assertFalse(any("draft=false" in call.args[0] for call in mutate.call_args_list))
+        self.assertEqual(self.live_main.call_count, 2)
 
     def test_windows_bootstrap_uses_own_module_defaults_without_mutating_parent(self):
         parent = {"PSModulePath": "fixture-core-modules", "psmodulepath": "fixture-other-case", "PATH": "fixture-tools", "SystemRoot": "fixture-system"}
@@ -296,7 +313,7 @@ class ReleaseGateTests(unittest.TestCase):
             api.assert_not_called()
 
     def test_existing_tag_prevents_release_mutation(self):
-        result = mock.Mock(stdout=json.dumps([[{"ref": "refs/tags/probe-v0.2.0"}]]).encode())
+        result = mock.Mock(stdout=json.dumps([[{"ref": "refs/tags/probe-v" + VERSION}]]).encode())
         with mock.patch.object(gate, "verify_provenance", return_value=["binary"]), mock.patch.object(gate.subprocess, "run", return_value=result), mock.patch.object(gate, "run") as mutate:
             with self.assertRaisesRegex(gate.GateError, "already_exists"):
                 gate.publish(self.root, VERSION, COMMIT, self.root / "bundle", self.root / "logs")
@@ -312,7 +329,7 @@ class ReleaseGateTests(unittest.TestCase):
     def remote_fixture(self, output, names, draft=True):
         return {"id": 123, "url": "https://api.github.com/repos/58cdn/MiSub/releases/123",
                 "upload_url": "https://uploads.github.com/repos/58cdn/MiSub/releases/123/assets{?name,label}",
-                "draft": draft, "tag_name": "probe-v0.2.0", "prerelease": False,
+                "draft": draft, "tag_name": "probe-v" + VERSION, "prerelease": False,
                 "assets": [{"id": 1000 + index, "url": "https://api.github.com/repos/58cdn/MiSub/releases/assets/" + str(1000 + index),
                             "name": name, "size": gate.record(output / name)["size"],
                             "digest": "sha256:" + gate.record(output / name)["sha256"], "state": "uploaded"}

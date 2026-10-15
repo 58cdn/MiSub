@@ -240,7 +240,7 @@ def verify_materials(source_root, assets, work, version, commit):
 def code_identity():
     commit = gate.git(gate.ROOT, "rev-parse", "HEAD").decode().strip()
     _, _, tree = gate.wrapper_snapshot(gate.ROOT, commit)
-    for name in ("release_recovery.py", "release_gate.py", "source_build.py", "audit_distribution.py"):
+    for name in ("release_recovery.py", "release_gate.py", "source_build.py", "audit_distribution.py", "probe_version.py", "release_preflight.py"):
         relative = "detector/scripts/" + name
         committed, actual = gate.git(gate.ROOT, "show", commit + ":" + relative), gate.read(gate.ROOT / relative)
         gate.require(actual == committed or actual == committed.replace(b"\n", b"\r\n"),
@@ -261,6 +261,11 @@ def verify_published(before, published, draft_id, version, records):
     fields = ("id", "url", "tag_name", "target_commitish", "name", "body", "prerelease", "created_at", "upload_url")
     gate.require(all(before.get(key) == published.get(key) for key in fields)
                  and original_assets == published_assets, "published_release_identity_changed")
+
+
+def guard_dated_recovery(version, commit):
+    if gate.probe_version.dated_parts(version) is not None:
+        gate.release_preflight.verify_live_main(commit)
 
 
 def recover(source_root, work, version, commit, run_id, draft_id, original_attempt, publish=False):
@@ -296,6 +301,7 @@ def recover(source_root, work, version, commit, run_id, draft_id, original_attem
               "provenance": proofs, "verified": True, "published": False}
     gate.save(work / "verified.json", report)
     if publish:
+        guard_dated_recovery(version, commit)
         gate.save(work / "publication-attempt.json", {"releaseId": draft_id, "sourceCommit": commit,
                   "verifiedReport": gate.record(work / "verified.json"), "publicationAttempted": True, "published": None})
         try:

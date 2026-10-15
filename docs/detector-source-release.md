@@ -127,7 +127,7 @@ schema 1 仅用于恢复既有 `0.2.0`、源码提交
 
 组装从同一源码快照读取已发布目录并保留其历史版本。新的引导脚本必须为
 无 BOM、无 NUL 的 LF UTF-8 文本，每份不超过 64 KiB，以满足短安装命令的
-下载边界。下一版的准备与交接见 [Probe 0.3.0 发行清单](detector-release-0.3.0.md)。
+下载边界。版本规则和发行步骤见 [Probe 日期版本发行清单](detector-dated-release.md)。
 
 真实设备安装、浏览器配对批准、持久凭据配置和真实节点验收由用户明确执行或
 逐项确认。上述 CI 使用临时和回环 fixture，不构成这些实网验收。
@@ -141,7 +141,7 @@ schema 1 仅用于恢复既有 `0.2.0`、源码提交
 ```sh
 python3 -B -m unittest discover -s detector/scripts -p 'test_release_gate.py' -v
 python3 -B detector/scripts/release_gate.py native \
-  --target linux-amd64 --version 0.3.0 --commit EXACT_COMMIT \
+  --target linux-amd64 --version 0.0.1.261015.1 --commit EXACT_COMMIT \
   --work-dir /absolute/new/temporary/build-directory
 ```
 

@@ -153,9 +153,18 @@ namespace MiSub.Bootstrap {
 '@
 }
 
+function Test-ProbeReleaseVersion {
+    param([object] $Version)
+    if ($Version -isnot [string]) { return $false }
+    if ($Version -cmatch '\A(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\z') { return $true }
+    if ($Version -cnotmatch '\A0\.0\.1\.([0-9]{6})\.[1-9][0-9]{0,5}\z') { return $false }
+    $date = [datetime]::MinValue
+    return [datetime]::TryParseExact(('20' + $Matches[1]), 'yyyyMMdd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref] $date)
+}
+
 function Assert-ProbeRelease {
     param([hashtable] $Release)
-    if ($Release.Version -notmatch '^0\.[1-9][0-9]*\.[0-9]+$|^[1-9][0-9]*\.[0-9]+\.[0-9]+$' -or
+    if (-not (Test-ProbeReleaseVersion $Release.Version) -or
         $Release.SourceCommit -cnotmatch '^[a-f0-9]{40}$' -or
         $Release.Sha256 -cnotmatch '^[a-f0-9]{64}$' -or
         ($Release.Size -isnot [long] -and $Release.Size -isnot [int]) -or

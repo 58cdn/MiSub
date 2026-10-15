@@ -61,12 +61,28 @@ bootstrap_platform() {
     target="$platform-$arch"
 }
 
+bootstrap_version_valid() {
+    local year month day maximum
+    [[ "$1" =~ ^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$ ]] && return 0
+    [[ "$1" =~ ^0\.0\.1\.([0-9]{2})([0-9]{2})([0-9]{2})\.[1-9][0-9]{0,5}$ ]] || return 1
+    year=$((2000 + 10#${BASH_REMATCH[1]}))
+    month=$((10#${BASH_REMATCH[2]}))
+    day=$((10#${BASH_REMATCH[3]}))
+    case "$month" in
+        1|3|5|7|8|10|12) maximum=31 ;;
+        4|6|9|11) maximum=30 ;;
+        2) maximum=28; [ "$((year % 4))" -ne 0 ] || maximum=29 ;;
+        *) return 1 ;;
+    esac
+    [ "$day" -ge 1 ] && [ "$day" -le "$maximum" ]
+}
+
 bootstrap_release() {
     local entry_target entry_size entry_hash extra seen
     [ -n "$MISUB_RELEASE_VERSION" ] && [ -n "$MISUB_RELEASE_COMMIT" ] &&
         [ -n "$MISUB_RELEASE_ASSETS" ] ||
         bootstrap_error 'release_unavailable: no audited pairing-capable release is available.'
-    [[ "$MISUB_RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
+    bootstrap_version_valid "$MISUB_RELEASE_VERSION" ||
         bootstrap_error release_metadata_invalid
     [[ "$MISUB_RELEASE_COMMIT" =~ ^[a-f0-9]{40}$ ]] || bootstrap_error release_metadata_invalid
     seen='|'

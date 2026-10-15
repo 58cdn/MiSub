@@ -18,7 +18,7 @@ type executionMetadata struct {
 }
 
 func executionBuildVersionValid(value string) bool {
-	return len(value) <= 64 && bootstrapVersionPattern.MatchString(value)
+	return probeBuildVersionValid(value)
 }
 
 func newExecutionMetadata(buildVersion, revision, platform, kernelVersion string) *executionMetadata {
@@ -34,7 +34,7 @@ func newExecutionMetadata(buildVersion, revision, platform, kernelVersion string
 		SchemaVersion: executionMetadataSchemaVersion, WrapperVersion: buildVersion,
 		WrapperRevision: revision, Platform: platform, RuleSetVersion: executionRuleSetVersion,
 	}
-	if len(kernelVersion) <= 64 && executionBuildVersionValid(strings.TrimPrefix(kernelVersion, "v")) {
+	if len(kernelVersion) <= 64 && bootstrapVersionPattern.MatchString(strings.TrimPrefix(kernelVersion, "v")) {
 		metadata.KernelLockVersion = kernelVersion
 	}
 	return metadata

@@ -8,9 +8,12 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: New immutable Probe version (existing tags are rejected)
+        description: 'Probe version: 0.0.1.yymmdd.sequence (UTC+8; next unused daily sequence)'
         type: string
-        default: '0.3.0'
+        required: true
+      source_commit:
+        description: Exact reviewed 40-character main commit to publish
+        type: string
         required: true
       publish:
         description: Publish a new release only after native, material and provenance gates pass
@@ -18,6 +21,7 @@ on:
         default: false
 permissions:
   contents: read
+  actions: read
 concurrency:
   # A new CI push must never cancel an explicitly requested release mid-upload.
   group: probe-source-${{ github.event_name }}-${{ github.ref }}
@@ -37,6 +41,13 @@ jobs:
           persist-credentials: false
       - name: Verify offline build, archive and release-gate fixtures
         run: python3 -B -m unittest discover -s detector/scripts -p 'test_*.py' -v
+      - name: Verify exact main and next UTC+8 version before building a release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+          REQUESTED_COMMIT: ${{ inputs.source_commit }}
+        run: python3 -B detector/scripts/release_preflight.py --version "$REQUESTED_VERSION" --expected-commit "$REQUESTED_COMMIT"
   native:
     needs: fixtures
     strategy:
@@ -56,7 +67,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
-      RELEASE_VERSION: ${{ inputs.version || '0.3.0' }}
+      RELEASE_VERSION: ${{ inputs.version || '0.0.1.260101.1' }}
       RELEASE_COMMIT: ${{ github.sha }}
       RELEASE_TARGET: ${{ matrix.target }}
       MISUB_PUBLISH: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish && 'true' || 'false' }}
@@ -109,12 +120,14 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
+      actions: read
       id-token: write
       attestations: write
     env:
       RELEASE_VERSION: ${{ inputs.version }}
       RELEASE_COMMIT: ${{ github.sha }}
       MISUB_PUBLISH: 'true'
+      REQUESTED_COMMIT: ${{ inputs.source_commit }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -142,6 +155,7 @@ jobs:
         env:
           ATTESTATION_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
         run: |
+          python3 -B detector/scripts/release_preflight.py --version "$RELEASE_VERSION" --expected-commit "$REQUESTED_COMMIT"
           python3 -B detector/scripts/release_gate.py publish \
             --version "$RELEASE_VERSION" --commit "$RELEASE_COMMIT" \
             --output-dir "$RUNNER_TEMP/release" --bundle "$ATTESTATION_BUNDLE" \

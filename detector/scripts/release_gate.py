@@ -24,6 +24,8 @@ import zipfile
 
 import audit_distribution as audit
 import source_build as source
+import probe_version
+import release_preflight
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 REPOSITORY = "58cdn/MiSub"
@@ -45,7 +47,7 @@ def require(condition, code):
 
 
 def identity(version, commit):
-    require(isinstance(version, str) and re.fullmatch(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})", version), "invalid_release_version")
+    require(probe_version.valid(version), "invalid_release_version")
     require(version != "0.1.0", "legacy_release_is_immutable")
     require(isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit) and commit != "0" * 40, "invalid_source_commit")
 
@@ -454,9 +456,10 @@ def render_bootstrap(unix, windows, assets, version, commit):
 
 def release_context(version, commit, environment=None):
     identity(version, commit)
+    require(probe_version.dated_parts(version) is not None, "dated_release_version_required")
     env = os.environ if environment is None else environment
     expected = {"GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REPOSITORY": REPOSITORY,
-                "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": commit,
+                "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": commit, "REQUESTED_COMMIT": commit,
                 "GITHUB_WORKFLOW_REF": REPOSITORY + "/" + WORKFLOW + "@refs/heads/main", "MISUB_PUBLISH": "true"}
     require(all(env.get(k) == v for k, v in expected.items()), "manual_main_release_context_required")
 
@@ -482,13 +485,13 @@ def catalog_history(payload, version):
     current = catalog.get("release")
     require(current is None or isinstance(current, dict), "invalid_source_catalog")
     require(not catalog["distributionReady"] or current is not None, "invalid_source_catalog")
-    if catalog["distributionReady"]:
+    if current is not None:
         previous.append({key: current.get(key) for key in ("version", "tag", "capabilities")})
     seen = set()
     for entry in previous:
         require(isinstance(entry, dict) and set(entry) == {"version", "tag", "capabilities"}, "invalid_source_catalog")
         old = entry["version"]
-        require(isinstance(old, str) and re.fullmatch(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})", old)
+        require(probe_version.valid(old)
                 and old != version and old not in seen and entry["tag"] == "probe-v" + old, "invalid_source_catalog")
         caps = entry["capabilities"]
         require(isinstance(caps, list) and all(isinstance(cap, str) and cap in CAPABILITIES for cap in caps)
@@ -633,6 +636,7 @@ def verify_remote_release(release, release_id, version, records, draft=True):
 
 def publish(output, version, commit, bundle, logs):
     names = verify_provenance(output, version, commit, bundle, logs)
+    release_preflight.verify_live_main(commit)
     # Probe both the release and ref collections. Any API failure is an error;
     # authentication/rate-limit/network failures cannot mean "tag absent".
     for endpoint in ("releases?per_page=100", "git/matching-refs/tags/probe-v" + version):
@@ -666,6 +670,7 @@ def publish(output, version, commit, bundle, logs):
             output, dict(os.environ), logs / (name + ".upload.json"), timeout=300)
     response = run(["gh", "api", "--hostname", "github.com", "https://api.github.com/" + endpoint], output, dict(os.environ), logs / "draft-assets.json", timeout=120)
     verify_remote_release(json.loads(response, object_pairs_hook=audit.unique_object), release_id, version, records)
+    release_preflight.verify_live_main(commit)
     response = run(["gh", "api", "--hostname", "github.com", "--method", "PATCH", "https://api.github.com/" + endpoint, "-F", "draft=false", "-f", "make_latest=false"],
                    output, dict(os.environ), logs / "publish.json", timeout=120)
     verify_remote_release(json.loads(response, object_pairs_hook=audit.unique_object), release_id, version, records, draft=False)
