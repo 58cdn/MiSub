@@ -56,6 +56,23 @@ function gate(expression, context) {
 }
 
 describe('production probe workflow boundaries', () => {
+    it('checks the actual acceptance candidate in an isolated job without production inputs', () => {
+        const w = workflow('cloudflare-pages.yml');
+        expect(w.permissions).toEqual({ contents: 'read' });
+        const job = w.jobs['acceptance-candidate'];
+        expect(job.env).toBeUndefined();
+        expect(job.steps.filter((s) => s.run).map((s) => s.run)).toEqual([
+            'node scripts/probe-acceptance-candidate.mjs',
+        ]);
+        expect(JSON.stringify(job)).not.toMatch(
+            /secrets\.|smoke-node-probes|provision|deploy-cloudflare/
+        );
+        const manual = w.jobs['build-and-deploy'].steps.find(
+            (s) => s.name === 'Build real detector for production acceptance'
+        );
+        expect(manual.run).toBe('node scripts/probe-acceptance-candidate.mjs');
+        expect(manual['working-directory']).toBeUndefined();
+    });
     it('keeps normal Pages publication while resource/identity actions require independent manual opt-ins', () => {
         const w = workflow('cloudflare-pages.yml');
         for (const input of Object.values(w.on.workflow_dispatch.inputs)) {

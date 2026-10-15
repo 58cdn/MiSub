@@ -5,6 +5,7 @@ import { mkdtemp, writeFile, rm, appendFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { readAcceptanceIdentity, verifyCandidate, verifyResultIdentity } from './probe-acceptance-candidate.mjs';
 const execute = promisify(execFile);
 const TYPES = ['format', 'tcp', 'proxy', 'speed', 'unlock'];
 const fail = code => { throw new Error(code); };
@@ -25,12 +26,13 @@ async function jsonRequest(url, options = {}) {
     let body; try { body = JSON.parse(text); } catch { fail('non_json_response'); }
     return { response, body };
 }
-export function checkAcceptance(data, detectorIds) {
+export function checkAcceptance(data, detectorIds, identity) {
     if (data?.nodes?.length !== 2 || data.nextOffset !== null) fail('incomplete_probe_matrix');
     const ids = new Set();
     for (const node of data.nodes) {
         if (!detectorIds.includes(node.agent_id) || ids.has(node.agent_id) || node.state !== 'done') fail('detector_matrix_mismatch');
         ids.add(node.agent_id);
+        verifyResultIdentity(node.executionMetadata, identity);
         for (const type of TYPES) {
             const check = node.checks?.[type];
             if (type === 'format') {
@@ -46,6 +48,9 @@ export async function smoke(env = process.env) {
     for (const key of ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN', 'ADMIN_PASSWORD', 'GITHUB_SHA']) if (!env[key]) fail('missing_smoke_environment');
     const projectName = env.CLOUDFLARE_PAGES_PROJECT_NAME || 'misub';
     if (!/^[a-z0-9][a-z0-9-]*$/.test(projectName) || !/^[a-f0-9]{32}$/.test(env.CLOUDFLARE_ACCOUNT_ID) || !/^[a-f0-9]{40}$/.test(env.GITHUB_SHA)) fail('invalid_smoke_environment');
+    const identity = readAcceptanceIdentity(env.GITHUB_SHA);
+    const binary = resolve(env.PROBE_BINARY || 'detector/misub-probe');
+    verifyCandidate(binary, identity);
     let location;
     for (let i = 0; i < 10; i++) {
         const { response, body } = await jsonRequest(`https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/pages/projects/${projectName}`, { headers: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` } });
@@ -90,7 +95,6 @@ export async function smoke(env = process.env) {
         const job = await admin('jobs', 'POST', payload, key); jobId = job.id;
         const replay = await admin('jobs', 'POST', payload, key);
         if (replay.id !== job.id || replay.replay !== true) fail('production_idempotency_failed');
-        const binary = resolve(env.PROBE_BINARY || 'detector/misub-probe');
         await Promise.all(agents.map(async agent => {
             let output;
             try {
@@ -98,7 +102,7 @@ export async function smoke(env = process.env) {
             } catch { fail('detector_process_failed'); }
             if (!output.stdout.includes('result_accepted')) fail('detector_did_not_complete');
         }));
-        checkAcceptance(await admin(`jobs/${job.id}`), agents.map(a => a.id));
+        checkAcceptance(await admin(`jobs/${job.id}`), agents.map(a => a.id), identity);
     } finally {
         if (jobId) { try { await admin(`jobs/${jobId}/cancel`, 'POST', {}); } catch { cleanupFailed = true; } }
         for (const agent of agents) {
@@ -110,7 +114,7 @@ export async function smoke(env = process.env) {
         await rm(dir, { recursive: true, force: true });
         if (cleanupFailed) fail('temporary_detector_cleanup_failed');
     }
-    const report = `Probe production acceptance passed\nProduction: ${origin}\nDeployment: ${deploymentUrl}\nCommit: ${env.GITHUB_SHA}\nTwo temporary identities: real standalone binary claim/result, five-type result shape, idempotency, reserved-address rejection, revocation.\nNo user node was fetched or tested; playback/region access still requires user-owned detector acceptance.\n`;
+    const report = `Probe reserved-target acceptance passed\nProduction: ${origin}\nDeployment: ${deploymentUrl}\nCommit: ${env.GITHUB_SHA}\nProbe product: ${identity.productVersion}\nProbe build: ${identity.displayVersion}\nProbe source: ${identity.sourceCommit}\nTwo temporary identities: real standalone binary claim/result, matching execution identity, five-type result shape, idempotency, reserved-address rejection, revocation.\nBrowser pairing and user-node acceptance remain separate; no user node was fetched or tested.\n`;
     console.log(report);
     if (env.GITHUB_STEP_SUMMARY) await appendFile(env.GITHUB_STEP_SUMMARY, `\n## Node probe acceptance\n\n${report}\n`);
 }
