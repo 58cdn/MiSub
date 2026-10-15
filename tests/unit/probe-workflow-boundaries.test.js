@@ -103,8 +103,11 @@ describe('production probe workflow boundaries', () => {
     it('keeps binary/source distribution paused even on explicit manual publish until the material audit is complete', () => {
         const w = workflow('probe-detector.yml');
         expect(w.on.workflow_dispatch.inputs.publish.default).toBe(false);
+        expect(w.jobs.publish).toBeUndefined();
+        for (const job of Object.values(w.jobs)) {
+            expect(job.permissions?.contents).not.toBe('write');
+        }
         const gates = [
-            w.jobs.publish.if,
             ...['native', 'source'].map(
                 (job) =>
                     w.jobs[job].steps.find((s) => s.uses?.startsWith('actions/upload-artifact@')).if
