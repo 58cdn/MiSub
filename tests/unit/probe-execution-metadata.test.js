@@ -21,6 +21,7 @@ const languages = [
         source: '来源：检测器自报',
         sourceBuild: '源码构建，修订未提供',
         kernelUnknown: '未知（未提供）',
+        buildUnknown: '未知（历史记录未提供）',
         note: '仅对应当次结果，不代表当前能力、解锁状态或实际内核执行证明。',
         pending: '尚未记录',
         stopped: '未记录',
@@ -33,6 +34,9 @@ const languages = [
         invalidNote: '该执行声明无法识别，当次版本未知。',
         labels: [
             '检测器版本',
+            '构建标识',
+            '构建通道',
+            '源码状态',
             '源码修订',
             '构建平台',
             '内核锁版本声明',
@@ -47,6 +51,7 @@ const languages = [
         source: 'Source: detector reported',
         sourceBuild: 'Source build; revision not provided',
         kernelUnknown: 'Unknown (not provided)',
+        buildUnknown: 'Unknown (not recorded)',
         note: 'Applies only to this result. It does not establish current capabilities, unlock status or actual kernel execution.',
         pending: 'Not recorded yet',
         stopped: 'Not recorded',
@@ -61,6 +66,9 @@ const languages = [
             'This execution declaration cannot be interpreted. Its execution version is unknown.',
         labels: [
             'Detector version',
+            'Build identity',
+            'Build channel',
+            'Source state',
             'Source revision',
             'Build platform',
             'Kernel lock declaration',
@@ -111,6 +119,9 @@ describe.each(languages)('execution metadata component: $locale', (language) => 
         );
         expect(fields).toEqual({
             wrapperVersion: snapshot.wrapperVersion,
+            displayVersion: snapshot.wrapperVersion,
+            buildChannel: language.buildUnknown,
+            sourceState: language.buildUnknown,
             wrapperRevision: snapshot.wrapperRevision,
             platform: snapshot.platform,
             kernelLockVersion: snapshot.kernelLockVersion,
@@ -190,7 +201,7 @@ describe.each(languages)('execution metadata component: $locale', (language) => 
         });
         const { wrapper } = render(language, { metadata });
         expect(wrapper.attributes('data-status')).toBe('recorded');
-        expect(wrapper.findAll('dd')).toHaveLength(6);
+        expect(wrapper.findAll('dd')).toHaveLength(9);
         expect(wrapper.html()).not.toContain('PRIVATE_METADATA_FIXTURE');
         expect(wrapper.html()).not.toContain('/private/fixture');
         expect(wrapper.find('img').exists()).toBe(false);

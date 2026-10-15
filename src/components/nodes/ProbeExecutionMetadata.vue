@@ -2,6 +2,7 @@
     import { computed } from 'vue';
     import { useI18n } from '@/i18n/index.js';
     import { executionSnapshotView } from '@/utils/probe-execution-view.js';
+    import { probeVersionIdentity } from '@/shared/probe-version.js';
 
     const props = defineProps({
         metadata: { default: null },
@@ -10,6 +11,18 @@
     const { locale } = useI18n();
     const L = (zh, en) => (locale.value.startsWith('zh') ? zh : en);
     const view = computed(() => executionSnapshotView(props.metadata, props.state));
+    const identity = computed(() => {
+        const data = view.value.metadata;
+        return data
+            ? probeVersionIdentity(data.wrapperVersion, data.wrapperRevision, {
+                  development:
+                      data.buildChannel === undefined
+                          ? undefined
+                          : data.buildChannel === 'development',
+                  sourceState: data.sourceState,
+              })
+            : null;
+    });
     const status = computed(
         () =>
             ({
@@ -46,6 +59,17 @@
         if (!data) return [];
         return [
             ['wrapperVersion', L('检测器版本', 'Detector version'), data.wrapperVersion],
+            ['displayVersion', L('构建标识', 'Build identity'), identity.value.displayVersion],
+            [
+                'buildChannel',
+                L('构建通道', 'Build channel'),
+                data.buildChannel || L('未知（历史记录未提供）', 'Unknown (not recorded)'),
+            ],
+            [
+                'sourceState',
+                L('源码状态', 'Source state'),
+                data.sourceState || L('未知（历史记录未提供）', 'Unknown (not recorded)'),
+            ],
             [
                 'wrapperRevision',
                 L('源码修订', 'Source revision'),
@@ -103,6 +127,22 @@
                         <dd :data-field="key">{{ value }}</dd>
                     </div>
                 </dl>
+                <p v-if="identity.migrationRequired" data-testid="probe-legacy-version">
+                    {{
+                        L(
+                            '历史版本线；迁移到 alpha 测试线需单独验收。历史身份保持原值。',
+                            'Historical version line; migration to the alpha test line requires separate acceptance. The recorded identity is preserved.'
+                        )
+                    }}
+                </p>
+                <p v-else-if="!identity.buildIdentityComplete" data-testid="probe-build-unknown">
+                    {{
+                        L(
+                            '构建来源状态不完整或包含未提交修改，不能确认干净构建身份。',
+                            'Build provenance is incomplete or modified; a clean build identity cannot be confirmed.'
+                        )
+                    }}
+                </p>
             </template>
             <p v-else class="execution-note">{{ explanation }}</p>
         </div>

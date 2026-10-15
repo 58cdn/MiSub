@@ -1,10 +1,12 @@
 <script setup>
     import { useI18n } from '../../i18n/index.js';
 
-    const { t } = useI18n();
+    const { t, locale } = useI18n();
+    const L = (zh, en) => (locale.value.startsWith('zh') ? zh : en);
     import { computed } from 'vue';
     import { useVersionStore } from '../../stores/version';
     import Modal from '../forms/Modal.vue';
+    import { productFromTag, versionTransition } from '../../shared/product-version.js';
 
     const versionStore = useVersionStore();
 
@@ -22,13 +24,13 @@
 
     const emit = defineEmits(['update:show', 'confirm', 'suppress']);
 
-    const isLatest = computed(() => {
-        if (!props.release?.tag_name) return true;
-        return (
-            props.currentVersion === props.release.tag_name ||
-            props.currentVersion === props.release.tag_name.replace(/^v/, '')
-        );
-    });
+    const transition = computed(() =>
+        versionTransition(props.currentVersion, productFromTag(props.release?.tag_name))
+    );
+    const isLatest = computed(() => transition.value === 'current');
+    const hasCandidate = computed(() =>
+        ['current', 'update', 'ahead', 'migration_required'].includes(transition.value)
+    );
 </script>
 
 <template>
@@ -47,20 +49,20 @@
                     v-if="isLatest"
                     class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-300"
                 >
-                    {{ t('changelog.latestVersion') }}
+                    {{ L('当前测试发行', 'Current test release') }}
                 </span>
                 <span
-                    v-else
+                    v-else-if="hasCandidate"
                     class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300 animate-pulse"
                 >
-                    {{ t('changelog.newVersionAvailable') }}
+                    {{ L('测试发行', 'Test release') }}
                 </span>
             </div>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
                 <template v-if="isLatest">{{
                     t('changelog.upToDate', { version: currentVersion })
                 }}</template>
-                <template v-else>
+                <template v-else-if="hasCandidate">
                     {{
                         t('changelog.newVersionDetected', {
                             latest: release.tag_name,
@@ -68,11 +70,44 @@
                         })
                     }}
                 </template>
+                <template v-else>{{
+                    L(
+                        '尚无可确认的测试发行，版本检查状态不代表已是最新。',
+                        'No confirmed test release is available. This does not establish that the build is current.'
+                    )
+                }}</template>
             </p>
         </template>
 
         <template #body>
             <div class="space-y-4">
+                <p class="text-sm" data-testid="app-alpha-channel">
+                    {{
+                        L(
+                            'Alpha 测试通道；发行记录不代表真实安装与全链路验收已通过。',
+                            'Alpha test channel; a release does not establish installation or end-to-end acceptance.'
+                        )
+                    }}
+                </p>
+                <p v-if="transition === 'migration_required'" data-testid="app-legacy-migration">
+                    {{
+                        L(
+                            '当前属于历史版本线，迁移到 0.0.1-alpha.N 需要单独验收，不能按数字高低判断已是最新。',
+                            'This is a historical version line. Migration to 0.0.1-alpha.N requires separate acceptance; numeric precedence does not make the old line current.'
+                        )
+                    }}
+                </p>
+                <dl class="text-xs break-all" data-testid="app-build-identity">
+                    <dt>{{ L('产品版本', 'Product version') }}</dt>
+                    <dd>{{ versionStore.build.productVersion }}</dd>
+                    <dt>{{ L('构建标识', 'Build identity') }}</dt>
+                    <dd>{{ versionStore.build.displayVersion }}</dd>
+                    <dt>{{ L('完整源码 SHA', 'Full source SHA') }}</dt>
+                    <dd>{{ versionStore.build.sourceCommit || L('未提供', 'Not provided') }}</dd>
+                    <dd v-if="versionStore.build.dirty">
+                        {{ L('包含未提交工作区变更', 'Includes uncommitted working-tree changes') }}
+                    </dd>
+                </dl>
                 <div
                     class="rounded-lg border border-indigo-200/70 bg-indigo-50/70 px-4 py-3 text-sm text-indigo-700 dark:border-indigo-500/20 dark:bg-indigo-500/10 dark:text-indigo-300"
                 >
@@ -80,10 +115,10 @@
                         {{
                             isLatest
                                 ? t('changelog.highlightsTitle', { version: currentVersion })
-                                : release.name || release.tag_name || t('changelog.releaseNotes')
+                                : release?.name || release?.tag_name || t('changelog.releaseNotes')
                         }}
                     </div>
-                    <div v-if="!isLatest && release.published_at" class="mt-1 text-xs opacity-80">
+                    <div v-if="!isLatest && release?.published_at" class="mt-1 text-xs opacity-80">
                         {{
                             t('changelog.publishedAt', {
                                 date: new Date(release.published_at).toLocaleString(),
@@ -95,17 +130,17 @@
                 <div
                     class="max-h-[420px] overflow-y-auto rounded-lg border border-gray-200 bg-gray-50/70 p-4 text-sm leading-6 text-gray-700 dark:border-white/10 dark:bg-white/5 dark:text-gray-300 whitespace-pre-wrap"
                 >
-                    <template v-if="isLatest && versionStore.localChangelog">
+                    <template v-if="!release?.body && versionStore.localChangelog">
                         {{ versionStore.localChangelog }}
                     </template>
-                    <template v-else-if="release.body">
+                    <template v-else-if="release?.body">
                         {{ release.body }}
                     </template>
                     <template v-else>{{ t('changelog.noDetails') }}</template>
                 </div>
 
                 <a
-                    v-if="release.html_url"
+                    v-if="release?.html_url"
                     :href="release.html_url"
                     target="_blank"
                     rel="noopener noreferrer"

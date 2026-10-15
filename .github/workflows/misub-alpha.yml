@@ -1,0 +1,34 @@
+name: MiSub alpha identity
+
+on:
+    pull_request:
+        branches: [main]
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: misub-alpha-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    verify:
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '22'
+                  cache: npm
+            - run: npm ci
+            - name: Verify product, build, channel and migration contracts
+              run: npx vitest run tests/unit/product-version.test.js tests/unit/app-version-store.test.js tests/unit/app-version-ui.test.js tests/unit/app-release-proxy.test.js tests/unit/probe-alpha-compat.test.js tests/unit/probe-release.test.js tests/unit/probe-execution-view.test.js tests/unit/probe-execution-metadata.test.js
+            - name: Build the checked-out source identity
+              run: npm run build
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: misub-build-identity-${{ github.sha }}
+                  path: dist/version.json
+                  if-no-files-found: error

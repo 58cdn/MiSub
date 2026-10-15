@@ -263,7 +263,7 @@ try {
         await page.getByTestId('pairing-window-id').waitFor();
         assert.ok((await page.getByTestId('pairing-window-id').textContent()).includes(windowId));
         const windowsCommand = await page.getByTestId('pairing-command').textContent();
-        assert.ok(windowsCommand.includes('/probe-v9.9.9/install.ps1'));
+        assert.ok(windowsCommand.includes('/probe-v0.0.1-alpha.999/install.ps1'));
         assert.ok(windowsCommand.includes("& $installer -Server 'https://misub.fixture.invalid'"));
         assert.ok(!/Set-ExecutionPolicy|\s-ExecutionPolicy\s|EncodedCommand/.test(windowsCommand));
         assert.ok(windowsCommand.length < 3200);
@@ -277,7 +277,7 @@ try {
         assert.ok((await page.getByTestId('pairing-window-id').textContent()).includes(windowId));
         assert.ok(
             (await page.getByTestId('pairing-command').textContent()).includes(
-                '/probe-v9.9.9/install.sh'
+                '/probe-v0.0.1-alpha.999/install.sh'
             )
         );
         await terminal.selectOption('windows');

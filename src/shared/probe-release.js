@@ -1,3 +1,6 @@
+import { isAlphaProduct } from './product-version.js';
+import { isProbeVersion } from './probe-version.js';
+
 export const PROBE_RELEASE_TARGETS = Object.freeze([
     'linux-amd64',
     'linux-arm64',
@@ -19,9 +22,7 @@ const keysAre = (value, expected) =>
     plain(value) &&
     Object.keys(value).length === expected.length &&
     expected.every((key) => Object.hasOwn(value, key));
-const versionIsValid = (value) =>
-    typeof value === 'string' &&
-    /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$/.test(value);
+const versionIsValid = isProbeVersion;
 const exactSet = (value, expected) =>
     Array.isArray(value) &&
     value.length === expected.length &&
@@ -75,9 +76,14 @@ export function validateProbeReleaseCatalog(value) {
                 'capabilities',
                 'assets',
                 'bootstrap',
+                ...(isAlphaProduct(source.version) ? ['channel', 'prerelease'] : []),
             ])
         );
         requireRelease(versionIsValid(source.version) && source.version !== '0.1.0');
+        if (isAlphaProduct(source.version))
+            requireRelease(source.channel === 'testing' && source.prerelease === true);
+        // Historical catalogs remain readable; distribution requires a tested alpha product.
+        requireRelease(!value.distributionReady || isAlphaProduct(source.version));
         requireRelease(
             source.tag === `probe-v${source.version}` && !seenLegacy.has(source.version)
         );
@@ -121,6 +127,7 @@ export function validateProbeReleaseCatalog(value) {
             ])
         );
         release = {
+            ...(isAlphaProduct(source.version) ? { channel: 'testing', prerelease: true } : {}),
             version: source.version,
             tag: source.tag,
             sourceCommit: source.sourceCommit,

@@ -158,7 +158,9 @@ describe('detector pairing wizard', () => {
         expect(posts()[0].url).toBe('/api/probes/v1/pairings/windows');
         expect(JSON.parse(posts()[0].options.body)).toEqual({});
         expect(get(wrapper, 'pairing-window-id').text()).toContain(windowId);
-        expect(get(wrapper, 'pairing-command').text()).toContain('/probe-v9.9.9/install.sh');
+        expect(get(wrapper, 'pairing-command').text()).toContain(
+            '/probe-v0.0.1-alpha.999/install.sh'
+        );
         expect(wrapper.text()).not.toContain('misub-probe --pair');
         expect(get(wrapper, 'pairing-status').text()).toContain('Waiting for a client code');
         expect(wrapper.text()).toContain(

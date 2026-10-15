@@ -164,8 +164,9 @@ export const messages = {
             defaultPasswordWarning:
                 '安全警告：检测到您正在使用默认密码 "admin"。为了您的系统安全，请立即前往设置修改密码。',
             discardedChanges: '已放弃所有未保存的更改',
-            updateAvailable: '检测到上游新版本 {version}',
-            currentVersion: '当前版本为 {version}。建议在确认变更内容后安排升级。',
+            updateAvailable: '发现 Alpha 测试发行 {version}',
+            currentVersion:
+                '当前产品版本为 {version}。此为测试通道，请先查看发行记录与验收状态；历史版本需显式迁移。',
             noToken: '未配置订阅组 Token，无法生成链接',
             linkInvalid: '链接无效，请先完成配置',
             copied: '已复制到剪贴板',
@@ -2040,8 +2041,9 @@ export const messages = {
             defaultPasswordWarning:
                 'Security warning: you are using the default password "admin". For your system safety, change it in Settings immediately.',
             discardedChanges: 'Discarded all unsaved changes',
-            updateAvailable: 'New version: {version}',
-            currentVersion: 'Current: {version}. Check notes before upgrade.',
+            updateAvailable: 'Alpha test release: {version}',
+            currentVersion:
+                'Current product: {version}. Check release notes and acceptance status; historical versions require explicit migration.',
             noToken: 'No profile token; link unavailable',
             linkInvalid: 'Invalid link; finish setup',
             copied: 'Copied to clipboard',
