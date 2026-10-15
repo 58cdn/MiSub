@@ -61,14 +61,18 @@ bootstrap_platform() {
     target="$platform-$arch"
 }
 
+bootstrap_version_valid() {
+    [ "${#1}" -le 64 ] && [[ "$1" =~ ^0\.0\.1-alpha\.[1-9][0-9]*$ ]]
+}
+
 bootstrap_release() {
     local entry_target entry_size entry_hash extra seen
     [ -n "$MISUB_RELEASE_VERSION" ] && [ -n "$MISUB_RELEASE_COMMIT" ] &&
         [ -n "$MISUB_RELEASE_ASSETS" ] ||
         bootstrap_error 'release_unavailable: no audited pairing-capable release is available.'
-    [[ "$MISUB_RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
+    bootstrap_version_valid "$MISUB_RELEASE_VERSION" ||
         bootstrap_error release_metadata_invalid
-    [[ "$MISUB_RELEASE_COMMIT" =~ ^[a-f0-9]{40}$ ]] || bootstrap_error release_metadata_invalid
+    [[ "$MISUB_RELEASE_COMMIT" =~ ^[a-f0-9]{40}$ ]] && [ "$MISUB_RELEASE_COMMIT" != 0000000000000000000000000000000000000000 ] || bootstrap_error release_metadata_invalid
     seen='|'
     expected_size=''
     expected_hash=''

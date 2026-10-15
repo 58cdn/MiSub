@@ -17,6 +17,16 @@ function Reject([scriptblock] $Action, [string] $Code, [string] $Name) {
     throw ('FAIL accepted: ' + $Name)
 }
 
+foreach ($validVersion in @('0.0.1-alpha.1', '0.0.1-alpha.9', '0.0.1-alpha.10', ('0.0.1-alpha.' + ('9' * 52)))) {
+    Check (Test-ProbeReleaseVersion $validVersion) ('valid release version: ' + $validVersion)
+}
+foreach ($invalidVersion in @('0.1.0', '0.2.0', '0.3.0', '0.0.1', '0.0.1-alpha.0', '0.0.1-alpha.01', '0.0.1-alpha.-1', '0.0.1-beta.1', '0.0.1-rc.1', '0.0.1-alpha.1.sha.abcdef012345', '0.0.1-alpha.1+build', '0.0.1.261015.1', 'v0.0.1-alpha.1', ('0.0.1-alpha.' + ('9' * 54)), "0.0.1-alpha.1`n")) {
+    Check (-not (Test-ProbeReleaseVersion $invalidVersion)) 'invalid release version refused before download'
+}
+
+Reject { Assert-ProbeRelease @{ Version = '0.0.1-alpha.1'; SourceCommit = ('0' * 40); Sha256 = ('a' * 64); Size = 2048 } } 'release_unavailable' 'zero revision rejected before download'
+Reject { Assert-ProbeRelease @{ Version = '0.0.1-alpha.1'; SourceCommit = (('a' * 40) + "`n"); Sha256 = ('a' * 64); Size = 2048 } } 'release_unavailable' 'revision newline rejected before download'
+
 Initialize-ProbeNative
 $normalMessage = [MiSub.Bootstrap.Native]::RegularUserError($false, $false, $false)
 Check ($null -eq $normalMessage) 'ordinary token accepted'
@@ -112,7 +122,7 @@ public sealed class ProbeFixtureHandler : HttpMessageHandler {
 '@
     function New-ProbeDownloadClient { return New-Object Net.Http.HttpClient((New-Object ProbeFixtureHandler)) }
     function Start-Sleep { param([int] $Seconds) }
-    $script:ProbeRelease = @{ Version = '0.2.0'; SourceCommit = ('a' * 40); Sha256 = ''; Size = 2048 }
+    $script:ProbeRelease = @{ Version = '0.0.1-alpha.1'; SourceCommit = ('a' * 40); Sha256 = ''; Size = 2048 }
     $bytes = New-Object byte[] 2048
     for ($i = 0; $i -lt $bytes.Length; $i++) { $bytes[$i] = 65 }
     $sha = [Security.Cryptography.SHA256]::Create()
@@ -123,7 +133,7 @@ public sealed class ProbeFixtureHandler : HttpMessageHandler {
         $download = Join-Path $downloadWorkspace.Path 'misub-probe-windows-amd64.exe'
         Receive-ProbeAsset $script:ProbeRelease $download
         Check (([IO.FileInfo] $download).Length -eq 2048 -and [ProbeFixtureHandler]::Calls -eq 1) 'mock download validates exact byte count and SHA256'
-        Check ([ProbeFixtureHandler]::LastUri -eq 'https://github.com/58cdn/MiSub/releases/download/probe-v0.2.0/misub-probe-windows-amd64.exe') 'download URL pins repository tag and raw asset'
+        Check ([ProbeFixtureHandler]::LastUri -eq 'https://github.com/58cdn/MiSub/releases/download/probe-v0.0.1-alpha.1/misub-probe-windows-amd64.exe') 'download URL pins repository tag and raw asset'
         [IO.File]::Delete($download)
         foreach ($scenario in @(@('missing', 'asset_unavailable'), @('rate', 'client_error'), @('redirect', 'redirect_refused'), @('oversize', 'size_mismatch'), @('short', 'checksum_mismatch'))) {
             [ProbeFixtureHandler]::Mode = $scenario[0]; [ProbeFixtureHandler]::Calls = 0
@@ -174,7 +184,7 @@ public sealed class ProbeFixtureHandler : HttpMessageHandler {
         switch ($Arguments[0]) {
             '--capabilities' {
                 if ($script:Scenario -eq 'old') { return 'misub-probe 0.1.0' }
-                return ('misub-probe-bootstrap-v1 0.2.0 ' + ('a' * 40) + ' windows-amd64')
+                return ('misub-probe-bootstrap-v1 0.0.1-alpha.1 ' + ('a' * 40) + ' windows-amd64')
             }
             '--setup' {
                 if ($script:Scenario -eq 'installed') { throw 'setup_existing_installation_preserved_use_resume' }

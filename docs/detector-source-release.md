@@ -3,7 +3,8 @@
 `Probe source release` 工作流从固定 Mihomo 源码、vendor 和标准 Go 工具链构建
 五个平台的检测器。每次 PR 或相关 main 变更都会运行原生构建与离线/回环测试。
 仅 `workflow_dispatch` 的 `publish=true` 会进入发行步骤；默认值为 `false`。
-发行版本必须是新版本，现存标签和 Release 均不可覆盖。
+发行版本必须是下一个独立 Probe 序号的 `0.0.1-alpha.N` 测试版本，现存标签和 Release 均不可覆盖。
+alpha Release 均为 prerelease，不设置稳定推荐；未经用户明确最终验收，不修改基础版本或通道。
 
 该流程与历史二进制库存审计分开。`audit_distribution.py` 的 `ready:false`
 以及 `probe-detector.yml` 的发行冻结仍然有效。新流程不为历史内核补作来源证明。
@@ -92,7 +93,7 @@ schema 1 仅用于恢复既有 `0.2.0`、源码提交
 5. 创建新草稿 Release，记录返回的 Release ID，并通过该 ID 上传完整资产和
    读取远端资产清单。逐个要求名称、
    数量、大小、`uploaded` 状态及 GitHub 返回的 SHA256 与已证明的文件一致，
-   然后才按同一 ID 公开 Release。检测器发行不设为 MiSub 主应用的 latest。
+   然后才按同一 ID 公开测试 Release。草稿和公开状态均要求 `prerelease=true`，检测器发行不设为 MiSub 主应用的 latest。
 
 签证说明与核验参数依据 GitHub 的
 [artifact attestation CLI](https://cli.github.com/manual/gh_attestation_verify)
@@ -122,12 +123,12 @@ schema 1 仅用于恢复既有 `0.2.0`、源码提交
 
 候选 `release-catalog.json` 只随成功公开的发行提供；工作流不会自动修改仓库的
 `detector/release-catalog.json` 或部署网页。公开后还须下载并核验远端资产、确认
-发行状态，再通过独立审查的目录更新启用网页命令。代码合并、普通 Pages 部署、
+发行状态及各平台真实安装、配对、领取检测、回传和页面全流程，再通过独立审查的目录更新启用网页命令。新 alpha 候选目录为 `channel=testing`、`prerelease=true`、`distributionReady=false`。代码合并、普通 Pages 部署、
 候选构建成功，都不能单独说明用户已能安装。
 
 组装从同一源码快照读取已发布目录并保留其历史版本。新的引导脚本必须为
 无 BOM、无 NUL 的 LF UTF-8 文本，每份不超过 64 KiB，以满足短安装命令的
-下载边界。下一版的准备与交接见 [Probe 0.3.0 发行清单](detector-release-0.3.0.md)。
+下载边界。版本规则和发行步骤见 [Probe alpha 测试版本发行清单](detector-alpha-release.md)。
 
 真实设备安装、浏览器配对批准、持久凭据配置和真实节点验收由用户明确执行或
 逐项确认。上述 CI 使用临时和回环 fixture，不构成这些实网验收。
@@ -141,7 +142,7 @@ schema 1 仅用于恢复既有 `0.2.0`、源码提交
 ```sh
 python3 -B -m unittest discover -s detector/scripts -p 'test_release_gate.py' -v
 python3 -B detector/scripts/release_gate.py native \
-  --target linux-amd64 --version 0.3.0 --commit EXACT_COMMIT \
+  --target linux-amd64 --version 0.0.1-alpha.1 --commit EXACT_COMMIT \
   --work-dir /absolute/new/temporary/build-directory
 ```
 

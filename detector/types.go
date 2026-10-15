@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-var version = "0.1.0-dev"
+var version = ""
 var commit = "source"
 
 const maxResponseBytes = 1024 * 1024

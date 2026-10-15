@@ -23,7 +23,7 @@ func writeBootstrapCapabilities(output io.Writer, target, buildVersion, revision
 	default:
 		return errors.New("bootstrap_platform_not_supported")
 	}
-	if !bootstrapVersionPattern.MatchString(buildVersion) || !bootstrapCommitPattern.MatchString(revision) {
+	if !probeBuildVersionValid(buildVersion) || !probeRevisionValid(buildVersion, revision) {
 		return errors.New("bootstrap_build_identity_invalid")
 	}
 	if _, err := fmt.Fprintf(output, "%s %s %s %s\n", bootstrapProtocol, buildVersion, revision, target); err != nil {

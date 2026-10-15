@@ -24,7 +24,7 @@ func (nativeDoctorHost) Kernel() (string, error) {
 
 // Hash the embedded archive without extracting files or executing the kernel.
 func inspectDoctorKernel(lock kernelLock, files fs.FS, target string) (string, error) {
-	if !doctorVersion(lock.Version) {
+	if !kernelBuildVersionValid(lock.Version) {
 		return "", errors.New("kernel_metadata_invalid")
 	}
 	asset, ok := lock.Assets[target]

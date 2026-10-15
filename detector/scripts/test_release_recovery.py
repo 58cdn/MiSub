@@ -14,7 +14,7 @@ import release_gate as gate
 import release_recovery as recovery
 import source_build as source
 
-VERSION, COMMIT = "0.2.0", "9ccee76c3cab149f34dca96c304310c9574c0d29"
+VERSION, COMMIT = "0.0.1-alpha.1", "9ccee76c3cab149f34dca96c304310c9574c0d29"
 RUN_ID, DRAFT_ID, REPOSITORY_ID, ATTEMPT = 72, 123, 456, 1
 STAMP = "2026-01-01T00:00:00Z"
 
@@ -74,11 +74,11 @@ class FakeGitHub:
         self.requests.append((endpoint, tuple(fields)))
         if fields:
             assert endpoint == gate.release_endpoint(DRAFT_ID)
-            assert tuple(fields) == ("-F", "draft=false", "-f", "make_latest=false")
+            assert tuple(fields) == ("-F", "draft=false", "-F", "prerelease=true", "-f", "make_latest=false")
             self.published = True
             self.release.update(draft=False, published_at=STAMP)
             for asset in self.release["assets"]:
-                asset["browser_download_url"] = "https://github.com/58cdn/MiSub/releases/download/probe-v0.2.0/" + urllib.parse.quote(asset["name"], safe="")
+                asset["browser_download_url"] = "https://github.com/58cdn/MiSub/releases/download/probe-v" + VERSION + "/" + urllib.parse.quote(asset["name"], safe="")
             return copy.deepcopy(self.release)
         if endpoint.endswith("/actions/runs/72"):
             if self.change_after_proofs and len(self.proofs) == 26:
@@ -109,6 +109,9 @@ class RecoveryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = pathlib.Path(self.temp.name)
+        self.live_main = mock.patch.object(gate.release_preflight, "verify_live_main").start()
+        self.reserved_version = mock.patch.object(gate.release_preflight, "verify_reserved_version").start()
+        self.addCleanup(mock.patch.stopall)
         self.source = self.root / "old-source"
         (self.source / "detector").mkdir(parents=True)
         self.lock = source.load_lock(gate.ROOT / "detector/source-build-lock.json")
@@ -119,6 +122,8 @@ class RecoveryTests(unittest.TestCase):
                 "legacyReleases": [{"version": "0.1.0", "tag": "probe-v0.1.0", "capabilities": []}]}), 0o644),
             ("detector/bootstrap/install.sh", b"readonly MISUB_RELEASE_VERSION=''\nreadonly MISUB_RELEASE_COMMIT=''\nreadonly MISUB_RELEASE_ASSETS=''\n", 0o644),
             ("detector/bootstrap/install.ps1", b"$MisubReleaseVersion = ''\n$MisubReleaseCommit = ''\n$MisubReleaseSize = 0\n$MisubReleaseSha256 = ''\n", 0o644)]
+        if gate.probe_version.alpha_number(VERSION) is not None:
+            self.wrapper_files.append(("detector/VERSION", (VERSION + "\n").encode(), 0o644))
         self.tree = source.git_tree(self.wrapper_files)
         self.wrapper_pack = tar_bytes(self.wrapper_files, "wrapper/", COMMIT)
         members = [("mihomo/main.go", b"Fixture full core source\n", 0o644), ("mihomo/LICENSE", b"Fixture full core license\n", 0o644),
@@ -152,12 +157,24 @@ class RecoveryTests(unittest.TestCase):
                         "coreBuild": {"kind": "misub-core-build", "source": self.lock["source"], "lockSha256": self.lock_sha,
                                       "target": target, "host": target, "caMode": "system", "repeatBuildMatches": True,
                                       "dependencies": {"files": core_linked}}}
+            if gate.probe_version.alpha_number(VERSION) is not None or VERSION != "0.2.0":
+                import test_release_cli as cli
+                report = cli.doctor_fixture()
+                report.update(version=VERSION, revision=COMMIT, platform=target, kernelLockVersion=self.lock["source"]["version"])
+                if gate.probe_version.alpha_number(VERSION) is not None:
+                    report["displayVersion"] = VERSION
+                else:
+                    for key in ("displayVersion", "buildChannel", "sourceState"):
+                        report.pop(key, None)
+                evidence.update(schemaVersion=2, buildChannel="testing", doctor=report, doctorHomeUnchanged=True,
+                                installationTokenElevated=False,
+                                versionOutput=f"misub-probe {VERSION} ({COMMIT}); mihomo {self.lock['source']['version']}")
             gate.save(candidate / ("evidence-" + target + ".json"), evidence)
         self.assets = self.root / "release"
         with self.snapshot_patch():
             gate.assemble_materials(self.source, inputs, self.assets, VERSION, COMMIT)
         self.release = {"id": DRAFT_ID, "url": recovery.API + "releases/123", "draft": True, "tag_name": "probe-v" + VERSION,
-                        "prerelease": False, "published_at": None, "target_commitish": "main", "name": "MiSub Probe v" + VERSION,
+                        "prerelease": gate.probe_version.alpha_number(VERSION) is not None, "published_at": None, "target_commitish": "main", "name": "MiSub Probe v" + VERSION,
                         "body": (self.assets / "SOURCE.md").read_text(), "updated_at": STAMP, "created_at": STAMP,
                         "upload_url": "https://uploads.github.com/repos/58cdn/MiSub/releases/123/assets{?name,label}",
                         "assets": [{"id": 1000 + index, "url": recovery.API + "releases/assets/" + str(1000 + index),
@@ -189,7 +206,7 @@ class RecoveryTests(unittest.TestCase):
             path = inputs / ("source-candidate-" + target) / ("evidence-" + target + ".json")
             evidence = gate.read_json(path)
             report = cli.doctor_fixture()
-            report.update(version=VERSION, revision=COMMIT, platform=target, kernelLockVersion=self.lock["source"]["version"])
+            report.update(version=VERSION, displayVersion=VERSION, revision=COMMIT, platform=target, kernelLockVersion=self.lock["source"]["version"])
             evidence.update(schemaVersion=2, doctor=report, doctorHomeUnchanged=True, installationTokenElevated=False,
                             versionOutput=f"misub-probe {VERSION} ({COMMIT}); mihomo {self.lock['source']['version']}")
             path.write_bytes(source.json_bytes(evidence))
@@ -214,18 +231,46 @@ class RecoveryTests(unittest.TestCase):
         self.assert_no_write()
         self.assertFalse(any("/releases/tags/" in endpoint for endpoint, _ in self.client.requests))
 
+    def test_alpha_catalog_is_testing_and_not_an_installation_recommendation(self):
+        catalog = gate.read_json(self.assets / "release-catalog.json")
+        self.assertFalse(catalog["distributionReady"])
+        self.assertEqual(catalog["release"]["channel"], "testing")
+        self.assertTrue(catalog["release"]["prerelease"])
+        self.assertIn("not a stable recommendation", (self.assets / "SOURCE.md").read_text())
+
+    def test_alpha_source_snapshot_version_cannot_differ_from_cross_platform_candidates(self):
+        changed = [(name, b"0.0.1-alpha.2\n" if name == "detector/VERSION" else data, mode)
+                   for name, data, mode in self.wrapper_files]
+        with mock.patch.object(gate, "wrapper_snapshot", return_value=(self.wrapper_pack, changed, self.tree)):
+            with self.assertRaisesRegex(gate.GateError, "source_product_version_mismatch"):
+                gate.assemble_materials(self.source, self.root / "input", self.root / "different-version", VERSION, COMMIT)
+
+    def test_higher_alpha_reservation_prevents_draft_publication(self):
+        self.reserved_version.side_effect = ValueError("reserved_alpha_version_is_not_latest_sequence")
+        with self.assertRaisesRegex(ValueError, "latest_sequence"):
+            self.recover(publish=True)
+        self.live_main.assert_called_once_with(COMMIT)
+        self.assert_no_write()
+
+    def test_changed_main_prevents_draft_publication(self):
+        self.live_main.side_effect = ValueError("main_or_execution_commit_changed")
+        with self.assertRaisesRegex(ValueError, "commit_changed"):
+            self.recover(publish=True)
+        self.reserved_version.assert_not_called()
+        self.assert_no_write()
+
     def test_explicit_publish_only_patches_same_id_then_rereads_tag_and_id(self):
         result = self.recover(publish=True)
         self.assertTrue(result["published"])
         writes = [(endpoint, fields) for endpoint, fields in self.client.requests if fields]
-        self.assertEqual(writes, [(gate.release_endpoint(DRAFT_ID), ("-F", "draft=false", "-f", "make_latest=false"))])
-        self.assertEqual(self.client.requests[-2:], [("repos/58cdn/MiSub/git/ref/tags/probe-v0.2.0", ()), (gate.release_endpoint(DRAFT_ID), ())])
+        self.assertEqual(writes, [(gate.release_endpoint(DRAFT_ID), ("-F", "draft=false", "-F", "prerelease=true", "-f", "make_latest=false"))])
+        self.assertEqual(self.client.requests[-2:], [("repos/58cdn/MiSub/git/ref/tags/probe-v" + VERSION, ()), (gate.release_endpoint(DRAFT_ID), ())])
 
     def published_fixture(self):
         result = copy.deepcopy(self.release)
         result.update(draft=False, published_at=STAMP)
         for asset in result["assets"]:
-            asset["browser_download_url"] = "https://github.com/58cdn/MiSub/releases/download/probe-v0.2.0/" + urllib.parse.quote(asset["name"], safe="")
+            asset["browser_download_url"] = "https://github.com/58cdn/MiSub/releases/download/probe-v" + VERSION + "/" + urllib.parse.quote(asset["name"], safe="")
         return result
 
     def test_published_untagged_urls_become_exact_canonical_urls_without_changing_before(self):
@@ -242,7 +287,7 @@ class RecoveryTests(unittest.TestCase):
         invalid = [None, "", self.release["assets"][0]["browser_download_url"], expected.replace("https://", "http://"),
                    expected.replace("github.com", "github.com.example.invalid"), expected.replace("github.com", "github.com:443"),
                    expected.replace("github.com", "attacker@github.com"), expected.replace("58cdn/MiSub", "other/MiSub"),
-                   expected.replace("probe-v0.2.0", "probe-v9.9.9"), expected + "/other", expected + "?download=1", expected + "#fragment",
+                   expected.replace("probe-v" + VERSION, "probe-v9.9.9"), expected + "/other", expected + "?download=1", expected + "#fragment",
                    expected.replace("/download/", "/download%2F"), expected.rsplit("/", 1)[0] + "/different-file"]
         for url in invalid:
             published = self.published_fixture()
@@ -358,7 +403,7 @@ class RecoveryTests(unittest.TestCase):
     def test_wrong_or_incomplete_draft_is_rejected_before_download(self):
         mutations = [lambda release: release.update(id=124), lambda release: release.update(draft=False),
                      lambda release: release.update(tag_name="probe-v9.9.9"), lambda release: release.update(published_at=STAMP),
-                     lambda release: release.update(prerelease=True), lambda release: release["assets"].pop(),
+                     lambda release: release.update(prerelease=False), lambda release: release["assets"].pop(),
                      lambda release: release["assets"].append(copy.deepcopy(release["assets"][0])),
                      lambda release: release["assets"][0].update(name="extra.exe"),
                      lambda release: release["assets"][0].update(size=True), lambda release: release["assets"][0].update(size=gate.MAX_FILE + 1),
@@ -443,6 +488,26 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaisesRegex(gate.GateError, "timeout"):
             recovery.bounded_command([sys.executable, "-c", "import time; time.sleep(5)"], destination, 8, 0.1)
         self.assertFalse(destination.exists())
+
+
+class HistoricalRecoveryTests(unittest.TestCase):
+    def test_historical_stable_drafts_can_only_be_verified_read_only(self):
+        for historical in ("0.2.0", "0.3.0"):
+            with self.subTest(version=historical), mock.patch.dict(globals(), {"VERSION": historical}):
+                fixture = RecoveryTests()
+                fixture.setUp()
+                try:
+                    result = fixture.recover()
+                    self.assertTrue(result["verified"])
+                    fixture.assert_no_write()
+                    self.assertEqual(len(fixture.client.downloads), 26)
+                    with self.assertRaisesRegex(gate.GateError, "alpha_release_version_required"):
+                        fixture.recover(publish=True, work="forbidden-publication")
+                    fixture.assert_no_write()
+                    self.assertFalse((fixture.root / "forbidden-publication").exists())
+                finally:
+                    fixture.tearDown()
+                    fixture.doCleanups()
 
 
 if __name__ == "__main__":

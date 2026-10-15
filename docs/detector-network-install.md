@@ -10,7 +10,7 @@
 
 ## 安全与运行范围
 
-- 首次请求固定为 `https://github.com/58cdn/MiSub/releases/download/probe-vX.Y.Z/install.sh` 或 `install.ps1`，最多允许两次 HTTPS 跳转到 `release-assets.githubusercontent.com` / `objects.githubusercontent.com`。用户信息、显式端口、反斜线、空白、片段和其他主机不作为跳转目标。
+- 首次请求固定为 `https://github.com/58cdn/MiSub/releases/download/probe-vVERSION/install.sh` 或 `install.ps1`，VERSION为已实测目录中的完整产品版本（新测试发行采用`0.0.1-alpha.N`，不带开发 SHA 展示后缀）。最多允许两次 HTTPS 跳转到 `release-assets.githubusercontent.com` / `objects.githubusercontent.com`。用户信息、显式端口、反斜线、空白、片段和其他主机不作为跳转目标。
 - 每次请求最多 45 秒，共至多三次请求。第一阶段不自动重试，失败由用户检查网络后重新执行；原安装器的有界下载重试保持原有行为。
 - 第一阶段脚本最多 64 KiB；Unix 额外允许 8 KiB 状态尾标空间，超过即拒绝。Unix 只接受无 NUL、无 CR 的 LF 文本，保留末尾换行后核对精确长度与 SHA-256。Windows 限制整个响应缓冲，先核验原始字节，再严格 UTF-8 解码。非法内容不会进入脚本解析或安装。
 - 校验完成前不写入磁盘，也不运行远端代码。脚本保存在内存中，避免临时脚本文件的替换竞态。下载公共脚本后，原发行安装器才检查平台、普通用户、私有目录、既有配置、二进制长度/摘要和版本能力；不跳过这些检查。

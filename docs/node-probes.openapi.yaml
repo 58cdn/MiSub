@@ -670,9 +670,11 @@ components:
       additionalProperties: false
       required: [version, tag, sourceCommit, bootstrapProtocol, capabilities, assets, bootstrap]
       properties:
-        version: { type: string, pattern: '^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$', description: Stable release; legacy 0.1.0 is not bootstrap compatible. }
+        version: {type: string, maxLength: 64, pattern: '^(?:(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})|0\.0\.1-alpha\.[1-9][0-9]*)$(?![\s\S])', description: 'New releases use 0.0.1-alpha.N with an independent increasing Probe sequence. Historical three-part identities are migration sources, never automatic latest recommendations; 0.1.0 is not bootstrap compatible.'}
         tag: { type: string, description: Exactly probe-v followed by version. }
         sourceCommit: { type: string, pattern: '^[a-f0-9]{40}$', description: Nonzero immutable wrapper revision. }
+        channel: {const: testing, description: Required for alpha releases.}
+        prerelease: {const: true, description: Required for alpha releases; never a stable recommendation.}
         bootstrapProtocol: { const: 1 }
         capabilities:
           type: array
@@ -699,13 +701,22 @@ components:
           properties:
             unix: { $ref: '#/components/schemas/ReleaseAsset' }
             windows: { $ref: '#/components/schemas/ReleaseAsset' }
+      allOf:
+        - if:
+            properties:
+              version:
+                pattern: ^0\.0\.1-alpha\.
+          then:
+            required:
+              - channel
+              - prerelease
     InstallationCapabilities:
       type: object
       additionalProperties: false
       required: [schemaVersion, distributionReady, release, legacyReleases, reason, targets]
       properties:
         schemaVersion: { const: 1 }
-        distributionReady: { type: boolean, description: False until an audited release and its actual assets are verified. }
+        distributionReady: {type: boolean, description: False until exact assets and actual platform installation/start/pair/claim/check/report/page acceptance are verified. CI and Release success alone never enable recommendations.}
         release:
           oneOf:
             - { type: 'null' }
@@ -956,8 +967,10 @@ components:
       required: [schemaVersion, wrapperVersion, wrapperRevision, platform, ruleSetVersion]
       properties:
         schemaVersion: { type: integer, const: 1 }
-        wrapperVersion: { type: string, maxLength: 64, pattern: '^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$(?![\s\S])' }
+        wrapperVersion: {type: string, maxLength: 64, pattern: '^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$(?![\s\S])', description: 'Product version, 0.0.1-alpha.N for new builds. Development SHA is a separate display value and never participates in update ordering. Historical build declarations remain readable.'}
         wrapperRevision: { type: string, pattern: '^(?:[a-f0-9]{40}|source)$(?![\s\S])', description: Build revision or source for a local source build. }
+        buildChannel: {type: string, enum: [development, testing], description: Optional client-reported build channel; absent remains unknown.}
+        sourceState: {type: string, enum: [clean, dirty, unknown], description: Optional client-reported source state; derive a development SHA display only from a clean complete source identity. This is not an attestation.}
         platform: { type: string, enum: [linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64] }
         kernelLockVersion: { type: string, maxLength: 64, pattern: '^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$(?![\s\S])', description: Optional embedded lock declaration; absent means unknown. }
         ruleSetVersion: { type: integer, minimum: 1, maximum: 65535, description: Explicit classification rule-set baseline, independent of the observations wire schema. }

@@ -14,8 +14,10 @@
     "checks": { "format": { "status": "passed", "code": "ok" } },
     "executionMetadata": {
         "schemaVersion": 1,
-        "wrapperVersion": "0.3.0-dev",
-        "wrapperRevision": "source",
+        "wrapperVersion": "0.0.1-alpha.1",
+        "wrapperRevision": "<实际完整40位小写SHA>",
+        "buildChannel": "development",
+        "sourceState": "clean",
         "platform": "linux-amd64",
         "kernelLockVersion": "v1.19.32",
         "ruleSetVersion": 1
@@ -23,17 +25,19 @@
 }
 ```
 
-示例版本仅用于说明协议，不表示已发行版本。
+示例版本仅用于说明协议，不表示已发行版本；SHA占位符必须替换为构建的实际完整源码修订，不能作为真实请求发送。
 
-| 字段                | 含义与限制                                                                      |
-| ------------------- | ------------------------------------------------------------------------------- |
-| `schemaVersion`     | 声明结构版本，当前为整数 `1`。                                                  |
-| `wrapperVersion`    | 检测器构建版本，长度不超过 64；使用三段数字及可选的 `-` 预发行后缀。            |
-| `wrapperRevision`   | 40 位小写十六进制源码修订，或本地源码构建标记 `source`。                        |
-| `platform`          | `linux-amd64`、`linux-arm64`、`darwin-amd64`、`darwin-arm64`、`windows-amd64`。 |
-| `kernelLockVersion` | 可选的内嵌锁版本，长度不超过 64，可带 `v` 前缀；未知时省略。                    |
-| `ruleSetVersion`    | 1–65535 的整数，标识检测器判定规则基线。                                        |
-| `source`            | 只由服务端在保存与返回时固定为 `detector_reported`，客户端输入不能覆盖。        |
+| 字段                | 含义与限制                                                                                               |
+| ------------------- | -------------------------------------------------------------------------------------------------------- |
+| `schemaVersion`     | 声明结构版本，当前为整数 `1`。                                                                           |
+| `wrapperVersion`    | 检测器产品版本，长度不超过64；新测试构建为 `0.0.1-alpha.N`，不携带显示SHA后缀，历史构建身份保持可读。    |
+| `wrapperRevision`   | 实际40位非全零小写SHA；历史构建标记 `source` 保持可读，新alpha不以其代替源码身份。                                                 |
+| `buildChannel`      | 可选 `development` / `testing`，缺失保持未知，不用当前安装资料补齐历史。                                 |
+| `sourceState`       | 可选 `clean` / `dirty` / `unknown`；只有干净、已知的完整源码身份可派生开发显示，客户端自报不是来源证明。 |
+| `platform`          | `linux-amd64`、`linux-arm64`、`darwin-amd64`、`darwin-arm64`、`windows-amd64`。                          |
+| `kernelLockVersion` | 可选的内嵌锁版本，长度不超过 64，可带 `v` 前缀；未知时省略。                                             |
+| `ruleSetVersion`    | 1–65535 的整数，标识检测器判定规则基线。                                                                 |
+| `source`            | 只由服务端在保存与返回时固定为 `detector_reported`，客户端输入不能覆盖。                                 |
 
 字段白名单不包括主机名、本地路径、原始错误、节点配置、凭据或任意构建环境内容。服务端丢弃未知字段；已知字段不合法时返回固定的 `400 invalid_execution_metadata`。整个声明省略或为 `null` 表示未知。原生检测器发现构建版本、修订或平台不合法时省略整个声明；仅内核锁版本不合法时省略该字段，仍可正常提交结果。
 
@@ -71,6 +75,8 @@
 | 已取消或过期                     | 未记录；未收到完成结果。                                           |
 
 可识别声明未提供内核锁版本时，显示“未知（未提供）”；源码修订为 `source` 时，显示“源码构建，修订未提供”。界面只读取声明字段白名单，不回显额外属性、路径、凭据或原始错误。声明不表示当前能力、解锁通过或实际内核执行证明，也不参与任务调度。
+
+干净且具有实际完整源码SHA的开发构建显示 `0.0.1-alpha.N.sha.<SHA前12位>`，同时保留产品版本与完整修订可查。dirty/unknown或缺少构建通道的历史记录不能被补造为可信开发身份。测试通道的升级比较仅使用产品版，按数字比较N，SHA不参与排序；旧稳定系列需要显式迁移，不能因其基础数字较大被自动推荐。
 
 展开控件使用原生键盘交互，兼容中英文、深浅色与窄屏长版本信息。历史切换和任务结果分页沿用现有请求隔离及状态刷新逻辑。
 

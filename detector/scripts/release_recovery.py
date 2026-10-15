@@ -240,7 +240,7 @@ def verify_materials(source_root, assets, work, version, commit):
 def code_identity():
     commit = gate.git(gate.ROOT, "rev-parse", "HEAD").decode().strip()
     _, _, tree = gate.wrapper_snapshot(gate.ROOT, commit)
-    for name in ("release_recovery.py", "release_gate.py", "source_build.py", "audit_distribution.py"):
+    for name in ("release_recovery.py", "release_gate.py", "source_build.py", "audit_distribution.py", "probe_version.py", "release_preflight.py"):
         relative = "detector/scripts/" + name
         committed, actual = gate.git(gate.ROOT, "show", commit + ":" + relative), gate.read(gate.ROOT / relative)
         gate.require(actual == committed or actual == committed.replace(b"\n", b"\r\n"),
@@ -263,8 +263,16 @@ def verify_published(before, published, draft_id, version, records):
                  and original_assets == published_assets, "published_release_identity_changed")
 
 
+def guard_alpha_recovery(version, commit):
+    gate.require(gate.probe_version.alpha_number(version) is not None, "alpha_release_version_required")
+    gate.release_preflight.verify_live_main(commit)
+    gate.release_preflight.verify_reserved_version(version)
+
+
 def recover(source_root, work, version, commit, run_id, draft_id, original_attempt, publish=False):
     gate.identity(version, commit)
+    if publish:
+        gate.require(gate.probe_version.alpha_number(version) is not None, "alpha_release_version_required")
     positive_id(run_id)
     positive_id(draft_id)
     positive_id(original_attempt)
@@ -296,10 +304,11 @@ def recover(source_root, work, version, commit, run_id, draft_id, original_attem
               "provenance": proofs, "verified": True, "published": False}
     gate.save(work / "verified.json", report)
     if publish:
+        guard_alpha_recovery(version, commit)
         gate.save(work / "publication-attempt.json", {"releaseId": draft_id, "sourceCommit": commit,
                   "verifiedReport": gate.record(work / "verified.json"), "publicationAttempted": True, "published": None})
         try:
-            result = client.json(gate.release_endpoint(draft_id), ("-F", "draft=false", "-f", "make_latest=false"))
+            result = client.json(gate.release_endpoint(draft_id), ("-F", "draft=false", "-F", "prerelease=true", "-f", "make_latest=false"))
             verify_published(before["release"], result, draft_id, version, materials)
             verify_tag(client.json("repos/" + gate.REPOSITORY + "/git/ref/tags/probe-v" + version), version, commit)
             verify_published(before["release"], client.json(gate.release_endpoint(draft_id)), draft_id, version, materials)
