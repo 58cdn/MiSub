@@ -308,6 +308,29 @@ test('live claim normalization alone selects observations and malformed declarat
     }
 });
 
+test('catalog IDs round-trip through the existing table, replace completely and never authorize observations', async () => {
+    const f = await fixture();
+    await f.store.claim(f.agent, {
+        ...claimInfo,
+        capabilities: { ...declaration, catalogVersion: 1 },
+    });
+    assert.equal((await f.overview()).capabilities.catalogVersion, 1);
+    assert.ok((await f.runtime()).capabilities_json.length <= 128);
+    f.advance(300000);
+    assert.equal((await f.overview()).capabilities.freshness, 'stale');
+    await f.job(['observations']);
+    assert.equal(await f.store.claim(f.agent, { capabilities: { catalogVersion: 1 } }), null);
+    assert.equal((await f.runtime()).capabilities_json, null);
+    assert.equal((await f.overview()).capabilities.catalogVersion, undefined);
+    const task = await f.store.claim(f.agent, {
+        ...claimInfo,
+        capabilities: { ...declaration, catalogVersion: 999 },
+    });
+    assert.ok(task);
+    assert.equal((await f.overview()).capabilities.catalogVersion, undefined);
+    assert.deepEqual(JSON.parse((await f.runtime()).capabilities_json), declaration);
+});
+
 test('legacy observations claims remain eligible and an old stored declaration cannot grant a missing claim', async () => {
     const f = await fixture();
     await f.store.claim(f.agent, claimInfo);

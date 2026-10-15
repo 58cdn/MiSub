@@ -42,6 +42,7 @@ const declaration = {
     state: 'declared',
     schemaVersion: 1,
     observationsVersion: 1,
+    catalogVersion: 1,
     receivedAt: checkedAt - 1000,
     freshness: 'fresh',
     token: privateText[0],
@@ -271,6 +272,18 @@ try {
                 assert.equal(await runtime(id).getAttribute('data-state'), expected);
                 await open(runtime(id));
             }
+            assert.match(
+                await runtime('declared').getByTestId('detector-capability-catalog').innerText(),
+                /openai v1/
+            );
+            assert.match(
+                await runtime('stale').getByTestId('detector-capability-catalog').innerText(),
+                /IPinfo/
+            );
+            assert.equal(
+                await runtime('legacy').getByTestId('detector-capability-catalog').count(),
+                0
+            );
             assert.match(
                 await runtime('declared').innerText(),
                 profile.locale === 'en-US'

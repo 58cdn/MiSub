@@ -217,10 +217,12 @@ describe('claim capability OpenAPI boundaries', () => {
         const supported = api.components.schemas.AgentClaimCapabilities;
         expect(supported.type).toBe('object');
         expect(supported.required).toEqual(['schemaVersion', 'observationsVersion']);
-        expect(supported.properties).toEqual({
+        expect(supported.properties).toMatchObject({
             schemaVersion: { type: 'integer', const: 1 },
             observationsVersion: { type: 'integer', const: 1 },
         });
+        expect(supported.properties.catalogVersion.const).toBe(1);
+        expect(api.components.schemas.AgentClaimDeclaration.properties.catalogVersion.const).toBe(1);
         const response = api.components.schemas.AgentClaimDeclaration;
         expect(response.additionalProperties).toBe(false);
         expect(response.required).toEqual(['source', 'state', 'schemaVersion', 'observationsVersion', 'receivedAt', 'freshness']);

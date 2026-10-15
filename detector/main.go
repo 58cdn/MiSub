@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -18,6 +17,7 @@ func main() {
 	capabilities := flag.Bool("capabilities", false, "Print the offline bootstrap capability protocol, version, revision and native target")
 	checkConfig := flag.Bool("check-config", false, "Validate configuration without sending it anywhere")
 	doctor := flag.Bool("doctor", false, "Report local read-only checks; no service query, kernel execution or network request")
+	doctorMode := flag.String("doctor-mode", "local", "With --doctor: local (read-only) or kernel-version (writes private temporary files and executes the embedded kernel -v; no network)")
 	selfTest := flag.Bool("self-test", false, "Verify and execute the embedded kernel version; no node or API request")
 	pair := flag.Bool("pair", false, "Pair with browser approval, save private configuration, then exit")
 	setup := flag.Bool("setup", false, "Pair with browser approval, install and start the detector")
@@ -44,16 +44,21 @@ func main() {
 		os.Exit(2)
 	}
 	if visited["doctor"] {
-		if err := doctorFlags(*doctor, visited, flag.NArg()); err != nil {
-			fmt.Fprintln(os.Stderr, "probe:", err)
+		if err := doctorFlags(*doctor, visited, flag.NArg()); err != nil || !doctorModeValid(*doctorMode) {
+			fmt.Fprintln(os.Stderr, "probe: doctor_flags_conflict")
 			os.Exit(2)
 		}
 		report := collectDoctor(nativeDoctorHost{}, doctorEnvironment{Target: nativeBootstrapTarget(), Version: version, Revision: commit, BuildChannel: buildChannel, SourceState: buildSourceState, Now: time.Now()}, doctorOptions{ConfigPath: *path, ConfigExplicit: visited["config"]})
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		report = applyDoctorMode(ctx, report, *doctorMode, func(ctx context.Context) error {
+			return runKernelVersion(ctx, kernelVersionHost{extract: extractKernel, start: startCoreProcess})
+		})
+		stop()
 		if err := writeDoctorReport(os.Stdout, report, *jsonOutput); err != nil {
 			fmt.Fprintln(os.Stderr, "probe:", err)
 			os.Exit(1)
 		}
-		if report.Status != "local_checks_passed" {
+		if report.Status != "local_checks_passed" && report.Status != "diagnostic_checks_passed" {
 			os.Exit(1)
 		}
 		return
@@ -138,18 +143,10 @@ func main() {
 		return
 	}
 	if *selfTest {
-		binary, cleanup, err := extractKernel()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "probe:", err)
-			os.Exit(1)
-		}
-		defer cleanup()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		wait, startErr := startCoreProcess(ctx, binary, []string{"-v"}, filepath.Dir(binary))
-		if startErr != nil || wait() != nil {
+		if runKernelVersion(ctx, kernelVersionHost{extract: extractKernel, start: startCoreProcess}) != nil {
 			fmt.Fprintln(os.Stderr, "probe: kernel_self_test_failed")
-			cleanup()
 			os.Exit(1)
 		}
 		fmt.Println("probe: embedded_kernel_verified")

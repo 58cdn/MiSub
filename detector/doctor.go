@@ -33,6 +33,8 @@ type doctorReport struct {
 	KernelLockVersion string        `json:"kernelLockVersion,omitempty"`
 	InstalledVersion  string        `json:"installedVersion,omitempty"`
 	Checks            []doctorCheck `json:"checks"`
+	Mode              string        `json:"mode,omitempty"`
+	SideEffects       []string      `json:"sideEffects,omitempty"`
 }
 
 type doctorEnvironment struct {
@@ -61,7 +63,7 @@ type doctorHost interface {
 func doctorRequested(arguments []string) bool {
 	for _, argument := range arguments {
 		name := strings.SplitN(argument, "=", 2)[0]
-		if name == "--doctor" || name == "-doctor" {
+		if name == "--doctor" || name == "-doctor" || name == "--doctor-mode" || name == "-doctor-mode" {
 			return true
 		}
 	}
@@ -73,7 +75,7 @@ func doctorFlags(enabled bool, visited map[string]bool, arguments int) error {
 		return errors.New("doctor_flags_conflict")
 	}
 	for name := range visited {
-		if name != "doctor" && name != "json" && name != "config" {
+		if name != "doctor" && name != "doctor-mode" && name != "json" && name != "config" {
 			return errors.New("doctor_flags_conflict")
 		}
 	}
@@ -246,6 +248,11 @@ func writeDoctorReport(output io.Writer, report doctorReport, asJSON bool) error
 	}
 	if _, err := fmt.Fprintf(output, "MiSub Probe doctor v%d: %s; %s; %s\nBuild: %s (%s); target: %s\n", report.SchemaVersion, report.Status, report.Scope, report.CheckedAt, displayVersion, report.Revision, report.Platform); err != nil {
 		return errors.New("doctor_output_failed")
+	}
+	if len(report.SideEffects) > 0 {
+		if _, err := fmt.Fprintf(output, "Selected mode: %s; permitted side effects: %s\n", report.Mode, strings.Join(report.SideEffects, ", ")); err != nil {
+			return errors.New("doctor_output_failed")
+		}
 	}
 	for _, check := range report.Checks {
 		if _, err := fmt.Fprintf(output, "%s: %s / %s", check.ID, check.State, check.Code); err != nil {

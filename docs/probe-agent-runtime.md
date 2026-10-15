@@ -8,10 +8,10 @@
 
 ```json
 {
-    "version": "0.3.0-dev",
+    "version": "0.0.1-alpha.1",
     "platform": "linux-amd64",
     "observationsVersion": 1,
-    "capabilities": { "schemaVersion": 1, "observationsVersion": 1 }
+    "capabilities": { "schemaVersion": 1, "observationsVersion": 1, "catalogVersion": 1 }
 }
 ```
 
@@ -29,6 +29,24 @@
 不兼容声明仍可领取普通任务；包含 observations 的混合任务整体排除。所有运行模式共用这一兼容矩阵。调度只使用当次规范化请求，不读取持久化旧声明，也不从版本字符串、平台、历史结果或续租时间推断能力。
 
 每次记录 claim 都完整替换声明，包括无任务可领取或已有活跃租约时。旧客户端重新领取会清除此前新版声明；成功续租只更新独立续租时间，不改变声明内容或接收时间。任务在关闭记录期间领取，随后启用记录时收到成功续租，可以创建“声明未知、只有续租时间”的记录。
+
+## 显式能力目录 v1
+
+`catalogVersion: 1` 是检测器显式选择的固定能力目录，不从产品版本、平台、心跳或历史结果推断。此字段是本次源码扩展；已发行 alpha.1 不包含目录声明，仍按原 observations v1 协议兼容。旧服务端忽略该附加字段；新服务端遇到旧客户端时显示“目录未知”。
+
+| 内容              | 固定目录 1                                                                                     |
+| ----------------- | ---------------------------------------------------------------------------------------------- |
+| 检查类型（6）     | `format`、`tcp`、`proxy`、`speed`、`unlock`、`observations`                                    |
+| 来源 ID（6）      | `ipify`、`ip_sb`、`ifconfig`、`icanhazip`、`ipinfo`、`ippure`                                  |
+| 来源限制          | `ipinfo` 未配置；`ippure` 是须手动选择的实验来源；其余表示代码实现，不保证当前可达             |
+| Provider（8）     | `netflix`、`youtube`、`openai`、`claude`、`gemini`、`disney`、`spotify`、`tiktok`              |
+| Provider 规则版本 | 上述 Provider 均属于现有规则集 `1`，与任务结果的 `ruleSetVersion` 对应；不是站点版本或解锁证明 |
+
+声明白名单仅为 `schemaVersion`、`observationsVersion` 和可选 `catalogVersion`。目录字段只接受严格数字 `1`，不接受客户端列表、目标、规则文本或自定义名称；未知版本、字符串、对象和超限列表均丢弃，目录保持未知。ID 长度至多 16 字符；目录固定为至多 6 项检查、6 项来源、8 项 Provider。存储仅保存编号，标准声明继续满足现有表的 128 字符限制，不增加表或迁移。未来目录内容变化须分配新目录号并增加显式识别代码，不能复用目录 1 的含义。
+
+目录不参与调度、不扩大领取权限，也不限制既有普通任务兼容行为。只有当次声明中的 observations 协议字段决定 observations 任务兼容性；仅声明目录 1 不能领取此类任务。无效目录不会改变独立且有效的 observations v1 字段。每次 claim 全量替换，旧目录不会填补新请求的缺项。
+
+管理卡片与表格将目录、自报来源和服务端接收时间放在同一声明区；时效仍按下文五分钟规则。过期目录只描述历史自报，未知目录不展示猜测列表。实际执行结果及该次规则版本继续显示在任务结果区，二者互不补写。此扩展只添加可选字段，不启用生产 `record/read` 或改变 alpha.1 分发。
 
 ## 默认关闭与阶段开关
 

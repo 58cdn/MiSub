@@ -58,6 +58,25 @@ function render(language, props = {}) {
 afterEach(() => wrappers.splice(0).forEach((wrapper) => wrapper.unmount()));
 
 describe.each(languages)('runtime declaration component: $locale', (language) => {
+    it('renders the explicit catalog with source limitations and no measured-success claim', async () => {
+        const { wrapper } = render(language, {
+            capabilities: { ...declaration, catalogVersion: 1 },
+        });
+        const catalog = wrapper.get('[data-testid="detector-capability-catalog"]');
+        expect(catalog.text()).toContain('format, tcp, proxy, speed, unlock, observations');
+        expect(catalog.text()).toContain('IPinfo');
+        expect(catalog.text()).toContain('IPPure');
+        expect(catalog.text()).toContain('openai v1');
+        expect(wrapper.text()).toContain(language.note);
+        await wrapper.setProps({
+            capabilities: { ...declaration, catalogVersion: 999, sources: ['PRIVATE'] },
+        });
+        expect(wrapper.find('[data-testid="detector-capability-catalog"]').exists()).toBe(false);
+        expect(wrapper.find('[data-testid="detector-capability-catalog-unknown"]').exists()).toBe(
+            true
+        );
+        expect(wrapper.text()).not.toContain('PRIVATE');
+    });
     it('renders bounded versions, source and fixed server timestamps with qualified freshness', () => {
         const { wrapper } = render(language);
         expect(wrapper.attributes('data-state')).toBe('declared');

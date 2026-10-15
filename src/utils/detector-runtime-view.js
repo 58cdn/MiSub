@@ -50,6 +50,11 @@ export function runtimeDeclarationView(value, checkedAt, revoked = false) {
             observationsVersion: value.observationsVersion,
             receivedAt: value.receivedAt,
             freshness: value.freshness,
+            ...(value.state === 'declared' &&
+            Object.hasOwn(value, 'catalogVersion') &&
+            value.catalogVersion === 1
+                ? { catalogVersion: 1 }
+                : {}),
         },
     };
 }

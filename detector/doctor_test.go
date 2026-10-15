@@ -204,6 +204,10 @@ func TestDoctorCLIRejectsConflictsBeforeReadingConfiguration(t *testing.T) {
 		{"--doctor=false"}, {"--doctor", "stray"}, {"stray", "--doctor"}, {"--", "--doctor"},
 		{"stray", "-doctor=true"}, {"stray", "--doctor=false"},
 		{"--config", "--doctor"}, {"--managed-run", "--doctor"}, {"--server", "--doctor"},
+		{"--doctor-mode=kernel-version"}, {"stray", "--doctor-mode=kernel-version"},
+		{"--doctor", "--doctor-mode=https://private.invalid/secret"},
+		{"--doctor", "--doctor-mode=network"}, {"--doctor", "--doctor-mode="},
+		{"--doctor", "--doctor-mode=kernel-version", "--server=https://private.invalid/secret"},
 	} {
 		command := exec.Command(os.Args[0], append([]string{"-test.run=^TestDoctorCLIHelper$", "--", "--config", missing}, arguments...)...)
 		command.Env = append(os.Environ(), "MISUB_DOCTOR_CLI_FIXTURE=1")
