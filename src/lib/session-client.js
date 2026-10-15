@@ -35,7 +35,24 @@ export function createSessionClient({
         if (storage.getItem(fenceKey) !== fence.value) throw changed();
     }
     async function protocol() {
-        const result = await transport.get('/api/session/protocol', options);
+        const controller = new AbortController();
+        let timer;
+        let result;
+        try {
+            result = await Promise.race([
+                transport.get('/api/session/protocol', { ...options, signal: controller.signal }),
+                new Promise((_, reject) => {
+                    timer = setTimeout(() => {
+                        reject(
+                            new DOMException('Session protocol request timed out', 'AbortError')
+                        );
+                        controller.abort();
+                    }, 8000);
+                }),
+            ]);
+        } finally {
+            clearTimeout(timer);
+        }
         if (!['legacy', 'd1-v1'].includes(result?.protocol))
             throw new Error('session_protocol_unavailable');
         if (result.protocol === 'd1-v1') {
