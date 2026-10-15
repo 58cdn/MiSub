@@ -135,7 +135,9 @@ describe('verified installation availability', () => {
         expect(wrapper.html()).not.toMatch(
             /FIXTURE_PRIVATE_TOKEN|\.\\misub-probe-windows-amd64\.exe --pair|misub-probe --pair/
         );
-        expect(get(wrapper, 'pairing-command').text()).toContain('/probe-v9.9.9/install.sh');
+        expect(get(wrapper, 'pairing-command').text()).toContain(
+            '/probe-v0.0.1-alpha.999/install.sh'
+        );
     });
     it('copies the verified Windows network command and keeps resume independent of the window', async () => {
         const writeText = vi.fn().mockResolvedValue(undefined);
@@ -158,7 +160,7 @@ describe('verified installation availability', () => {
         expect(writeText.mock.calls[1][0]).toContain(
             "& $installer -Server 'https://misub.fixture.invalid'"
         );
-        expect(writeText.mock.calls[1][0]).toContain('/probe-v9.9.9/install.ps1');
+        expect(writeText.mock.calls[1][0]).toContain('/probe-v0.0.1-alpha.999/install.ps1');
         expect(writeText.mock.calls[1][0]).not.toMatch(
             /Set-ExecutionPolicy|\s-ExecutionPolicy\s|EncodedCommand/
         );

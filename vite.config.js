@@ -1,9 +1,14 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import tailwindcss from '@tailwindcss/vite';
+import { readAppBuildIdentity, appBuildIdentityPlugin } from './scripts/app-build-identity.mjs';
+
+const appBuild = readAppBuildIdentity();
 
 export default defineConfig({
+    define: { __MISUB_BUILD__: JSON.stringify(appBuild) },
     plugins: [
+        appBuildIdentityPlugin(appBuild),
         vue(),
         tailwindcss(),
         {

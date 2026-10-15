@@ -20,7 +20,7 @@ export function unpublishedProbeInstallation() {
 
 // Synthetic metadata for offline state-machine tests; these are not published release assets.
 export function syntheticProbeReleaseCatalog(targets = [...PROBE_RELEASE_TARGETS]) {
-    const tag = 'probe-v9.9.9';
+    const tag = 'probe-v0.0.1-alpha.999';
     const file = (fileName) => ({
         fileName,
         url: `https://github.com/58cdn/MiSub/releases/download/${tag}/${fileName}`,
@@ -31,7 +31,9 @@ export function syntheticProbeReleaseCatalog(targets = [...PROBE_RELEASE_TARGETS
         schemaVersion: 1,
         distributionReady: true,
         release: {
-            version: '9.9.9',
+            version: '0.0.1-alpha.999',
+            channel: 'testing',
+            prerelease: true,
             tag,
             sourceCommit: 'b'.repeat(40),
             bootstrapProtocol: 1,

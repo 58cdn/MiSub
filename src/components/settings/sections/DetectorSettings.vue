@@ -13,6 +13,7 @@
     import ProbeExecutionMetadata from '@/components/nodes/ProbeExecutionMetadata.vue';
     import DetectorPairingWizard from './DetectorPairingWizard.vue';
     import DetectorTable from './DetectorTable.vue';
+    import DetectorVersion from './DetectorVersion.vue';
     import DetectorRuntimeDeclaration from './DetectorRuntimeDeclaration.vue';
     import { validRuntimeTimestamp } from '@/utils/detector-runtime-view.js';
     import {
@@ -1196,7 +1197,10 @@
                         <div v-if="agent.version || agent.platform">
                             <dt>{{ L('版本 / 平台', 'Version / platform') }}</dt>
                             <dd class="break-words">
-                                {{ [agent.version, agent.platform].filter(Boolean).join(' · ') }}
+                                <DetectorVersion
+                                    :version="agent.version || ''"
+                                    :platform="agent.platform || ''"
+                                />
                             </dd>
                         </div>
                         <div v-if="agent.revokedAt">

@@ -1,3 +1,9 @@
+import {
+    isProbeVersion,
+    validProbeBuildFields,
+    probeBuildFields,
+} from '../shared/probe-version.js';
+
 const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?$(?![\s\S])/;
 const REVISION = /^(?:[a-f0-9]{40}|source)$(?![\s\S])/;
 const PLATFORMS = new Set([
@@ -23,7 +29,8 @@ export function executionSnapshotView(metadata, state) {
         Array.isArray(metadata) ||
         metadata.schemaVersion !== 1 ||
         metadata.source !== 'detector_reported' ||
-        !validVersion(metadata.wrapperVersion) ||
+        !isProbeVersion(metadata.wrapperVersion) ||
+        !validProbeBuildFields(metadata) ||
         typeof metadata.wrapperRevision !== 'string' ||
         !REVISION.test(metadata.wrapperRevision) ||
         !PLATFORMS.has(metadata.platform) ||
@@ -42,6 +49,7 @@ export function executionSnapshotView(metadata, state) {
             source: 'detector_reported',
             wrapperVersion: metadata.wrapperVersion,
             wrapperRevision: metadata.wrapperRevision,
+            ...probeBuildFields(metadata),
             platform: metadata.platform,
             ...(metadata.kernelLockVersion === undefined
                 ? {}

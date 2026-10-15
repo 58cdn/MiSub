@@ -1,4 +1,5 @@
 <script setup>
+    import DetectorVersion from './DetectorVersion.vue';
     import { nextTick } from 'vue';
     import { useI18n } from '@/i18n/index.js';
     import DetectorRuntimeDeclaration from './DetectorRuntimeDeclaration.vue';
@@ -157,10 +158,11 @@
                                 }"
                                 >{{ agentStatus(agent) }}</span
                             >
-                            <span v-else-if="column.key === 'version'" class="detector-long-text">{{
-                                [agent.version, agent.platform].filter(Boolean).join(' · ') ||
-                                L('未知', 'Unknown')
-                            }}</span>
+                            <DetectorVersion
+                                v-else-if="column.key === 'version'"
+                                :version="agent.version || ''"
+                                :platform="agent.platform || ''"
+                            />
                             <DetectorRuntimeDeclaration
                                 v-else-if="column.key === 'capabilities'"
                                 :capabilities="agent.capabilities"

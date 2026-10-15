@@ -1,7 +1,7 @@
 <script setup>
     import { computed } from 'vue';
     import { useVersionStore } from '../../stores/version';
-    import packageJson from '../../../package.json';
+    import { APP_BUILD } from '../../utils/app-build.js';
 
     defineProps({
         hideBranding: {
@@ -12,7 +12,7 @@
 
     const versionStore = useVersionStore();
     const currentYear = computed(() => new Date().getFullYear());
-    const currentVersion = packageJson.version;
+    const currentVersion = APP_BUILD.displayVersion;
 </script>
 
 <template>
@@ -35,10 +35,12 @@
                 <template v-else> Copyright © {{ currentYear }}. All Rights Reserved. </template>
             </p>
             <button
+                :title="`MiSub alpha · ${APP_BUILD.sourceCommit || 'SHA unknown'}${APP_BUILD.dirty ? ' · working tree modified' : ''}`"
+                data-testid="app-build-version"
                 @click="versionStore.openModal"
                 class="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/5 text-[9px] font-mono hover:text-indigo-500 dark:hover:text-indigo-400 transition-colors cursor-pointer opacity-80 hover:opacity-100 border border-transparent hover:border-indigo-500/30 touch-target-min"
             >
-                v{{ currentVersion }}
+                {{ currentVersion }} · alpha
             </button>
         </div>
     </footer>
