@@ -1,43 +1,148 @@
-name: 自动同步上游 MiSub
+name: Upstream sync PR
 
 on:
-  schedule:
-    # 每天北京时间 08:00（UTC 00:00）检查一次
-    - cron: '0 0 * * *'
-  workflow_dispatch:  # 可在 Actions 页面手动触发
+    schedule:
+        - cron: '0 0 * * *' # Daily at 08:00 Asia/Shanghai
+    workflow_dispatch:
 
 permissions:
-  contents: write
-  actions: write
+    contents: read
+
+concurrency:
+    group: upstream-sync
+    cancel-in-progress: false
 
 jobs:
-  sync:
-    runs-on: ubuntu-latest
-    steps:
-      - name: 检出仓库
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    prepare:
+        if: github.repository == '58cdn/MiSub' && github.ref == 'refs/heads/main'
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        permissions:
+            contents: write
+            pull-requests: write
+            statuses: write
+        outputs:
+            head: ${{ steps.sync.outputs.head }}
+            base: ${{ steps.sync.outputs.base }}
+            pr: ${{ steps.sync.outputs.pr }}
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '22'
+            - id: sync
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  RETRY_VALIDATION: ${{ github.event_name == 'workflow_dispatch' }}
+              run: node scripts/upstream-sync/sync.mjs
 
-      - name: 配置 git 身份
-        run: |
-          git config user.name "tdou@ChatGPT"
-          git config user.email "tdou@chatgpt.com"
+    validate:
+        needs: prepare
+        if: needs.prepare.outputs.head != ''
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        permissions:
+            contents: read
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  ref: ${{ needs.prepare.outputs.head }}
+                  fetch-depth: 0
+                  persist-credentials: false
+            - name: Verify the pinned merge candidate
+              env:
+                  HEAD_SHA: ${{ needs.prepare.outputs.head }}
+                  BASE_SHA: ${{ needs.prepare.outputs.base }}
+              run: |
+                  test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+                  git merge-base --is-ancestor "$BASE_SHA" HEAD
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '22'
+                  cache: npm
+            - name: Test automation and deployment scripts
+              run: |
+                  node --test tests/upstream-sync/*.test.mjs
+                  bash -n scripts/deploy-cloudflare-pages.sh
+                  bash -n scripts/provision-probe-d1.sh
+                  node --test tests/deployment/*.test.mjs
+            - run: npm ci
+            - run: npm run test:gates
+            - run: npm run test:ci
+              env:
+                  TEST_SOURCE_HEAD: ${{ needs.prepare.outputs.head }}
+            - name: Retain test completion evidence
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: upstream-sync-tests-${{ needs.prepare.outputs.head }}
+                  path: tmp/test-gates/
+                  if-no-files-found: error
+            - run: npm run build
 
-      - name: 同步上游 imzyb/MiSub
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          git remote add upstream https://github.com/imzyb/MiSub.git
-          git fetch upstream main
-          LOCAL=$(git rev-parse HEAD)
-          REMOTE=$(git rev-parse upstream/main)
-          if [ "$LOCAL" = "$REMOTE" ]; then
-            echo "✅ 已是最新，无需同步"
-          else
-            echo "🔁 检测到上游更新，开始同步..."
-            git merge upstream/main --no-edit
-            git push origin main
-            echo "✅ 已推送，显式触发 Cloudflare Pages GitHub Actions"
-            gh workflow run cloudflare-pages.yml --ref main
-          fi
+    publish:
+        needs: [prepare, validate, validate-windows]
+        if: always() && needs.prepare.result == 'success' && needs.prepare.outputs.head != ''
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        permissions:
+            contents: read
+            pull-requests: read
+            statuses: write
+        steps:
+            # Only the trusted workflow revision executes with status-write permission.
+            - uses: actions/checkout@v4
+              with:
+                  ref: ${{ github.sha }}
+                  persist-credentials: false
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '22'
+            - env:
+                  GH_TOKEN: ${{ github.token }}
+                  CANDIDATE_HEAD: ${{ needs.prepare.outputs.head }}
+                  CANDIDATE_BASE: ${{ needs.prepare.outputs.base }}
+                  CANDIDATE_PR: ${{ needs.prepare.outputs.pr }}
+                  TEST_RESULT: ${{ needs.validate.result == 'success' && needs.validate-windows.result == 'success' && 'success' || 'failure' }}
+              run: node scripts/upstream-sync/sync.mjs publish
+
+    validate-windows:
+        needs: prepare
+        if: needs.prepare.outputs.head != ''
+        runs-on: windows-latest
+        timeout-minutes: 30
+        permissions:
+            contents: read
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  ref: ${{ needs.prepare.outputs.head }}
+                  fetch-depth: 0
+                  persist-credentials: false
+            - name: Verify the pinned merge candidate
+              env:
+                  HEAD_SHA: ${{ needs.prepare.outputs.head }}
+                  BASE_SHA: ${{ needs.prepare.outputs.base }}
+              shell: pwsh
+              run: |
+                  if ((git rev-parse HEAD) -ne $env:HEAD_SHA) { throw 'Candidate SHA mismatch' }
+                  git merge-base --is-ancestor $env:BASE_SHA HEAD
+                  if ($LASTEXITCODE -ne 0) { throw 'Candidate does not include expected base' }
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: '22'
+                  cache: npm
+            - run: node --test tests/upstream-sync/*.test.mjs
+            - run: npm ci
+            - run: npm run test:ci
+              env:
+                  TEST_SOURCE_HEAD: ${{ needs.prepare.outputs.head }}
+            - name: Retain native Windows test completion evidence
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: upstream-sync-windows-tests-${{ needs.prepare.outputs.head }}
+                  path: tmp/test-gates/
+                  if-no-files-found: error
