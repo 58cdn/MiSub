@@ -49,7 +49,7 @@ func TestClaimCapabilitiesWireCompatibility(t *testing.T) {
 					wanted, _ := json.Marshal(map[string]any{
 						"version": version, "platform": runtime.GOOS + "-" + runtime.GOARCH,
 						"observationsVersion": 1,
-						"capabilities":        map[string]int{"schemaVersion": 1, "observationsVersion": 1},
+						"capabilities":        map[string]int{"schemaVersion": 1, "observationsVersion": 1, "catalogVersion": 1},
 					})
 					var expected map[string]json.RawMessage
 					if err := json.Unmarshal(wanted, &expected); err != nil || !reflect.DeepEqual(body, expected) {

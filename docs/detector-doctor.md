@@ -1,6 +1,6 @@
 # 检测器本地诊断
 
-`--doctor` 汇总检测器本机的构建信息、内核包摘要、安装记录和配置检查，适合提交脱敏的排错报告。本功能属于未发布源码；已发布的 MiSub Probe 0.2.0 不支持此命令，发行目录仍以已核实的版本为准。
+`--doctor` 汇总检测器本机的构建信息、内核包摘要、安装记录和配置检查，适合提交脱敏的排错报告。只读 doctor 已包含在 [MiSub Probe 0.0.1-alpha.1 测试预发行](https://github.com/58cdn/MiSub/releases/tag/probe-v0.0.1-alpha.1)中；安装目录仍为 `distributionReady=false`，发行成功不表示真实设备验收或推荐安装就绪。下述 `--doctor-mode=kernel-version` 属于后续源码扩展，alpha.1 资产保持原样。
 
 ```sh
 misub-probe --doctor
@@ -13,9 +13,9 @@ Windows 使用对应的本地可执行文件：
 .\misub-probe-windows-amd64.exe --doctor --json --config "$env:LOCALAPPDATA\MiSubProbe\probe.json"
 ```
 
-使用安装所属的普通用户运行。命令只接受 `--doctor`、可选的 `--json` 和 `--config`；其他命令或参数组合被拒绝，包括 `--doctor=false`、位置参数、`--self-test`、`--status`、配对和安装参数。
+使用安装所属的普通用户运行。诊断接受 `--doctor`、可选的 `--json`、`--config` 和 `--doctor-mode`（默认 `local`）。其他操作旗标即使取假值也会被拒绝，包括 `--doctor=false`、位置参数、`--self-test`、`--status`、配对和安装操作。单独的 `--doctor-mode`、未知模式和 `--server` 均拒绝执行。
 
-## 检查范围
+## 默认本地检查范围
 
 | 检查 ID            | 行为                                         | 结果含义                                                     |
 | ------------------ | -------------------------------------------- | ------------------------------------------------------------ |
@@ -61,6 +61,22 @@ Windows 使用对应的本地可执行文件：
 - 构建与平台：`build_metadata_invalid`、`build_source_unverified`、`platform_unsupported`。源码为dirty/unknown时保留该状态，不把已有基础修订当作当前源码的准确身份。
 
 退出码：`0` 表示已执行的本地检查通过；`1` 表示检查发现问题或报告写入失败；`2` 表示诊断参数冲突或命令行解析失败。参数冲突输出固定 `doctor_flags_conflict`，报告写入失败输出固定 `doctor_output_failed`。命令行解析器对未知参数的用法提示不属于 JSON 报告；不要把秘密放在命令行参数中。
+
+## 显式内核版本子模式（源码扩展）
+
+```sh
+misub-probe --doctor --doctor-mode=kernel-version --json
+```
+
+此选择允许创建私有临时目录、解压已校验的内嵌内核并运行一次固定的 `-v` 命令；随后等待进程退出并清理临时文件。它不读节点凭据、不领单、不请求 MiSub 或外部站点、不查询服务管理器。平台、内核材料或安装检查不满足前置条件时，内核执行为 `not_run / kernel_execution_prerequisite_failed`。配置检查仍单独报告，缺少配置不妨碍版本命令执行。
+
+复用 `--self-test` 的内核抽取与受控进程启动实现；不接受可执行路径、额外参数或网络目标。单次调用串行启动一个进程，执行上下文上限为 10 秒；取消会传递至进程，Windows 进程组清理最多另需 5 秒。内核摘要、文件读取与解压遵循既有大小上限，阻塞的本地文件系统操作不承诺硬性墙钟时限。子进程标准输出和错误均丢弃，报告仅包含固定诊断码，不输出内核正文、地址、路径或配置内容。
+
+选择此模式时使用 JSON schema `2`，`scope=local_kernel_execution`，新增 `mode=kernel-version` 与 `sideEffects=[private_temporary_files, embedded_kernel_version_process]`。成功状态是 `diagnostic_checks_passed`；任一检查失败仍为 `issues_found`。`kernel_execution` 成功码 `embedded_kernel_version_exited` 仅表示版本命令正常退出，不证明代理、核心就绪握手或节点可用；网络与服务仍为 `not_run`。失败码包括 `kernel_execution_failed`、`kernel_execution_cancelled`、`kernel_execution_timeout`、`kernel_execution_permission_denied`。底层被归一化的权限错误可能归入通用失败；不据此推断权限已足够。退出码继续为 0/1/2。默认 `local` 保持 schema 1 和原有语义。
+
+## 联网诊断取舍
+
+本轮不提供 doctor 外网子模式。配置服务器的鉴权通信可能写入领单/心跳状态；经节点的来源、服务和测速已有显式授权的任务路径及取消/限额机制。仅做无凭据的 HTTP 请求也不能证明实际配对或代理可用，因此不把它计作链路验收。若需要额外联网子模式，应先确定独立排错目的、固定目标、只读端点、流量限额和真实验收对象，再决定实施。该需求取舍仍由 #54 跟踪。
 
 ## 故障处理
 

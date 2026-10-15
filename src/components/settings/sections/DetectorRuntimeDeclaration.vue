@@ -2,6 +2,7 @@
     import { computed } from 'vue';
     import { useI18n } from '@/i18n/index.js';
     import { runtimeDeclarationView } from '@/utils/detector-runtime-view.js';
+    import { probeCapabilityCatalog } from '@/shared/probe-capability-catalog.js';
 
     const props = defineProps({
         capabilities: { default: null },
@@ -26,6 +27,7 @@
                 invalid: L('未知（记录无法识别）', 'Unknown (unreadable record)'),
             })[view.value.status]
     );
+    const catalog = computed(() => probeCapabilityCatalog(view.value.declaration?.catalogVersion));
     const explanation = computed(
         () =>
             ({
@@ -109,6 +111,46 @@
                         </dd>
                     </div>
                 </dl>
+                <div v-if="catalog" data-testid="detector-capability-catalog">
+                    <p>{{ L('自报能力目录 v1', 'Declared capability catalog v1') }}</p>
+                    <p>{{ L('检查类型：', 'Check types: ') }}{{ catalog.checks.join(', ') }}</p>
+                    <p>
+                        {{ L('来源：', 'Sources: ')
+                        }}{{ catalog.sources.map((item) => item.id).join(', ') }}
+                    </p>
+                    <p>
+                        {{
+                            L(
+                                'IPinfo 未配置；IPPure 为手动选择的实验来源。',
+                                'IPinfo is unconfigured; IPPure is an explicitly selected experimental source.'
+                            )
+                        }}
+                    </p>
+                    <p>
+                        {{ L('Provider 规则集：', 'Provider rule sets: ')
+                        }}{{
+                            catalog.providerRules
+                                .map((item) => `${item.id} v${item.ruleSetVersion}`)
+                                .join(', ')
+                        }}
+                    </p>
+                    <p>
+                        {{
+                            L(
+                                '目录表示代码支持范围。实际执行和来源结果请查看对应任务；记录过期时不能视为当前能力。',
+                                'The catalog describes code support. Consult each task for execution and source results; stale records do not establish current capabilities.'
+                            )
+                        }}
+                    </p>
+                </div>
+                <p v-else data-testid="detector-capability-catalog-unknown">
+                    {{
+                        L(
+                            '检查、来源与 Provider 规则目录未知（未声明或版本无法识别）。',
+                            'Check, source and provider rule catalog unknown (absent or unrecognized version).'
+                        )
+                    }}
+                </p>
                 <p class="runtime-note">
                     {{
                         L(

@@ -880,6 +880,7 @@ components:
       properties:
         schemaVersion: { type: integer, const: 1 }
         observationsVersion: { type: integer, const: 1 }
+        catalogVersion: { type: integer, const: 1, description: Optional explicit fixed catalog ID. Catalog 1 declares six check types, six source IDs (IPinfo unconfigured and IPPure experimental) and eight Provider rules at rule set 1; see probe-agent-runtime.md. Unknown or malformed IDs are discarded independently of observations eligibility. No client lists or targets are accepted. }
     AgentClaimDeclaration:
       type: object
       additionalProperties: false
@@ -889,6 +890,7 @@ components:
         state: { type: string, enum: [declared, legacy, missing, unsupported_schema, invalid_declaration, conflicting_versions] }
         schemaVersion: { type: [integer, 'null'], enum: [1, null] }
         observationsVersion: { type: [integer, 'null'], enum: [1, null] }
+        catalogVersion: { type: integer, const: 1, description: Present only for a recognized explicit catalog in a declared v1 claim. Refers to code support, not actual execution or scheduling authorization; has the same receivedAt and freshness as this claim. Omitted means unknown. }
         receivedAt: { type: integer, minimum: 1, maximum: 9007199254740991, description: Server receipt time of the claim, Unix milliseconds; never refreshed by a heartbeat. }
         freshness:
           type: string
