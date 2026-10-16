@@ -279,8 +279,7 @@ function parseVlessUrl(url) {
                 params.get('sxm');
             if (sxm === '0' || sxm === 'false') {
                 // 显式禁用
-            } else {
-                // 默认开启对 X25519-MLKEM768 混合密钥交换的支持（兼容新版 Xray-core / 3x-ui 服务端，且向下兼容旧版）
+            } else if (sxm === '1' || sxm === 'true') {
                 realityOpts['support-x25519mlkem768'] = true;
             }
             if (Object.keys(realityOpts).length > 0) {
@@ -437,7 +436,7 @@ function parseTrojanUrl(url) {
                 params.get('sxm');
             if (sxm === '0' || sxm === 'false') {
                 // 显式禁用
-            } else {
+            } else if (sxm === '1' || sxm === 'true') {
                 realityOpts['support-x25519mlkem768'] = true;
             }
             if (Object.keys(realityOpts).length > 0) {
@@ -1290,12 +1289,13 @@ function parseHttpsUrl(url, isTls = true) {
 
         const proxy = {
             name: name || `HTTPS-${server}`,
-            type: isTls ? 'https' : 'http',
+            type: 'http',
             server,
             port,
             username,
             password,
         };
+        if (isTls) proxy.tls = true;
 
         if (params.get('sni')) {
             proxy.servername = params.get('sni');
