@@ -1,3 +1,4 @@
+import { isRemoteSubscription } from '../../shared/subscription-kind.js';
 import { ref } from 'vue';
 import { useToastStore } from '../stores/toast.js';
 import { generateSubscriptionId } from '../utils/id.js';
@@ -60,7 +61,7 @@ export function useSubscriptionForms({ addSubscription, updateSubscription }) {
             showToast(t('subscriptions.urlRequired'), 'error');
             return;
         }
-        if (!/^https?:\/\//i.test(editingSubscription.value.url)) {
+        if (!isRemoteSubscription(editingSubscription.value)) {
             showToast(t('subscriptions.invalidUrl'), 'error');
             return;
         }

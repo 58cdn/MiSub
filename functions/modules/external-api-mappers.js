@@ -1,39 +1,4 @@
-const NODE_PROTOCOLS = [
-    'ss',
-    'ssr',
-    'vmess',
-    'vless',
-    'trojan',
-    'hysteria',
-    'hysteria2',
-    'hy',
-    'hy2',
-    'tuic',
-    'anytls',
-    'socks5',
-    'socks',
-    'snell',
-    'naive+https',
-    'naive+quic',
-    'naive+http',
-    'wireguard',
-];
-
-const NODE_PROTOCOL_REGEX = new RegExp(
-    `^(${NODE_PROTOCOLS.map((protocol) => protocol.replace('+', '\\+')).join('|')}):\\/\\/`,
-    'i'
-);
-
-export function isRemoteSubscription(item) {
-    return typeof item?.url === 'string' && /^https?:\/\//i.test(item.url.trim());
-}
-
-export function isManualNode(item) {
-    if (typeof item?.url !== 'string') return false;
-    const url = item.url.trim();
-    if (!url || /^https?:\/\//i.test(url)) return false;
-    return NODE_PROTOCOL_REGEX.test(url);
-}
+export { isManualNode, isRemoteSubscription } from '../../shared/subscription-kind.js';
 
 export function detectNodeProtocol(url = '') {
     const match = String(url || '')

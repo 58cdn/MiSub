@@ -1,3 +1,4 @@
+import { isRemoteSubscription } from '../../shared/subscription-kind.js';
 // FILE: src/composables/useManualNodes.js
 import { ref, computed, watch } from 'vue';
 import { storeToRefs } from 'pinia';
@@ -286,8 +287,8 @@ export function useManualNodes(markDirty) {
                 : reorderedVisibleNodes;
 
         // 1. Get all Subscriptions (to preserve them)
-        const currentSubscriptions = (allSubscriptions.value || []).filter(
-            (item) => item.url && /^https?:\/\//.test(item.url)
+        const currentSubscriptions = (allSubscriptions.value || []).filter((item) =>
+            isRemoteSubscription(item)
         );
 
         // 2. Combine Existing Subscriptions + New Ordered Manual Nodes

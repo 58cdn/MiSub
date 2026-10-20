@@ -1,3 +1,4 @@
+import { isRemoteSubscription } from '../../../shared/subscription-kind.js';
 import { StorageFactory } from '../../storage-adapter.js';
 import {
     migrateConfigSettings,
@@ -706,7 +707,8 @@ export async function handleMisubRequest(context) {
                             node &&
                             node.enabled &&
                             typeof node.url === 'string' &&
-                            !node.url.startsWith('http')
+                            !isRemoteSubscription(node) &&
+                            !targetMisubs.some((item) => item.id === node.id)
                         ) {
                             targetMisubs.push(node);
                         }
@@ -1006,9 +1008,7 @@ export async function handleMisubRequest(context) {
                 ruleLevel: ruleLevel || generationSettings.ruleLevel,
             }
         );
-        const sourceNames = targetMisubs
-            .filter((s) => typeof s?.url === 'string' && s.url.startsWith('http'))
-            .map((s) => s.name || s.url);
+        const sourceNames = targetMisubs.filter(isRemoteSubscription).map((s) => s.name || s.url);
         // 仅在至少一个订阅源真正从远程拉取成功时才刷新缓存时间
         // 如果没有 HTTP 订阅源（纯手动节点/过期订阅组），则始终写入缓存
         const stats = context.generationStats;
@@ -1043,8 +1043,7 @@ export async function handleMisubRequest(context) {
 
     const expectedRemoteNodeCount =
         targetMisubs.reduce((total, sub) => {
-            if (!sub?.enabled || typeof sub?.url !== 'string' || !sub.url.startsWith('http'))
-                return total;
+            if (!sub?.enabled || !isRemoteSubscription(sub)) return total;
             const knownCount = Math.max(
                 Number(sub.lastGoodNodeCount) || 0,
                 Number(sub.nodeCount) || 0
@@ -1052,7 +1051,7 @@ export async function handleMisubRequest(context) {
             return total + (Number.isFinite(knownCount) && knownCount > 0 ? knownCount : 0);
         }, 0) +
         targetMisubs.filter(
-            (sub) => sub?.enabled && typeof sub?.url === 'string' && !sub.url.startsWith('http')
+            (sub) => sub?.enabled && typeof sub?.url === 'string' && !isRemoteSubscription(sub)
         ).length;
 
     const { combinedNodeList, cacheHeaders } = await resolveNodeListWithCache({

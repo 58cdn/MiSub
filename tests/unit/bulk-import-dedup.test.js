@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { useDataStore } from '../../src/stores/useDataStore.js';
 import { useBulkImportLogic } from '../../src/composables/useBulkImportLogic.js';
@@ -93,5 +93,21 @@ ss://new@server5.com:10000`;
         expect(imported).toBeDefined();
         expect(dataStore.subscriptions).toHaveLength(3);
         expect(imported.url).toBe('http://alice:p%40ss%3Aword@proxy.example.com:8080#plain-http');
+    });
+    it('混合 HTTP 节点与认证订阅按类型交给对应导入回调', () => {
+        const addSubscriptionsFromBulk = vi.fn();
+        const addNodesFromBulk = vi.fn();
+        const importer = useBulkImportLogic({ addSubscriptionsFromBulk, addNodesFromBulk });
+        importer.handleBulkImport(
+            [
+                'https://source.example.invalid:8443/subscription',
+                'https://fixture:fixture@source.example.invalid:8443/api?token=fixture',
+                'http://fixture:fixture@proxy.example.invalid:80#HTTP',
+            ].join('\n'),
+            ''
+        );
+        expect(addSubscriptionsFromBulk.mock.calls[0][0]).toHaveLength(2);
+        expect(addNodesFromBulk.mock.calls[0][0]).toHaveLength(1);
+        expect(addNodesFromBulk.mock.calls[0][0][0].url).toContain('@proxy.example.invalid:80');
     });
 });

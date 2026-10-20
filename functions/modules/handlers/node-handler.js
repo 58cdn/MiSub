@@ -1,3 +1,4 @@
+import { isRemoteSubscription } from '../../../shared/subscription-kind.js';
 /**
  * 节点处理器模块
  * 处理节点数量统计、批量更新等节点相关API请求
@@ -142,7 +143,7 @@ export async function handleNodeCountRequest(request, env, options = {}) {
                 requestPolicy: subscriptionSnapshot.requestPolicy,
             };
         }
-        if (!subUrl || typeof subUrl !== 'string' || !/^https?:\/\//i.test(subUrl)) {
+        if (!isRemoteSubscription({ url: subUrl })) {
             return createErrorResponse('Invalid or missing url', 400);
         }
 
@@ -641,7 +642,7 @@ export async function handleBatchUpdateNodesRequest(request, env) {
                 subscriptionIds.includes(sub.id) &&
                 sub.enabled &&
                 sub.url &&
-                sub.url.startsWith('http')
+                isRemoteSubscription(sub)
         );
 
         if (targetSubscriptions.length === 0) {

@@ -1,5 +1,6 @@
+import { isRemoteSubscription } from '../../../shared/subscription-kind.js';
 export function buildAutoSortedSubscriptions(allSubscriptions, manualNodes) {
-    const subs = allSubscriptions.filter((s) => s.url && /^https?:\/\//.test(s.url));
+    const subs = allSubscriptions.filter((s) => isRemoteSubscription(s));
     const nodes = [...manualNodes];
 
     const regionKeywords = {

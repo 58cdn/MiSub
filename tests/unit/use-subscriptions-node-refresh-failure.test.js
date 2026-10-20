@@ -46,6 +46,24 @@ describe('useSubscriptions manual node refresh failures', () => {
         mocks.batchUpdateNodes.mockReset();
         mocks.handleError.mockReset();
     });
+    it('does not refresh an HTTP manual node as a subscription', async () => {
+        mocks.subscriptionsRef.value = [
+            {
+                id: 'http',
+                name: 'HTTP',
+                url: 'http://fixture:fixture@proxy.example.invalid:8080',
+                enabled: true,
+                nodeCount: 1,
+            },
+        ];
+        const { useSubscriptions } = await import('../../src/composables/useSubscriptions.js');
+        const markDirty = vi.fn();
+        const { handleUpdateNodeCount } = useSubscriptions(markDirty);
+        await handleUpdateNodeCount('http');
+        expect(mocks.fetchNodeCount).not.toHaveBeenCalled();
+        expect(markDirty).not.toHaveBeenCalled();
+        expect(mocks.subscriptionsRef.value[0].nodeCount).toBe(1);
+    });
 
     it('clears stale node count and traffic when protective node cache is disabled', async () => {
         const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});

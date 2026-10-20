@@ -8,6 +8,28 @@ describe('subscription-service 手动节点健壮性', () => {
     afterEach(() => {
         vi.unstubAllGlobals();
     });
+    it('HTTP 手动节点参与订阅输出且不作为订阅源发起抓取', async () => {
+        vi.stubGlobal('fetch', vi.fn());
+        const result = await generateCombinedNodeList(
+            {},
+            { enableAccessLog: false },
+            'ClashMeta',
+            [
+                {
+                    id: 'http',
+                    name: 'HTTP node',
+                    enabled: true,
+                    url: 'http://fixture:fixture@proxy.example.invalid:8080#HTTP',
+                },
+            ],
+            '',
+            { enableManualNodes: true, enableSubscriptions: true },
+            false
+        );
+        expect(result).toContain('http://fixture:fixture@proxy.example.invalid:8080');
+        expect(result.split('\n').filter(Boolean)).toHaveLength(1);
+        expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
 
     it('应在包含异常节点时跳过坏节点并继续生成订阅', async () => {
         const misubs = [
@@ -159,10 +181,12 @@ describe('subscription-service 手动节点健壮性', () => {
     });
 
     it('Clash HTTP proxy URLs parse as supported proxy schemes', () => {
-        expect(parseNodeList('proxies:\n  - name: office-http\n    type: http\n    server: 192.0.2.10\n    port: 8080\n    username: alice\n    password: secret\n'))
-            .toHaveLength(1);
+        expect(
+            parseNodeList(
+                'proxies:\n  - name: office-http\n    type: http\n    server: 192.0.2.10\n    port: 8080\n    username: alice\n    password: secret\n'
+            )
+        ).toHaveLength(1);
     });
-
 
     it('HTTP 订阅源返回 SSR 节点时，添加订阅名前缀和国旗后仍应保持可解析', async () => {
         const ssrUrl = convertClashProxyToUrl({

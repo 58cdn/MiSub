@@ -1,4 +1,4 @@
-import { NODE_PROTOCOL_REGEX } from '@/constants/nodeProtocols.js';
+export { isManualNode as isManualNodeEntry } from '../../../shared/subscription-kind.js';
 import { DEFAULT_GROUP_KEY } from './groups.js';
 
 export const countryCodeMap = {
@@ -57,25 +57,6 @@ export const countryCodeMap = {
     ie: ['🇮🇪', '爱尔兰', '愛爾蘭'],
     nz: ['🇳🇿', '新西兰', '紐西蘭'],
 };
-
-export function isManualNodeEntry(item) {
-    if (!item.url) return false;
-    if (typeof item.url !== 'string') return false;
-
-    const trimmedUrl = item.url.trim();
-    if (!trimmedUrl) return false;
-
-    if (!/^https?:\/\//i.test(trimmedUrl)) return NODE_PROTOCOL_REGEX.test(trimmedUrl);
-
-    // HTTP(S) endpoints are manual proxy nodes only when the URI authority
-    // contains userinfo and a host:port. Plain HTTP(S) URLs remain subscriptions.
-    try {
-        const parsed = new URL(trimmedUrl);
-        return Boolean(parsed.username && parsed.password && parsed.hostname && parsed.port);
-    } catch {
-        return false;
-    }
-}
 
 export function filterManualNodes(nodes, searchTerm, activeColorFilter) {
     let filtered = nodes;

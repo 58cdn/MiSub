@@ -1,3 +1,4 @@
+import { isRemoteSubscription } from '../../shared/subscription-kind.js';
 /**
  * 订阅处理服务
  * @author MiSub Team
@@ -683,10 +684,9 @@ export async function generateCombinedNodeList(
     };
 
     // 重构后的手动节点处理逻辑
-    const manualSubSourceGroups = misubs.filter((sub) => {
-        const url = typeof sub?.url === 'string' ? sub.url.trim() : '';
-        return Boolean(url) && !/^https?:\/\//i.test(url);
-    });
+    const manualSubSourceGroups = misubs.filter(
+        (sub) => typeof sub?.url === 'string' && sub.url.trim() && !isRemoteSubscription(sub)
+    );
 
     let manualProcessedLines = [];
     for (const sub of manualSubSourceGroups) {
@@ -721,13 +721,7 @@ export async function generateCombinedNodeList(
 
     const processedManualNodeList = manualProcessedLines.join('\n');
 
-    const httpSubs = misubs.filter(
-        (sub) =>
-            sub &&
-            sub.url &&
-            /^https?:\/\//i.test(sub.url) &&
-            !/^https?:\/\/[^/?#]+:\d+\/?#/i.test(sub.url)
-    );
+    const httpSubs = misubs.filter(isRemoteSubscription);
     const limiter = createConcurrencyLimiter(FETCH_CONFIG.CONCURRENCY);
     const storage = context?.storage;
     const atomic = isAtomicSubscriptionStorage(storage);

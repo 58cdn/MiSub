@@ -232,6 +232,36 @@ describe('handleTelegramWebhook', () => {
             infoSpy.mockRestore();
         }
     });
+    it('imports HTTP proxy messages into manual nodes without subscription fetches', async () => {
+        const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+        const { state, adapter } = createState();
+        state.settings.telegram_push_config.user_bindings = { 1: 'profile-1' };
+        createAdapter.mockReturnValue(adapter);
+        const { handleTelegramWebhook } =
+            await import('../../functions/modules/handlers/telegram-webhook-handler.js');
+        try {
+            await handleTelegramWebhook(
+                createRequest({
+                    message: {
+                        text: 'http://fixture:fixture@proxy.example.invalid:8080#HTTP',
+                        chat: { id: 2001 },
+                        from: { id: 1 },
+                    },
+                }),
+                { MISUB_KV: null }
+            );
+            expect(state.subscriptions).toHaveLength(1);
+            expect(state.profiles[0].manualNodes).toEqual([state.subscriptions[0].id]);
+            expect(state.profiles[0].subscriptions).toEqual([]);
+            expect(
+                global.fetch.mock.calls.every(([url]) =>
+                    String(url).startsWith('https://api.telegram.org/')
+                )
+            ).toBe(true);
+        } finally {
+            infoSpy.mockRestore();
+        }
+    });
 
     it('keeps the original command surface in help output', async () => {
         const { adapter } = createState();

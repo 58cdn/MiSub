@@ -71,8 +71,15 @@ export function applyMihomoChainProxy(model, { enableDialerProxy = true } = {}) 
             typeof group.options === 'object' && group.options !== null ? { ...group.options } : {},
     }));
 
-    const usedNames = new Set(baseNames);
-    const reservedNames = new Set();
+    const baseNameSet = new Set(baseNames);
+    const usedNames = new Set([
+        ...baseNames,
+        ...model.groups.map((group) => group.name),
+        ...chainConfigs.flatMap((config) => [
+            String(config?.group || '').trim(),
+            String(config?.entry || '').trim(),
+        ]),
+    ]);
     const handledGroups = new Set();
     const landingNames = new Set(
         chainConfigs.map((config) => String(config?.group || '').trim()).filter(Boolean)
@@ -85,6 +92,8 @@ export function applyMihomoChainProxy(model, { enableDialerProxy = true } = {}) 
             !landingName ||
             !entryName ||
             landingName === entryName ||
+            baseNameSet.has(landingName) ||
+            baseNameSet.has(entryName) ||
             handledGroups.has(landingName) ||
             landingNames.has(entryName)
         ) {
@@ -113,7 +122,6 @@ export function applyMihomoChainProxy(model, { enableDialerProxy = true } = {}) 
                 name = `${prefix}${baseName} (${suffix++})`;
             }
             usedNames.add(name);
-            reservedNames.add(name);
             return { ...proxy, name, 'dialer-proxy': entryName };
         });
 
@@ -124,10 +132,9 @@ export function applyMihomoChainProxy(model, { enableDialerProxy = true } = {}) 
         // 成员已物化，移除动态筛选，避免客户端再次纳入其它节点或提供商节点。
         removeDynamicMemberOptions(landingGroup);
 
-        // 前置组只能引用原始节点：引用落地组或落地副本都会形成 dialer-proxy 环路。
-        entryGroup.members = entryGroup.members.filter(
-            (member) => member !== landingName && !reservedNames.has(member)
-        );
+        // 仅保留原始节点，阻断经其它策略组间接回到落地副本的路径。
+        entryGroup.members = entryGroup.members.filter((member) => baseNameSet.has(member));
+        if (entryGroup.members.length === 0) entryGroup.members = [...baseNames];
         removeDynamicMemberOptions(entryGroup);
     });
 

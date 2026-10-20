@@ -49,6 +49,55 @@ describe('handleMisubRequest regression coverage', () => {
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
     });
+    it('downloads an HTTP node referenced by both profile lists once without fetching its URI', async () => {
+        const adapter = createStorageAdapter({
+            settings: {
+                profileToken: 'stable-token',
+                enableFlagEmoji: false,
+                enableTrafficNode: false,
+            },
+            subscriptions: [
+                {
+                    id: 'http',
+                    enabled: true,
+                    name: 'HTTP node',
+                    url: 'http://fixture:fixture@proxy.example.invalid:8080#HTTP',
+                },
+            ],
+            profiles: [
+                {
+                    id: 'profile-http',
+                    enabled: true,
+                    subscriptions: ['http'],
+                    manualNodes: ['http'],
+                },
+            ],
+        });
+        createAdapter.mockReturnValue(adapter);
+        vi.stubGlobal('fetch', vi.fn());
+        const logSpy = silenceExpectedRequestLogs();
+        try {
+            const { handleMisubRequest } =
+                await import('../../functions/modules/subscription/main-handler.js');
+            const response = await handleMisubRequest({
+                request: new Request(
+                    'https://misub.example/stable-token/profile-http?target=nodes&refresh=1',
+                    {
+                        headers: { 'User-Agent': 'ClashMeta' },
+                    }
+                ),
+                env: {},
+                waitUntil: vi.fn(),
+            });
+            expect(response.status).toBe(200);
+            const nodes = (await response.text()).split('\n').filter(Boolean);
+            expect(nodes).toHaveLength(1);
+            expect(nodes[0]).toContain('http://fixture:fixture@proxy.example.invalid:8080');
+            expect(globalThis.fetch).not.toHaveBeenCalled();
+        } finally {
+            logSpy.mockRestore();
+        }
+    });
 
     it('uses the real storage adapter for per-subscription protective node cache', async () => {
         const subscriptions = [

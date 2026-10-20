@@ -1,6 +1,7 @@
 /** * Dashboard 主容器组件 * @author MiSub Team */
 
 <script setup>
+    import { isRemoteSubscription } from '../../../../shared/subscription-kind.js';
     import { ref, onMounted, onUnmounted } from 'vue';
     import { saveMisubs } from '../../../lib/api.js';
     import { useToastStore } from '../../../stores/toast.js';
@@ -117,12 +118,8 @@
         isLoading.value = true;
         if (props.data) {
             const subsData = props.data.misubs || [];
-            initialSubs.value = subsData.filter(
-                (item) => item.url && /^https?:\/\//.test(item.url)
-            );
-            initialNodes.value = subsData.filter(
-                (item) => !item.url || !/^https?:\/\//.test(item.url)
-            );
+            initialSubs.value = subsData.filter((item) => isRemoteSubscription(item));
+            initialNodes.value = subsData.filter((item) => !isRemoteSubscription(item));
             initialProfiles.value = props.data.profiles || [];
             config.value = props.data.config || {};
             initializeProfiles();

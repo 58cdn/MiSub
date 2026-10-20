@@ -17,6 +17,26 @@ describe('useManualNodes group normalization', () => {
         setActivePinia(createPinia());
         localStorage.clear();
     });
+    it('HTTP 手动节点排序不会重复纳入订阅源列表', () => {
+        const store = useDataStore();
+        const node = {
+            id: 'http',
+            name: 'HTTP',
+            url: 'http://fixture:fixture@proxy.example.invalid:8080',
+            enabled: true,
+        };
+        const sub = {
+            id: 'sub',
+            name: 'Airport',
+            url: 'https://example.invalid/sub',
+            enabled: true,
+        };
+        store.subscriptions = [sub, node];
+        const manual = useManualNodes(vi.fn());
+        expect(manual.manualNodes.value.map((item) => item.id)).toEqual(['http']);
+        manual.reorderManualNodes([node]);
+        expect(store.subscriptions.map((item) => item.id)).toEqual(['http', 'sub']);
+    });
 
     it('保存单个手动节点时规范化分组名', async () => {
         const markDirty = vi.fn();
