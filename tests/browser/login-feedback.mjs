@@ -98,6 +98,14 @@ async function fresh(path = '/fdc') {
             if (loginCalled && dataMode === '503')
                 return json({ error: 'synthetic unavailable' }, 503);
             if (loginCalled && dataMode === 'network') return route.abort('failed');
+            if (loginCalled && dataMode === 'invalid')
+                return json({
+                    ...snapshot,
+                    misubs: [
+                        { id: 'duplicate', url: 'ss://synthetic-private-one' },
+                        { id: 'duplicate', url: 'ss://synthetic-private-two' },
+                    ],
+                });
             return json(loggedIn ? snapshot : { authenticated: false });
         }
         if (url.pathname === '/api/login') {
@@ -155,7 +163,7 @@ async function visibleError(pattern) {
 try {
     await fresh();
     await submit();
-    await visibleError(/session/i);
+    await visibleError(/auth failed.*log in again/i);
     await page.screenshot({ path: resolve(evidence, 'session-unconfirmed.png') });
     report.checks.push(
         '200 login followed by authenticated:false keeps a visible session error on /fdc'
@@ -182,9 +190,17 @@ try {
         await fresh();
         dataMode = value;
         await submit();
-        await visibleError(/session/i);
-        report.checks.push(`Session confirmation ${value} preserves the login error`);
+        await visibleError(value === '503' ? /HTTP 503: synthetic unavailable/ : /network|fetch/i);
+        report.checks.push(`Session confirmation ${value} preserves the specific request error`);
     }
+    await fresh();
+    dataMode = 'invalid';
+    await submit();
+    await visibleError(/incomplete or inconsistent data/i);
+    assert.doesNotMatch(await page.locator('body').innerText(), /synthetic-private/);
+    report.checks.push(
+        'Invalid session data shows a dedicated error without exposing node contents'
+    );
     for (const value of ['network', 'pending']) {
         await fresh();
         protocolMode = value;
