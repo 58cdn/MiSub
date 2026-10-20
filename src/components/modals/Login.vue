@@ -63,7 +63,7 @@
                 error.value = retrySeconds.value ? '' : err.message || t('login.unknownError');
             } else {
                 error.value =
-                    err.status === 503
+                    err.status === 503 && err.code !== 'session_data_unavailable'
                         ? t('notifications.serviceError')
                         : err.message || t('login.unknownError');
             }
