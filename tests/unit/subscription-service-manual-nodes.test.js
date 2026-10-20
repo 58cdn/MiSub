@@ -25,7 +25,7 @@ describe('subscription-service 手动节点健壮性', () => {
             {},
             { enableAccessLog: false },
             'ClashMeta',
-            [{ id: 'tls', name: 'TLS HTTP', enabled: true, url }],
+            [{ id: 'tls', name: 'TLS HTTP', enabled: true, url, type: 'manual_node' }],
             '',
             { enableManualNodes: true, enableSubscriptions: true },
             false
@@ -44,6 +44,7 @@ describe('subscription-service 手动节点健壮性', () => {
             [
                 {
                     id: 'http',
+                    type: 'manual_node',
                     name: 'HTTP node',
                     enabled: true,
                     url: 'http://fixture:fixture@proxy.example.invalid:8080#HTTP',

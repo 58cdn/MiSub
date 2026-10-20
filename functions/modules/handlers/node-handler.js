@@ -143,7 +143,7 @@ export async function handleNodeCountRequest(request, env, options = {}) {
                 requestPolicy: subscriptionSnapshot.requestPolicy,
             };
         }
-        if (!isRemoteSubscription({ url: subUrl })) {
+        if (!isRemoteSubscription(observedSub || { ...requestData, url: subUrl })) {
             return createErrorResponse('Invalid or missing url', 400);
         }
 

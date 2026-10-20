@@ -16,7 +16,10 @@ import {
     buildGroupedManualNodes,
     normalizeManualNodeGroupName,
 } from '../../src/composables/manual-nodes/groups.js';
-import { filterManualNodes, isManualNodeEntry } from '../../src/composables/manual-nodes/filters.js';
+import {
+    filterManualNodes,
+    isManualNodeEntry,
+} from '../../src/composables/manual-nodes/filters.js';
 import { messages } from '../../src/i18n/messages.js';
 import { setLocale } from '../../src/i18n/index.js';
 
@@ -61,8 +64,13 @@ describe('未分组过滤与语言无关', () => {
         expect(normalizeManualNodeGroupName(NODES[1].group)).toBe('');
     });
 
-    it('HTTP(S) proxy URI with credentials is listed as a manual node, not a subscription URL', () => {
-        const node = { id: 'http-proxy', name: 'HTTP proxy', url: 'http://alice:secret@proxy.example.com:8080#node' };
+    it('an explicitly typed HTTP proxy is listed as a manual node', () => {
+        const node = {
+            id: 'http-proxy',
+            name: 'HTTP proxy',
+            type: 'manual_node',
+            url: 'http://alice:secret@proxy.example.com:8080#node',
+        };
         expect(isManualNodeEntry(node)).toBe(true);
         expect(filterManualNodes([node], '', '')).toEqual([node]);
     });

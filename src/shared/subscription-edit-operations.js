@@ -1,6 +1,7 @@
 export const SUBSCRIPTION_EDIT_FIELDS = Object.freeze([
     'name',
     'url',
+    'type',
     'enabled',
     'exclude',
     'customUserAgent',
@@ -56,6 +57,7 @@ export const RUNTIME_FIELDS = Object.freeze([
 
 const observationConfigFields = [
     'url',
+    'type',
     'fetchProxy',
     'customUserAgent',
     'plusAsSpace',

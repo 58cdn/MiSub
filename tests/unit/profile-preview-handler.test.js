@@ -96,6 +96,7 @@ describe('handleProfileMode preview transforms', () => {
                 enabled: true,
                 url: 'http://alice:***@192.0.2.10:8080/#office-http',
                 name: 'Office HTTP',
+                type: 'manual_node',
             },
         ];
         createAdapter.mockReturnValue({
@@ -137,18 +138,19 @@ describe('handleProfileMode preview transforms', () => {
             false
         );
     });
-    it('previews manual HTTP references once and fetches an explicit-port source', async () => {
+    it('previews typed HTTP nodes once and keeps an untyped root Basic Auth URL in the source fetch path', async () => {
         const httpNode = {
             id: 'http',
             enabled: true,
             name: 'HTTP node',
+            type: 'manual_node',
             url: 'http://fixture:fixture@proxy.example.invalid:8080#HTTP',
         };
         const source = {
             id: 'sub',
             enabled: true,
             name: 'Source',
-            url: 'https://example.invalid:8443/sub',
+            url: 'https://fixture:fixture@source.example.invalid:443/',
         };
         createAdapter.mockReturnValue({
             getProfileById: vi.fn().mockResolvedValue({

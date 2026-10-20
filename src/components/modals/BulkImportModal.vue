@@ -84,6 +84,7 @@
 
             const nodes = (parseResult.data?.nodes || []).map((node) => ({
                 id: generateNodeId(),
+                type: 'manual_node',
                 name: node.name || 'Unknown',
                 url: node.url,
                 enabled: true,

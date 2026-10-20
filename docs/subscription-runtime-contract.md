@@ -32,6 +32,8 @@ authority 是实例身份标签，不是凭据。严格模式在读取设置缓�
 
 集合为 subscriptions 或 profiles。配置白名单在 [subscription-edit-operations.js](../src/shared/subscription-edit-operations.js)，不允许普通编辑写节点数、流量、内部生成标识或排序序号。未知旧字段保留在权威数据中。上限为每集合 1000 项、每请求 2000 操作、规范 JSON 256 KiB。
 
+subscriptions 记录的可编辑 `type` 只接受 `subscription` 或 `manual_node`，保留用户选择的输入类型。缺少该字段的历史 HTTP(S) 记录继续作为订阅源，历史非 HTTP 节点按协议识别；类型参与运行观测身份校验。字段保存在原 JSON 记录中，不需要 schema 变更或自动回填。
+
 外部 API 保留已有启用开关和 Bearer token 检查；新写入需要 operationId/baseVersion，可通过 JSON 或 `X-MiSub-Operation-Id`、`X-MiSub-Epoch`、`X-MiSub-Revision` 传递。创建必须由客户端提供稳定 ID。代理/UA 字段映射到共享规范字段；组引用仍区分远程订阅和手动节点。
 
 | 状态      | 含义                                                            |

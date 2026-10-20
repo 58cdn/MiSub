@@ -28,7 +28,11 @@ describe('HTTP node Probe inventory', () => {
             'client-fingerprint': 'chrome',
             alpn: ['h2', 'http/1.1'],
         });
-        fixture.nodes = [{ id: 'tls', name: 'TLS HTTP', url }];
+        fixture.nodes = [
+            { id: 'tls', name: 'TLS HTTP', url, type: 'manual_node' },
+            { id: 'basic-auth', name: 'Source', url, type: 'subscription' },
+            { id: 'legacy-source', name: 'Legacy source', url },
+        ];
         const selected = await handleProbeRequest.loadManualNodes({});
         expect(selected.map((node) => node.id)).toEqual(['tls']);
         const [prepared] = await handleProbeRequest.prepareNodes(selected);
@@ -44,7 +48,12 @@ describe('HTTP node Probe inventory', () => {
     });
     it('loads and prepares HTTP nodes while excluding subscription sources', async () => {
         fixture.nodes = [
-            { id: 'http', name: 'HTTP', url: 'http://fixture:fixture@proxy.example.invalid:8080' },
+            {
+                id: 'http',
+                name: 'HTTP',
+                type: 'manual_node',
+                url: 'http://fixture:fixture@proxy.example.invalid:8080',
+            },
             { id: 'sub', name: 'Source', url: 'https://source.example.invalid:8443/sub' },
         ];
         const selected = await handleProbeRequest.loadManualNodes({});

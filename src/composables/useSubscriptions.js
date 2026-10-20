@@ -293,7 +293,7 @@ export function useSubscriptions(markDirty, { statusFilter, configurablePaginati
     }
 
     function addSubscription(sub) {
-        dataStore.addSubscription(sub);
+        dataStore.addSubscription({ ...sub, type: 'subscription' });
         subsCurrentPage.value = 1;
         handleUpdateNodeCount(sub.id);
         markDirty();
@@ -304,7 +304,7 @@ export function useSubscriptions(markDirty, { statusFilter, configurablePaginati
         const originalSub = subscriptions.value.find((s) => s.id === updatedSub.id);
         if (originalSub) {
             const urlChanged = originalSub.url !== updatedSub.url;
-            dataStore.updateSubscription(updatedSub.id, updatedSub);
+            dataStore.updateSubscription(updatedSub.id, { ...updatedSub, type: 'subscription' });
 
             if (urlChanged) {
                 // Re-fetch from filtered list to get the reactive object
@@ -351,7 +351,7 @@ export function useSubscriptions(markDirty, { statusFilter, configurablePaginati
     async function addSubscriptionsFromBulk(subs) {
         // Reverse insert to maintain order
         for (let i = subs.length - 1; i >= 0; i--) {
-            dataStore.addSubscription(subs[i]);
+            dataStore.addSubscription({ ...subs[i], type: 'subscription' });
         }
         markDirty();
 

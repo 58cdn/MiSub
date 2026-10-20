@@ -9,10 +9,8 @@ export function isHttpProxyUrl(value) {
     if (!authority || !/:\d+$/.test(authority)) return false;
     try {
         const parsed = new URL(url);
-        // 节点可携带转换器使用的协议参数；路径或其它查询参数仍按订阅源处理。
+        // 显式手动 HTTP 节点使用根路径，并可携带转换器支持的协议参数。
         return Boolean(
-            parsed.username &&
-            parsed.password &&
             parsed.hostname &&
             parsed.pathname === '/' &&
             [...parsed.searchParams.keys()].every((key) => HTTP_PROXY_QUERY_KEYS.has(key))
@@ -24,14 +22,15 @@ export function isHttpProxyUrl(value) {
 
 export function isManualNode(item) {
     if (typeof item?.url !== 'string') return false;
+    if (item.type === 'subscription') return false;
     const url = item.url.trim();
-    return NODE_PROTOCOL_REGEX.test(url) || isHttpProxyUrl(url);
+    return NODE_PROTOCOL_REGEX.test(url) || (item.type === 'manual_node' && isHttpProxyUrl(url));
 }
 
 export function isRemoteSubscription(item) {
     return (
         typeof item?.url === 'string' &&
-        /^https?:\/\//i.test(item.url.trim()) &&
-        !isHttpProxyUrl(item.url)
+        item.type !== 'manual_node' &&
+        /^https?:\/\//i.test(item.url.trim())
     );
 }

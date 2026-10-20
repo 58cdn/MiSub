@@ -23,6 +23,7 @@ describe('useManualNodes group normalization', () => {
             id: 'http',
             name: 'HTTP',
             url: 'http://fixture:fixture@proxy.example.invalid:8080',
+            type: 'manual_node',
             enabled: true,
         };
         const sub = {

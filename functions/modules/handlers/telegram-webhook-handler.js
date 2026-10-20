@@ -186,7 +186,7 @@ function extractNodeName(url) {
 /**
  * 提取节点链接（支持多种协议）
  */
-function extractNodeUrls(text) {
+function extractNodeUrls(text, allowHttp = true) {
     const protocols = [
         'ss://',
         'ssr://',
@@ -209,7 +209,7 @@ function extractNodeUrls(text) {
     for (const line of lines) {
         const trimmed = line.trim();
         const lowerTrimmed = trimmed.toLowerCase();
-        if (isHttpProxyUrl(trimmed)) {
+        if (allowHttp && isHttpProxyUrl(trimmed)) {
             urls.push(trimmed);
             continue;
         }
@@ -341,6 +341,7 @@ async function handleFileInput(chatId, message, userId, config, env, requestCach
             );
             return await handleNodeInput(chatId, nodeLines, userId, env, requestCache, {
                 source: 'file',
+                type: 'manual_node',
                 fileName,
             });
         }
@@ -1102,7 +1103,7 @@ async function handleListCommand(
         for (let i = startIdx; i < endIdx; i++) {
             const node = userNodes[i];
             const nodeUrl = node.url || '';
-            const isSub = isRemoteSubscription({ url: nodeUrl });
+            const isSub = isRemoteSubscription(node);
 
             let protocol = '未知';
             if (isSub) {
@@ -2025,6 +2026,7 @@ async function handleImportCommand(chatId, userId, args, env) {
         for (const url of nodeUrls) {
             const node = {
                 id: generateId(),
+                type: 'manual_node',
                 name: extractNodeName(url),
                 url: url,
                 enabled: true,
@@ -2361,7 +2363,7 @@ async function handleNodeInput(chatId, text, userId, env, requestCache = null, o
         }
 
         // 1. 尝试提取节点链接 (SS, VLESS 等)
-        let nodeUrls = extractNodeUrls(text);
+        let nodeUrls = extractNodeUrls(text, options.type === 'manual_node');
         let importType = 'node'; // node | subscription
 
         // 2. 提取订阅链接（支持一条消息里多行/多个订阅链接）
@@ -2393,8 +2395,7 @@ async function handleNodeInput(chatId, text, userId, env, requestCache = null, o
         const allSubscriptions = await getCachedSubscriptions(env, cache);
 
         // 3. 批量处理与去重
-        // 订阅链接与节点链接一并处理：订阅（http/https）存为订阅源，节点存为手动节点，
-        // 前端通过 URL 协议区分。这样「一条消息发多个订阅链接」可一次全部导入。
+        // 文本 HTTP 链接默认作为订阅；已解析的节点文件保留手动节点类型。
         const allUrls =
             importType === 'subscription'
                 ? [...subscriptionUrls]
@@ -2404,19 +2405,22 @@ async function handleNodeInput(chatId, text, userId, env, requestCache = null, o
 
         for (const url of allUrls) {
             // 去重检测
-            const exists = allSubscriptions.some((sub) => sub.url === url);
+            const isSubscription = subscriptionUrls.includes(url);
+            const exists = allSubscriptions.some(
+                (sub) => sub.url === url && isRemoteSubscription(sub) === isSubscription
+            );
             if (exists) {
                 ignoredUrls.push(url);
                 continue;
             }
 
-            const isSubscription = isRemoteSubscription({ url });
             const defaultName = isSubscription
                 ? `订阅源 ${new URL(url).hostname}`
                 : extractNodeName(url);
 
             const node = {
                 id: generateId(),
+                type: isSubscription ? 'subscription' : 'manual_node',
                 name: defaultName,
                 url: url,
                 enabled: true,
@@ -2426,10 +2430,6 @@ async function handleNodeInput(chatId, text, userId, env, requestCache = null, o
                 telegram_user_id: userId,
                 created_at: new Date().toISOString(),
             };
-
-            // 注意：MiSub 中订阅源也通过 KV_KEY_SUBS 存储
-            // 前端通过 URL 格式区分是“手动节点”还是“订阅源”
-            // 订阅源 -> type: subscription or implied by http protocol
 
             allSubscriptions.unshift(node);
             addedNodes.push(node);

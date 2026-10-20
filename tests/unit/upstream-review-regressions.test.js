@@ -40,14 +40,19 @@ describe('upstream integration acceptance', () => {
         [null, false, false],
         ['', false, false],
         [42, false, false],
-    ])('classifies %s consistently across UI and API', (url, manual, remote) => {
-        expect(isManualNodeEntry({ url })).toBe(manual);
-        expect(isManualNode({ url })).toBe(manual);
-        expect(isRemoteSubscription({ url })).toBe(remote);
-    });
+    ])(
+        'classifies explicitly imported %s consistently across UI and API',
+        (url, manual, remote) => {
+            const item = { url, ...(manual ? { type: 'manual_node' } : {}) };
+            expect(isManualNodeEntry(item)).toBe(manual);
+            expect(isManualNode(item)).toBe(manual);
+            expect(isRemoteSubscription(item)).toBe(remote);
+        }
+    );
     it('keeps HTTP nodes exactly once when manual nodes are automatically reordered', () => {
         const node = {
             id: 'http',
+            type: 'manual_node',
             name: 'HK',
             url: 'http://fixture:fixture@proxy.example.invalid:8080',
         };
@@ -58,7 +63,11 @@ describe('upstream integration acceptance', () => {
         ]);
     });
     it('uses the same HTTP node classification in the UI and probe inventory', () => {
-        const node = { id: 'fixture', url: 'http://fixture:fixture@proxy.example.invalid:8080' };
+        const node = {
+            id: 'fixture',
+            type: 'manual_node',
+            url: 'http://fixture:fixture@proxy.example.invalid:8080',
+        };
         expect(isManualNodeEntry(node)).toBe(true);
         expect(isManualNode(node)).toBe(isManualNodeEntry(node));
     });

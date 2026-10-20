@@ -32,6 +32,7 @@ describe('handleBatchUpdateNodesRequest', () => {
             {
                 id: 'http',
                 name: 'HTTP',
+                type: 'manual_node',
                 url: 'http://fixture:fixture@proxy.example.invalid:8080',
                 enabled: true,
             },

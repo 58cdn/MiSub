@@ -61,15 +61,16 @@ export function useSubscriptionForms({ addSubscription, updateSubscription }) {
             showToast(t('subscriptions.urlRequired'), 'error');
             return;
         }
-        if (!isRemoteSubscription(editingSubscription.value)) {
+        const subscription = { ...editingSubscription.value, type: 'subscription' };
+        if (!isRemoteSubscription(subscription)) {
             showToast(t('subscriptions.invalidUrl'), 'error');
             return;
         }
 
         if (isNew.value) {
-            addSubscription({ ...editingSubscription.value, id: generateSubscriptionId() });
+            addSubscription({ ...subscription, id: generateSubscriptionId() });
         } else {
-            updateSubscription(editingSubscription.value);
+            updateSubscription(subscription);
         }
         showModal.value = false;
     };

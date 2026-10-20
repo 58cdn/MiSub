@@ -232,7 +232,7 @@ describe('handleTelegramWebhook', () => {
             infoSpy.mockRestore();
         }
     });
-    it('imports HTTP proxy messages into manual nodes without subscription fetches', async () => {
+    it('preserves ambiguous Basic Auth text messages as subscription sources', async () => {
         const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
         const { state, adapter } = createState();
         state.settings.telegram_push_config.user_bindings = { 1: 'profile-1' };
@@ -251,8 +251,9 @@ describe('handleTelegramWebhook', () => {
                 { MISUB_KV: null }
             );
             expect(state.subscriptions).toHaveLength(1);
-            expect(state.profiles[0].manualNodes).toEqual([state.subscriptions[0].id]);
-            expect(state.profiles[0].subscriptions).toEqual([]);
+            expect(state.subscriptions[0].type).toBe('subscription');
+            expect(state.profiles[0].manualNodes).toEqual([]);
+            expect(state.profiles[0].subscriptions).toEqual([state.subscriptions[0].id]);
             expect(
                 global.fetch.mock.calls.every(([url]) =>
                     String(url).startsWith('https://api.telegram.org/')

@@ -83,18 +83,20 @@ ss://new@server5.com:10000`;
         expect(dataStore.subscriptions.length).toBe(initialCount + 2);
     });
 
-    it('明文 HTTP proxy URI 应作为节点导入而非订阅链接', () => {
+    it('手动节点入口保留 HTTP proxy URI 的显式节点类型', () => {
         bulkImport.handleBulkImport(
             'http://alice:p%40ss%3Aword@proxy.example.com:8080#plain-http',
-            ''
+            '',
+            'manual_node'
         );
 
         const imported = dataStore.subscriptions.find((item) => item.name === 'plain-http');
         expect(imported).toBeDefined();
         expect(dataStore.subscriptions).toHaveLength(3);
         expect(imported.url).toBe('http://alice:p%40ss%3Aword@proxy.example.com:8080#plain-http');
+        expect(imported.type).toBe('manual_node');
     });
-    it('混合 HTTP 节点与认证订阅按类型交给对应导入回调', () => {
+    it('通用文本导入将没有显式类型的 HTTP 地址保留为订阅', () => {
         const addSubscriptionsFromBulk = vi.fn();
         const addNodesFromBulk = vi.fn();
         const importer = useBulkImportLogic({ addSubscriptionsFromBulk, addNodesFromBulk });
@@ -106,8 +108,21 @@ ss://new@server5.com:10000`;
             ].join('\n'),
             ''
         );
-        expect(addSubscriptionsFromBulk.mock.calls[0][0]).toHaveLength(2);
-        expect(addNodesFromBulk.mock.calls[0][0]).toHaveLength(1);
-        expect(addNodesFromBulk.mock.calls[0][0][0].url).toContain('@proxy.example.invalid:80');
+        expect(addSubscriptionsFromBulk.mock.calls[0][0]).toHaveLength(3);
+        expect(
+            addSubscriptionsFromBulk.mock.calls[0][0].every((item) => item.type === 'subscription')
+        ).toBe(true);
+        expect(addNodesFromBulk).not.toHaveBeenCalled();
+    });
+    it('同一 URL 的订阅和显式手动节点不会互相去重', () => {
+        const url = 'https://fixture:fixture@source.example.invalid:443/';
+        dataStore.subscriptions = [{ id: 'source', url, type: 'subscription' }];
+        bulkImport.handleBulkImport(url, '', 'manual_node');
+        expect(dataStore.subscriptions.map((item) => item.type).sort()).toEqual([
+            'manual_node',
+            'subscription',
+        ]);
+        bulkImport.handleBulkImport(url, '', 'manual_node');
+        expect(dataStore.subscriptions).toHaveLength(2);
     });
 });

@@ -53,6 +53,7 @@ describe('external manual nodes handler', () => {
             subscriptions: [
                 {
                     id: 'http',
+                    type: 'manual_node',
                     name: 'HTTP',
                     url: 'http://fixture:fixture@proxy.example.invalid:8080',
                     enabled: true,

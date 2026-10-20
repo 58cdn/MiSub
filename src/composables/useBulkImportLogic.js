@@ -13,14 +13,15 @@ export function useBulkImportLogic({ addSubscriptionsFromBulk, addNodesFromBulk 
     const dataStore = useDataStore();
     const showModal = ref(false);
 
-    const handleBulkImport = (importText, group) => {
+    const handleBulkImport = (importText, group, entryType) => {
         if (!importText) return;
 
         const normalizedGroup = normalizeManualNodeGroupName(group);
 
-        // 获取已存在的所有 URL，用于去重
-        const existingUrls = new Set(
-            (dataStore.subscriptions || []).map((s) => s.url).filter(Boolean)
+        const entryKey = (item) =>
+            `${isRemoteSubscription(item) ? 'subscription' : 'manual_node'}:${item.url}`;
+        const existingEntries = new Set(
+            (dataStore.subscriptions || []).filter((item) => item.url).map(entryKey)
         );
 
         // 先尝试解析 Surge 格式（name = protocol, server, port, ...）
@@ -37,9 +38,10 @@ export function useBulkImportLogic({ addSubscriptionsFromBulk, addNodesFromBulk 
         if (surgeNodes && surgeNodes.length > 0) {
             surgeNodes.forEach((node) => {
                 // 去重检查：跳过已存在的 URL
-                if (!existingUrls.has(node.url)) {
+                if (!existingEntries.has(entryKey({ ...node, type: 'manual_node' }))) {
                     validNodes.push({
                         id: generateNodeId(),
+                        type: 'manual_node',
                         name: node.name || t('bulkImport.unnamed'),
                         url: node.url,
                         enabled: true,
@@ -57,6 +59,9 @@ export function useBulkImportLogic({ addSubscriptionsFromBulk, addNodesFromBulk 
         // 处理标准 URL 格式（逐行检查）
         lines.forEach((line) => {
             const baseItem = {
+                ...(entryType === 'manual_node' || entryType === 'subscription'
+                    ? { type: entryType }
+                    : {}),
                 name: extractNodeName(line) || t('bulkImport.unnamed'),
                 url: line,
                 enabled: true,
@@ -71,15 +76,19 @@ export function useBulkImportLogic({ addSubscriptionsFromBulk, addNodesFromBulk 
 
             if (isRemoteSubscription(baseItem)) {
                 // 去重检查：订阅 URL
-                if (!existingUrls.has(line)) {
-                    validSubs.push({ ...baseItem, id: generateSubscriptionId() });
+                if (!existingEntries.has(entryKey(baseItem))) {
+                    validSubs.push({
+                        ...baseItem,
+                        type: 'subscription',
+                        id: generateSubscriptionId(),
+                    });
                 }
             } else if (isManualNode(baseItem)) {
                 // 避免重复添加已从 Surge 格式解析的节点
                 const alreadyParsed = validNodes.some((n) => n.url === line);
                 // 去重检查：节点 URL
-                if (!alreadyParsed && !existingUrls.has(line)) {
-                    validNodes.push({ ...baseItem, id: generateNodeId() });
+                if (!alreadyParsed && !existingEntries.has(entryKey(baseItem))) {
+                    validNodes.push({ ...baseItem, type: 'manual_node', id: generateNodeId() });
                 }
             }
         });
