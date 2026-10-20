@@ -1,3 +1,4 @@
+import { isRemoteSubscription } from '../../../shared/subscription-kind.js';
 import { StorageFactory } from '../../storage-adapter.js';
 import { createJsonResponse } from '../utils.js';
 import { parseNodeInfo } from '../utils/geo-utils.js';
@@ -38,7 +39,7 @@ export async function handleSingleSubscriptionMode(
     }
 
     // 检查是否为手工节点
-    if (!subscription.url.startsWith('http')) {
+    if (!isRemoteSubscription(subscription)) {
         // 手工节点：直接解析节点URL
         const nodeInfo = parseNodeInfo(subscription.url);
         const manualNodeResult = {

@@ -27,6 +27,32 @@ describe('handleBatchUpdateNodesRequest', () => {
     function silenceExpectedStorageDetectionLog() {
         return vi.spyOn(console, 'log').mockImplementation(() => {});
     }
+    it('拒绝把 HTTP 手动节点交给订阅批量刷新', async () => {
+        const subscriptions = [
+            {
+                id: 'http',
+                name: 'HTTP',
+                type: 'manual_node',
+                url: 'http://fixture:fixture@proxy.example.invalid:8080',
+                enabled: true,
+            },
+        ];
+        vi.spyOn(StorageFactory, 'getStorageType').mockResolvedValue('kv');
+        vi.stubGlobal('fetch', vi.fn());
+        const req = new Request('http://local/api/batch_update_nodes', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ subscriptionIds: ['http'] }),
+        });
+        const logSpy = silenceExpectedStorageDetectionLog();
+        try {
+            const res = await handleBatchUpdateNodesRequest(req, makeEnv(subscriptions));
+            expect(res.status).toBe(400);
+            expect(globalThis.fetch).not.toHaveBeenCalled();
+        } finally {
+            logSpy.mockRestore();
+        }
+    });
 
     it('批量刷新应使用订阅源 customUserAgent 拉取节点', async () => {
         const subscriptions = [

@@ -232,6 +232,37 @@ describe('handleTelegramWebhook', () => {
             infoSpy.mockRestore();
         }
     });
+    it('preserves ambiguous Basic Auth text messages as subscription sources', async () => {
+        const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+        const { state, adapter } = createState();
+        state.settings.telegram_push_config.user_bindings = { 1: 'profile-1' };
+        createAdapter.mockReturnValue(adapter);
+        const { handleTelegramWebhook } =
+            await import('../../functions/modules/handlers/telegram-webhook-handler.js');
+        try {
+            await handleTelegramWebhook(
+                createRequest({
+                    message: {
+                        text: 'http://fixture:fixture@proxy.example.invalid:8080#HTTP',
+                        chat: { id: 2001 },
+                        from: { id: 1 },
+                    },
+                }),
+                { MISUB_KV: null }
+            );
+            expect(state.subscriptions).toHaveLength(1);
+            expect(state.subscriptions[0].type).toBe('subscription');
+            expect(state.profiles[0].manualNodes).toEqual([]);
+            expect(state.profiles[0].subscriptions).toEqual([state.subscriptions[0].id]);
+            expect(
+                global.fetch.mock.calls.every(([url]) =>
+                    String(url).startsWith('https://api.telegram.org/')
+                )
+            ).toBe(true);
+        } finally {
+            infoSpy.mockRestore();
+        }
+    });
 
     it('keeps the original command surface in help output', async () => {
         const { adapter } = createState();

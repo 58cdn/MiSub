@@ -149,6 +149,12 @@ function fieldsFor(collection, value) {
     if (!isRecord(value) || Object.keys(value).some((key) => !editable[collection].has(key)))
         throw protocolError('invalid_operation');
     for (const [key, item] of Object.entries(value)) {
+        if (
+            collection === 'subscriptions' &&
+            key === 'type' &&
+            !['subscription', 'manual_node'].includes(item)
+        )
+            throw protocolError('invalid_operation');
         if (key === 'url' && (typeof item !== 'string' || !item.trim()))
             throw protocolError('invalid_operation');
         if (key === 'name' && item !== null && typeof item !== 'string')

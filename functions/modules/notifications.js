@@ -1,3 +1,4 @@
+import { isRemoteSubscription } from '../../shared/subscription-kind.js';
 /**
  * 通知功能模块
  * 处理业务层逻辑：订阅到期和流量预警，Cron 任务报告。
@@ -148,9 +149,7 @@ export async function runCanonicalSubscriptionSync(
             ? await storage.readSubscriptionSnapshot()
             : { subscriptions: await loadSubscriptionsForCron(storage) });
     const subscriptions = snapshot.subscriptions
-        .filter(
-            (sub) => sub.enabled && typeof sub.url === 'string' && /^https?:\/\//i.test(sub.url)
-        )
+        .filter((sub) => sub.enabled && isRemoteSubscription(sub))
         .slice(0, limits.maxSyncCount);
     const startTime = Date.now();
     const applied = [];
@@ -341,7 +340,7 @@ export async function handleCronTrigger(env) {
     const allSubs = JSON.parse(JSON.stringify(originalSubs));
     const settings = (await storageAdapter.get(KV_KEY_SETTINGS)) || DEFAULT_SETTINGS;
 
-    const httpSubscriptions = allSubs.filter((sub) => sub.url.startsWith('http') && sub.enabled);
+    const httpSubscriptions = allSubs.filter((sub) => isRemoteSubscription(sub) && sub.enabled);
 
     console.info(`[Cron] Starting parallel update for ${httpSubscriptions.length} subscriptions`);
     const startTime = Date.now();

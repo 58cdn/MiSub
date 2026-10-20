@@ -86,7 +86,7 @@ export async function handleExternalManualNodesRequest(request, env, selector = 
                     'Manual node URL is required',
                     400
                 );
-            if (!isManualNode({ url: candidateUrl }))
+            if (!isManualNode({ url: candidateUrl, type: 'manual_node' }))
                 return createExternalError(
                     'invalid_manual_node_url',
                     'Manual node URL must use a supported node protocol',
@@ -156,7 +156,7 @@ export async function handleExternalManualNodesRequest(request, env, selector = 
                     'Manual node URL is required',
                     400
                 );
-            if (!isManualNode(payload))
+            if (!isManualNode({ ...payload, type: 'manual_node' }))
                 return createExternalError(
                     'invalid_manual_node_url',
                     'Manual node URL must use a supported node protocol',
@@ -167,6 +167,7 @@ export async function handleExternalManualNodesRequest(request, env, selector = 
             const timestamp = nowIso();
             const item = {
                 id: generateId('node'),
+                type: 'manual_node',
                 name: String(payload.name).trim(),
                 url: String(payload.url).trim(),
                 enabled: payload.enabled !== false,
@@ -190,6 +191,7 @@ export async function handleExternalManualNodesRequest(request, env, selector = 
             const payload = await readExternalJson(request);
             const updated = {
                 ...current,
+                type: 'manual_node',
                 ...(payload.name !== undefined ? { name: String(payload.name || '').trim() } : {}),
                 ...(payload.url !== undefined ? { url: String(payload.url || '').trim() } : {}),
                 ...(payload.enabled !== undefined ? { enabled: payload.enabled !== false } : {}),

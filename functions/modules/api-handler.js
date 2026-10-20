@@ -1,3 +1,4 @@
+import { isRemoteSubscription } from '../../shared/subscription-kind.js';
 import { normalizeGroupsPageSize } from '../../shared/pagination.js';
 /**
  * API处理模块
@@ -159,7 +160,7 @@ async function saveAtomicSubscriptions(storageAdapter, request, payload, env) {
             const settings = (await storageAdapter.get(KV_KEY_SETTINGS)) || defaultSettings;
             await Promise.allSettled(
                 result.snapshot.subscriptions
-                    .filter((sub) => sub?.enabled && /^https?:\/\//i.test(sub.url || ''))
+                    .filter((sub) => sub?.enabled && isRemoteSubscription(sub))
                     .map((sub) => checkAndNotify(structuredClone(sub), settings, env))
             );
         } catch {
@@ -532,7 +533,7 @@ export async function handleMisubsSave(request, env) {
         if (finalMisubs && finalMisubs.length > 0) {
             try {
                 const notificationPromises = finalMisubs
-                    .filter((sub) => sub?.enabled && sub.url && sub.url.startsWith('http'))
+                    .filter((sub) => sub?.enabled && isRemoteSubscription(sub))
                     .map((sub) =>
                         checkAndNotify(sub, settings, env).catch((notifyError) => {
                             console.warn(

@@ -1,3 +1,4 @@
+import { isRemoteSubscription, isHttpProxyUrl } from '../../../shared/subscription-kind.js';
 /**
  * Telegram Bot Webhook 处理模块 v2
  * 用于接收和处理用户通过 Telegram 推送的节点
@@ -185,7 +186,7 @@ function extractNodeName(url) {
 /**
  * 提取节点链接（支持多种协议）
  */
-function extractNodeUrls(text) {
+function extractNodeUrls(text, allowHttp = true) {
     const protocols = [
         'ss://',
         'ssr://',
@@ -208,6 +209,10 @@ function extractNodeUrls(text) {
     for (const line of lines) {
         const trimmed = line.trim();
         const lowerTrimmed = trimmed.toLowerCase();
+        if (allowHttp && isHttpProxyUrl(trimmed)) {
+            urls.push(trimmed);
+            continue;
+        }
         for (const protocol of protocols) {
             if (lowerTrimmed.startsWith(protocol)) {
                 urls.push(trimmed);
@@ -235,7 +240,7 @@ function extractSubscriptionUrls(text) {
     for (const raw of matches) {
         // 去掉尾部常见的标点残留
         const url = raw.replace(/[.,;:!?]+$/, '');
-        if (!url || seen.has(url)) continue;
+        if (!isRemoteSubscription({ url }) || seen.has(url)) continue;
         try {
             new URL(url);
         } catch {
@@ -336,6 +341,7 @@ async function handleFileInput(chatId, message, userId, config, env, requestCach
             );
             return await handleNodeInput(chatId, nodeLines, userId, env, requestCache, {
                 source: 'file',
+                type: 'manual_node',
                 fileName,
             });
         }
@@ -419,8 +425,8 @@ async function handleGroupSelect(
     const allNodes = await getUserNodes(userId, env);
     const nodes =
         type === 'sub'
-            ? allNodes.filter((n) => /^https?:\/\//i.test(n.url || ''))
-            : allNodes.filter((n) => !/^https?:\/\//i.test(n.url || ''));
+            ? allNodes.filter((n) => isRemoteSubscription(n))
+            : allNodes.filter((n) => !isRemoteSubscription(n));
 
     // 统计分组
     const groupCounts = new Map();
@@ -492,8 +498,8 @@ async function handleGroupManage(
     const allNodes = await getUserNodes(userId, env);
     const nodes =
         type === 'sub'
-            ? allNodes.filter((n) => /^https?:\/\//i.test(n.url || ''))
-            : allNodes.filter((n) => !/^https?:\/\//i.test(n.url || ''));
+            ? allNodes.filter((n) => isRemoteSubscription(n))
+            : allNodes.filter((n) => !isRemoteSubscription(n));
 
     const groupCounts = new Map();
     let ungrouped = 0;
@@ -552,8 +558,8 @@ async function handleGroupActions(
     const allNodes = await getUserNodes(userId, env);
     const nodes =
         type === 'sub'
-            ? allNodes.filter((n) => /^https?:\/\//i.test(n.url || ''))
-            : allNodes.filter((n) => !/^https?:\/\//i.test(n.url || ''));
+            ? allNodes.filter((n) => isRemoteSubscription(n))
+            : allNodes.filter((n) => !isRemoteSubscription(n));
     const count = nodes.filter((n) => (n.group || '').trim() === groupName).length;
 
     const text =
@@ -608,7 +614,7 @@ async function applyGroupOperation(
     allSubscriptions.forEach((sub) => {
         if ((sub.group || '').trim() !== groupName) return;
         // 订阅源与节点都按 type 筛选
-        const isSub = /^https?:\/\//i.test(sub.url || '');
+        const isSub = isRemoteSubscription(sub);
         if (type === 'sub' ? !isSub : isSub) return;
 
         if (op === 'rename') sub.group = newName;
@@ -619,7 +625,7 @@ async function applyGroupOperation(
     if (op === 'delete') {
         // 删除分组：把成员移除（这里语义同「删除该组内所有项」）
         const remaining = allSubscriptions.filter((sub) => {
-            const isSub = /^https?:\/\//i.test(sub.url || '');
+            const isSub = isRemoteSubscription(sub);
             const sameType = type === 'sub' ? isSub : !isSub;
             const sameGroup = (sub.group || '').trim() === groupName;
             if (sameType && sameGroup) {
@@ -1041,10 +1047,10 @@ async function handleListCommand(
         let userNodes = allNodes;
         let title = '列表';
         if (type === 'node') {
-            userNodes = allNodes.filter((n) => !/^https?:\/\//i.test(n.url || ''));
+            userNodes = allNodes.filter((n) => !isRemoteSubscription(n));
             title = '\uD83D\uDE80 节点列表'; // 🚀
         } else if (type === 'sub') {
-            userNodes = allNodes.filter((n) => /^https?:\/\//i.test(n.url || ''));
+            userNodes = allNodes.filter((n) => isRemoteSubscription(n));
             title = '\uD83D\uDCE1 机场列表'; // 📡
         }
 
@@ -1097,7 +1103,7 @@ async function handleListCommand(
         for (let i = startIdx; i < endIdx; i++) {
             const node = userNodes[i];
             const nodeUrl = node.url || '';
-            const isSub = /^https?:\/\//i.test(nodeUrl);
+            const isSub = isRemoteSubscription(node);
 
             let protocol = '未知';
             if (isSub) {
@@ -1127,7 +1133,7 @@ async function handleListCommand(
             // 但 handleListCommand 的 type 参数已经区分了 'node', 'sub', 'all'.
             // 这里我们尽量明确:
             const actionPrefix =
-                type === 'sub' || (type === 'all' && /^https?:\/\//i.test(userNodes[i].url || ''))
+                type === 'sub' || (type === 'all' && isRemoteSubscription(userNodes[i]))
                     ? 'node_action_sub_'
                     : 'node_action_node_';
 
@@ -1222,7 +1228,7 @@ async function handleStatsCommand(chatId, userId, env, requestCache = null) {
         const protocolCounts = {};
 
         userNodes.forEach((node) => {
-            const isSub = /^https?:\/\//i.test(node.url);
+            const isSub = isRemoteSubscription(node);
 
             if (isSub) {
                 subCount++;
@@ -1964,7 +1970,7 @@ async function handleImportCommand(chatId, userId, args, env) {
         let nodeUrls = [];
 
         // 判断是订阅链接还是 Base64
-        if (input.startsWith('http://') || input.startsWith('https://')) {
+        if (isRemoteSubscription({ url: input })) {
             // 获取订阅内容
             await sendTelegramMessage(chatId, '⏳ 正在获取订阅内容...', env);
 
@@ -2020,6 +2026,7 @@ async function handleImportCommand(chatId, userId, args, env) {
         for (const url of nodeUrls) {
             const node = {
                 id: generateId(),
+                type: 'manual_node',
                 name: extractNodeName(url),
                 url: url,
                 enabled: true,
@@ -2356,7 +2363,7 @@ async function handleNodeInput(chatId, text, userId, env, requestCache = null, o
         }
 
         // 1. 尝试提取节点链接 (SS, VLESS 等)
-        let nodeUrls = extractNodeUrls(text);
+        let nodeUrls = extractNodeUrls(text, options.type === 'manual_node');
         let importType = 'node'; // node | subscription
 
         // 2. 提取订阅链接（支持一条消息里多行/多个订阅链接）
@@ -2388,8 +2395,7 @@ async function handleNodeInput(chatId, text, userId, env, requestCache = null, o
         const allSubscriptions = await getCachedSubscriptions(env, cache);
 
         // 3. 批量处理与去重
-        // 订阅链接与节点链接一并处理：订阅（http/https）存为订阅源，节点存为手动节点，
-        // 前端通过 URL 协议区分。这样「一条消息发多个订阅链接」可一次全部导入。
+        // 文本 HTTP 链接默认作为订阅；已解析的节点文件保留手动节点类型。
         const allUrls =
             importType === 'subscription'
                 ? [...subscriptionUrls]
@@ -2399,19 +2405,22 @@ async function handleNodeInput(chatId, text, userId, env, requestCache = null, o
 
         for (const url of allUrls) {
             // 去重检测
-            const exists = allSubscriptions.some((sub) => sub.url === url);
+            const isSubscription = subscriptionUrls.includes(url);
+            const exists = allSubscriptions.some(
+                (sub) => sub.url === url && isRemoteSubscription(sub) === isSubscription
+            );
             if (exists) {
                 ignoredUrls.push(url);
                 continue;
             }
 
-            const isSubscription = /^https?:\/\//i.test(url);
             const defaultName = isSubscription
                 ? `订阅源 ${new URL(url).hostname}`
                 : extractNodeName(url);
 
             const node = {
                 id: generateId(),
+                type: isSubscription ? 'subscription' : 'manual_node',
                 name: defaultName,
                 url: url,
                 enabled: true,
@@ -2421,10 +2430,6 @@ async function handleNodeInput(chatId, text, userId, env, requestCache = null, o
                 telegram_user_id: userId,
                 created_at: new Date().toISOString(),
             };
-
-            // 注意：MiSub 中订阅源也通过 KV_KEY_SUBS 存储
-            // 前端通过 URL 格式区分是“手动节点”还是“订阅源”
-            // 订阅源 -> type: subscription or implied by http protocol
 
             allSubscriptions.unshift(node);
             addedNodes.push(node);
@@ -2467,12 +2472,8 @@ async function handleNodeInput(chatId, text, userId, env, requestCache = null, o
 
             if (targetProfile) {
                 // 分类 ID
-                const subIds = addedNodes
-                    .filter((n) => /^https?:\/\//i.test(n.url))
-                    .map((n) => n.id);
-                const nodeIds = addedNodes
-                    .filter((n) => !/^https?:\/\//i.test(n.url))
-                    .map((n) => n.id);
+                const subIds = addedNodes.filter((n) => isRemoteSubscription(n)).map((n) => n.id);
+                const nodeIds = addedNodes.filter((n) => !isRemoteSubscription(n)).map((n) => n.id);
 
                 let updated = false;
 
@@ -2518,7 +2519,7 @@ async function handleNodeInput(chatId, text, userId, env, requestCache = null, o
 
         if (addedNodes.length === 1) {
             const node = addedNodes[0];
-            const isSub = /^https?:\/\//i.test(node.url);
+            const isSub = isRemoteSubscription(node);
             const typeLabel = isSub ? '📡 订阅源' : '🚀 节点';
 
             message =
@@ -2536,7 +2537,7 @@ async function handleNodeInput(chatId, text, userId, env, requestCache = null, o
         } else {
             message = `✅ <b>成功添加 ${addedNodes.length} 个项目</b>${ignoreMsg}\n\n`;
             addedNodes.slice(0, 5).forEach((node, index) => {
-                const isSub = /^https?:\/\//i.test(node.url);
+                const isSub = isRemoteSubscription(node);
                 const label = isSub ? '[订阅]' : `[${node.url.split('://')[0].toUpperCase()}]`;
                 message += `${index + 1}. ${escapeHtml(node.name)} ${label}\n`;
             });
@@ -3047,16 +3048,16 @@ async function handleCallbackQuery(callbackQuery, env, request, requestCache = n
 
                     if (type === 'sub') {
                         // Must match handleListCommand's filtering logic for 'sub'
-                        targetList = fullList.filter((n) => /^https?:\/\//i.test(n.url || ''));
+                        targetList = fullList.filter((n) => isRemoteSubscription(n));
                     } else {
                         // Must match handleListCommand's filtering logic for 'node'
-                        targetList = fullList.filter((n) => !/^https?:\/\//i.test(n.url || ''));
+                        targetList = fullList.filter((n) => !isRemoteSubscription(n));
                     }
 
                     let actionIdx = idx;
                     if ((idx < 0 || idx >= targetList.length) && fullList[idx]) {
                         const fallbackItem = fullList[idx];
-                        const fallbackIsSub = /^https?:\/\//i.test(fallbackItem.url || '');
+                        const fallbackIsSub = isRemoteSubscription(fallbackItem);
                         if (
                             (type === 'sub' && fallbackIsSub) ||
                             (type === 'node' && !fallbackIsSub)
@@ -3166,7 +3167,7 @@ async function handleCallbackQuery(callbackQuery, env, request, requestCache = n
 
                     // MUST Use filtered list to match index
                     const allNodes = await getUserNodes(userId, env);
-                    const userNodes = allNodes.filter((n) => !/^https?:\/\//i.test(n.url || ''));
+                    const userNodes = allNodes.filter((n) => !isRemoteSubscription(n));
 
                     const profiles = await storageAdapter.getAllProfiles();
                     const settings = (await storageAdapter.get(KV_KEY_SETTINGS)) || {};
@@ -3205,7 +3206,7 @@ async function handleCallbackQuery(callbackQuery, env, request, requestCache = n
 
                     // MUST Use filtered list to match index
                     const allNodes = await getUserNodes(userId, env);
-                    const userNodes = allNodes.filter((n) => !/^https?:\/\//i.test(n.url || ''));
+                    const userNodes = allNodes.filter((n) => !isRemoteSubscription(n));
 
                     const profiles = await storageAdapter.getAllProfiles();
                     const settings = (await storageAdapter.get(KV_KEY_SETTINGS)) || {};
@@ -3242,7 +3243,7 @@ async function handleCallbackQuery(callbackQuery, env, request, requestCache = n
 
                     // MUST Use filtered list
                     const allNodes = await getUserNodes(userId, env);
-                    const subs = allNodes.filter((n) => /^https?:\/\//i.test(n.url || ''));
+                    const subs = allNodes.filter((n) => isRemoteSubscription(n));
 
                     const profiles = await storageAdapter.getAllProfiles();
                     const settings = (await storageAdapter.get(KV_KEY_SETTINGS)) || {};
@@ -3280,7 +3281,7 @@ async function handleCallbackQuery(callbackQuery, env, request, requestCache = n
 
                     // MUST Use filtered list
                     const allNodes = await getUserNodes(userId, env);
-                    const subs = allNodes.filter((n) => /^https?:\/\//i.test(n.url || ''));
+                    const subs = allNodes.filter((n) => isRemoteSubscription(n));
 
                     const profiles = await storageAdapter.getAllProfiles();
                     const settings = (await storageAdapter.get(KV_KEY_SETTINGS)) || {};
@@ -3314,7 +3315,7 @@ async function handleCallbackQuery(callbackQuery, env, request, requestCache = n
                     const idx = parseInt(data.replace('copy_sub_', ''));
                     // MUST Use filtered list
                     const allNodes = await getUserNodes(userId, env);
-                    const subs = allNodes.filter((n) => /^https?:\/\//i.test(n.url || ''));
+                    const subs = allNodes.filter((n) => isRemoteSubscription(n));
 
                     if (idx >= 0 && idx < subs.length) {
                         const subUrl = subs[idx].url;
@@ -3339,9 +3340,9 @@ async function handleCallbackQuery(callbackQuery, env, request, requestCache = n
                     let fullList = await getUserNodes(userId, env);
                     let targetList = [];
                     if (isSub) {
-                        targetList = fullList.filter((n) => /^https?:\/\//i.test(n.url || ''));
+                        targetList = fullList.filter((n) => isRemoteSubscription(n));
                     } else {
-                        targetList = fullList.filter((n) => !/^https?:\/\//i.test(n.url || ''));
+                        targetList = fullList.filter((n) => !isRemoteSubscription(n));
                     }
 
                     if (idx >= 0 && idx < targetList.length) {
@@ -3454,10 +3455,10 @@ async function handleCallbackQuery(callbackQuery, env, request, requestCache = n
                     let targetItem = null;
 
                     if (type === 'sub') {
-                        const subs = allNodes.filter((n) => /^https?:\/\//i.test(n.url || ''));
+                        const subs = allNodes.filter((n) => isRemoteSubscription(n));
                         if (idx >= 0 && idx < subs.length) targetItem = subs[idx];
                     } else {
-                        const nodes = allNodes.filter((n) => !/^https?:\/\//i.test(n.url || ''));
+                        const nodes = allNodes.filter((n) => !isRemoteSubscription(n));
                         if (idx >= 0 && idx < nodes.length) targetItem = nodes[idx];
                     }
 

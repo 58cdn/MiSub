@@ -1,4 +1,5 @@
 import { ref } from 'vue';
+import { isHttpProxyUrl } from '../../shared/subscription-kind.js';
 import { useToastStore } from '../stores/toast.js';
 import { extractNodeName } from '../lib/utils.js';
 import { generateNodeId } from '../utils/id.js';
@@ -53,11 +54,18 @@ export function useNodeForms({ addNode, updateNode }) {
             showToast(t('manualNodes.urlRequired'), 'error');
             return;
         }
+        if (
+            /^https?:\/\//i.test(editingNode.value.url.trim()) &&
+            !isHttpProxyUrl(editingNode.value.url)
+        ) {
+            showToast(t('validation.invalidNodeUrl'), 'error');
+            return;
+        }
 
         if (isNew.value) {
-            addNode(editingNode.value);
+            addNode({ ...editingNode.value, type: 'manual_node' });
         } else {
-            updateNode(editingNode.value);
+            updateNode({ ...editingNode.value, type: 'manual_node' });
         }
         showModal.value = false;
     };

@@ -48,6 +48,31 @@ function createRequest(path, { method = 'GET', body } = {}) {
 }
 
 describe('external manual nodes handler', () => {
+    it('keeps HTTP proxy nodes separate from remote subscriptions in both inventories', async () => {
+        const env = createEnv({
+            subscriptions: [
+                {
+                    id: 'http',
+                    type: 'manual_node',
+                    name: 'HTTP',
+                    url: 'http://fixture:fixture@proxy.example.invalid:8080',
+                    enabled: true,
+                },
+                {
+                    id: 'sub',
+                    name: 'Source',
+                    url: 'https://fixture:fixture@source.example.invalid:8443/api',
+                    enabled: true,
+                },
+            ],
+        });
+        const nodes = await handleApiRequest(createRequest('/manual-nodes'), env);
+        const subs = await handleApiRequest(createRequest('/subscriptions'), env);
+        expect(nodes.status).toBe(200);
+        expect(subs.status).toBe(200);
+        expect((await nodes.json()).data.map((item) => item.id)).toEqual(['http']);
+        expect((await subs.json()).data.map((item) => item.id)).toEqual(['sub']);
+    });
     it('lists only manual nodes on /manual-nodes and exposes inferred protocol', async () => {
         const env = createEnv({
             subscriptions: [

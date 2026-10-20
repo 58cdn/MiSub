@@ -85,28 +85,96 @@ describe('handleProfileMode preview transforms', () => {
 
     it('keeps an HTTP proxy subscription node separate from an HTTPS source URL', async () => {
         const targetSubscriptions = [
-            { id: 'subscription-http', enabled: true, url: 'https://sub.example.com/link', name: 'HTTPS source' },
-            { id: 'node-http', enabled: true, url: 'http://alice:***@192.0.2.10:8080/#office-http', name: 'Office HTTP' },
+            {
+                id: 'subscription-http',
+                enabled: true,
+                url: 'https://sub.example.com/link',
+                name: 'HTTPS source',
+            },
+            {
+                id: 'node-http',
+                enabled: true,
+                url: 'http://alice:***@192.0.2.10:8080/#office-http',
+                name: 'Office HTTP',
+                type: 'manual_node',
+            },
         ];
         createAdapter.mockReturnValue({
             getProfileById: vi.fn().mockResolvedValue({
-                id: 'profile-http', enabled: true, subscriptions: ['subscription-http', 'node-http'], manualNodes: [], operators: [],
+                id: 'profile-http',
+                enabled: true,
+                subscriptions: ['subscription-http', 'node-http'],
+                manualNodes: [],
+                operators: [],
             }),
             getSubscriptionsByIds: vi.fn().mockResolvedValue(targetSubscriptions),
             get: vi.fn().mockResolvedValue({ defaultOperators: [] }),
         });
 
-        const { handleProfileMode } = await import('../../functions/modules/subscription/profile-handler.js');
+        const { handleProfileMode } =
+            await import('../../functions/modules/subscription/profile-handler.js');
         const result = await handleProfileMode(
-            new Request('https://example.com/api/subscription_nodes'), {}, 'profile-http', 'MiSub-Test/1.0', false, false
+            new Request('https://example.com/api/subscription_nodes'),
+            {},
+            'profile-http',
+            'MiSub-Test/1.0',
+            false,
+            false
         );
 
         expect(result.success).toBe(true);
         expect(result.nodes.map((node) => node.name)).toContain('Office HTTP');
         expect(fetchSubscriptionNodes).toHaveBeenCalledTimes(1);
         expect(fetchSubscriptionNodes).toHaveBeenCalledWith(
-            'https://sub.example.com/link', 'HTTPS source', expect.any(String), undefined,
-            false, undefined, undefined, false, false, false
+            'https://sub.example.com/link',
+            'HTTPS source',
+            expect.any(String),
+            undefined,
+            false,
+            undefined,
+            undefined,
+            false,
+            false,
+            false
         );
+    });
+    it('previews typed HTTP nodes once and keeps an untyped root Basic Auth URL in the source fetch path', async () => {
+        const httpNode = {
+            id: 'http',
+            enabled: true,
+            name: 'HTTP node',
+            type: 'manual_node',
+            url: 'http://fixture:fixture@proxy.example.invalid:8080#HTTP',
+        };
+        const source = {
+            id: 'sub',
+            enabled: true,
+            name: 'Source',
+            url: 'https://fixture:fixture@source.example.invalid:443/',
+        };
+        createAdapter.mockReturnValue({
+            getProfileById: vi.fn().mockResolvedValue({
+                id: 'profile',
+                enabled: true,
+                subscriptions: ['sub', 'http'],
+                manualNodes: ['http'],
+                operators: [],
+            }),
+            getSubscriptionsByIds: vi.fn().mockResolvedValue([source, httpNode]),
+            get: vi.fn().mockResolvedValue({ defaultOperators: [] }),
+        });
+        fetchSubscriptionNodes.mockResolvedValue({ success: true, nodes: [] });
+        const { handleProfileMode } =
+            await import('../../functions/modules/subscription/profile-handler.js');
+        const result = await handleProfileMode(
+            new Request('https://example.invalid/api/subscription_nodes'),
+            {},
+            'profile',
+            'Fixture'
+        );
+        expect(result.nodes).toHaveLength(1);
+        expect(result.nodes[0].url).toContain('@proxy.example.invalid:8080');
+        expect(fetchSubscriptionNodes).toHaveBeenCalledTimes(1);
+        expect(fetchSubscriptionNodes.mock.calls[0][0]).toBe(source.url);
     });
 });

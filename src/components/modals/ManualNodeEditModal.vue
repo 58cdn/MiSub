@@ -168,7 +168,7 @@
                 groupName = buildAutoGroupName();
                 props.editingNode.group = groupName;
             }
-            handleBulkImport(props.editingNode.url, groupName);
+            handleBulkImport(props.editingNode.url, groupName, 'manual_node');
             emit('update:show', false);
             return;
         }

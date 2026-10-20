@@ -63,6 +63,7 @@
     const commitParsedNodes = (backendNodes, targetGroupName, sourceLabel) => {
         const nodes = (backendNodes || []).map((node) => ({
             id: generateNodeId(),
+            type: 'manual_node',
             name: node.name || 'Unknown',
             url: node.url,
             enabled: true,

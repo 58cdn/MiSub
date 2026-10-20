@@ -1,3 +1,4 @@
+import { isRemoteSubscription } from '../../../shared/subscription-kind.js';
 import { StorageFactory } from '../../storage-adapter.js';
 import { createJsonResponse } from '../utils.js';
 import { parseNodeInfo } from '../utils/geo-utils.js';
@@ -155,8 +156,11 @@ export async function handleProfileMode(
         });
     }
 
-    const targetSubscriptions = targetMisubs.filter((sub) => !/^https?:\/\/[^/?#]+:\d+(?:[/?#]|$)/i.test(sub.url));
-    const manualNodes = targetMisubs.filter((sub) => !targetSubscriptions.includes(sub));
+    const selected = [
+        ...new Map([...targetMisubs, ...targetManualNodes].map((item) => [item.id, item])).values(),
+    ];
+    const targetSubscriptions = selected.filter(isRemoteSubscription);
+    const manualNodes = selected.filter((item) => !isRemoteSubscription(item));
     // 处理手工节点（直接解析节点URL），并将用户自定义名称写入 URL。
     const manualNodeResults = manualNodes.map((node) => {
         const customName = typeof node.name === 'string' ? node.name.trim() : '';

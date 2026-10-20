@@ -1,3 +1,4 @@
+import { isRemoteSubscription } from '../../shared/subscription-kind.js';
 // FILE: src/composables/useSubscriptions.js
 import { ref, computed, watch, toValue } from 'vue';
 import { normalizeGroupsPageSize } from '../../shared/pagination.js';
@@ -19,11 +20,9 @@ export function useSubscriptions(markDirty, { statusFilter, configurablePaginati
     // Rename the store ref to avoid confusion, as it contains ALL items
     const { subscriptions: allSubscriptions } = storeToRefs(dataStore);
 
-    // Filtered computed property: Only http/https links are "Subscriptions"
+    // HTTP proxy endpoints are classified separately from subscription sources.
     const subscriptions = computed(() => {
-        return (allSubscriptions.value || []).filter(
-            (sub) => sub.url && /^https?:\/\//.test(sub.url)
-        );
+        return (allSubscriptions.value || []).filter(isRemoteSubscription);
     });
 
     const searchQuery = ref('');
@@ -75,7 +74,7 @@ export function useSubscriptions(markDirty, { statusFilter, configurablePaginati
         const ordered = [];
         const groups = new Map();
         (allSubscriptions.value || []).forEach((sub) => {
-            if (!filteredIds.has(sub.id) || !/^https?:\/\//i.test(String(sub.url || ''))) return;
+            if (!filteredIds.has(sub.id) || !isRemoteSubscription(sub)) return;
             const key = getAirportIdentityKey(sub);
             if (!groups.has(key)) groups.set(key, []);
             groups.get(key).push(sub);
@@ -136,7 +135,7 @@ export function useSubscriptions(markDirty, { statusFilter, configurablePaginati
         const subToUpdate = subscriptions.value.find((s) => s.id === subId);
         if (!subToUpdate) return false;
         // Double check URL just in case
-        if (!subToUpdate.url.startsWith('http')) return false;
+        if (!isRemoteSubscription(subToUpdate)) return false;
 
         if (dataStore.subscriptionProtocol === 'd1-v1') {
             subToUpdate.isUpdating = true;
@@ -294,7 +293,7 @@ export function useSubscriptions(markDirty, { statusFilter, configurablePaginati
     }
 
     function addSubscription(sub) {
-        dataStore.addSubscription(sub);
+        dataStore.addSubscription({ ...sub, type: 'subscription' });
         subsCurrentPage.value = 1;
         handleUpdateNodeCount(sub.id);
         markDirty();
@@ -305,7 +304,7 @@ export function useSubscriptions(markDirty, { statusFilter, configurablePaginati
         const originalSub = subscriptions.value.find((s) => s.id === updatedSub.id);
         if (originalSub) {
             const urlChanged = originalSub.url !== updatedSub.url;
-            dataStore.updateSubscription(updatedSub.id, updatedSub);
+            dataStore.updateSubscription(updatedSub.id, { ...updatedSub, type: 'subscription' });
 
             if (urlChanged) {
                 // Re-fetch from filtered list to get the reactive object
@@ -352,11 +351,11 @@ export function useSubscriptions(markDirty, { statusFilter, configurablePaginati
     async function addSubscriptionsFromBulk(subs) {
         // Reverse insert to maintain order
         for (let i = subs.length - 1; i >= 0; i--) {
-            dataStore.addSubscription(subs[i]);
+            dataStore.addSubscription({ ...subs[i], type: 'subscription' });
         }
         markDirty();
 
-        const subsToUpdate = subs.filter((sub) => sub.url && sub.url.startsWith('http'));
+        const subsToUpdate = subs.filter(isRemoteSubscription);
 
         if (subsToUpdate.length > 0) {
             showToast(t('subscriptions.batchUpdating', { count: subsToUpdate.length }), 'info');
@@ -390,7 +389,7 @@ export function useSubscriptions(markDirty, { statusFilter, configurablePaginati
 
     async function batchUpdateAllSubscriptions() {
         const subsToUpdate = subscriptions.value.filter(
-            (sub) => sub.enabled && sub.url && sub.url.startsWith('http') && !sub.isUpdating
+            (sub) => sub.enabled && isRemoteSubscription(sub) && !sub.isUpdating
         );
 
         if (subsToUpdate.length === 0) {
@@ -505,7 +504,7 @@ export function useSubscriptions(markDirty, { statusFilter, configurablePaginati
     async function autoUpdateAllSubscriptions() {
         try {
             const subsToUpdate = subscriptions.value.filter(
-                (sub) => sub.enabled && sub.url && sub.url.startsWith('http') && !sub.isUpdating
+                (sub) => sub.enabled && isRemoteSubscription(sub) && !sub.isUpdating
             );
             for (const sub of subsToUpdate) {
                 await handleUpdateNodeCount(sub.id, true);

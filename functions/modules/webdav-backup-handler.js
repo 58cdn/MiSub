@@ -188,6 +188,12 @@ export async function buildBackupPayload(env, options = {}) {
     return payload;
 }
 
+function markManualNode(item) {
+    return item && typeof item === 'object' && !Array.isArray(item)
+        ? { ...item, type: 'manual_node' }
+        : item;
+}
+
 export function normalizeBackupPayload(raw) {
     if (!raw || typeof raw !== 'object') {
         throw new Error('无效的备份文件格式');
@@ -222,7 +228,7 @@ export function normalizeBackupPayload(raw) {
             data: {
                 subscriptions: [
                     ...raw.subscriptions,
-                    ...(Array.isArray(raw.manualNodes) ? raw.manualNodes : []),
+                    ...(Array.isArray(raw.manualNodes) ? raw.manualNodes.map(markManualNode) : []),
                 ],
                 profiles: Array.isArray(raw.profiles) ? raw.profiles : [],
                 ruleTemplates: Array.isArray(raw.ruleTemplates) ? raw.ruleTemplates : [],
@@ -327,7 +333,7 @@ export async function restoreBackupPayload(env, rawPayload, options = {}) {
         let subscriptions = data.subscriptions;
         if (!unified && data.manualNodes !== undefined) {
             if (!Array.isArray(data.manualNodes)) throw protocolError('invalid_data');
-            subscriptions = [...subscriptions, ...data.manualNodes];
+            subscriptions = [...subscriptions, ...data.manualNodes.map(markManualNode)];
         }
         const domains = {};
         if (scope !== 'subscriptions-only') {

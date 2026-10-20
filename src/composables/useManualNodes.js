@@ -1,3 +1,4 @@
+import { isRemoteSubscription } from '../../shared/subscription-kind.js';
 // FILE: src/composables/useManualNodes.js
 import { ref, computed, watch } from 'vue';
 import { storeToRefs } from 'pinia';
@@ -123,6 +124,7 @@ export function useManualNodes(markDirty) {
     function addNode(node) {
         const normalizedNode = {
             ...node,
+            type: 'manual_node',
             group: normalizeManualNodeGroupName(node.group),
         };
         if (!normalizedNode.name) {
@@ -137,6 +139,7 @@ export function useManualNodes(markDirty) {
     function updateNode(updatedNode) {
         const normalizedNode = {
             ...updatedNode,
+            type: 'manual_node',
             group: normalizeManualNodeGroupName(updatedNode.group),
         };
         // Update in shared store
@@ -177,7 +180,7 @@ export function useManualNodes(markDirty) {
         const normalizedGroupName = normalizeManualNodeGroupName(groupName);
         // Reverse insert so they appear in correct order when unshifted
         for (let i = nodes.length - 1; i >= 0; i--) {
-            const node = { ...nodes[i] };
+            const node = { ...nodes[i], type: 'manual_node' };
             node.group = normalizeManualNodeGroupName(normalizedGroupName || node.group);
             dataStore.addSubscription(node);
         }
@@ -286,8 +289,8 @@ export function useManualNodes(markDirty) {
                 : reorderedVisibleNodes;
 
         // 1. Get all Subscriptions (to preserve them)
-        const currentSubscriptions = (allSubscriptions.value || []).filter(
-            (item) => item.url && /^https?:\/\//.test(item.url)
+        const currentSubscriptions = (allSubscriptions.value || []).filter((item) =>
+            isRemoteSubscription(item)
         );
 
         // 2. Combine Existing Subscriptions + New Ordered Manual Nodes

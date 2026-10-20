@@ -130,7 +130,7 @@ function strictIds(value) {
 }
 
 function atomicExternalFields(kind, payload, creating) {
-    const fields = {};
+    const fields = kind === 'profile' ? {} : { type: kind };
     const strings =
         kind === 'profile'
             ? ['name', 'description', 'customId', 'target']

@@ -95,7 +95,7 @@ export async function inspectRemoteSubscription(
             message: 'Subscription URL is required',
             status: 400,
         };
-    if (!/^https?:\/\//i.test(requestedUrl))
+    if (!isRemoteSubscription({ ...payload, url: requestedUrl }))
         return {
             ok: false,
             errorCode: 'invalid_subscription_url',
@@ -338,7 +338,7 @@ export async function handleExternalSubscriptionsRequest(request, env, selector 
                     'Subscription URL is required',
                     400
                 );
-            if (!isRemoteSubscription(payload))
+            if (!isRemoteSubscription({ ...payload, type: 'subscription' }))
                 return createExternalError(
                     'invalid_subscription_url',
                     'Subscription URL must use http or https',
@@ -349,6 +349,7 @@ export async function handleExternalSubscriptionsRequest(request, env, selector 
             const timestamp = nowIso();
             const item = {
                 id: generateId('sub'),
+                type: 'subscription',
                 name: String(payload.name).trim(),
                 url: String(payload.url).trim(),
                 enabled: payload.enabled !== false,
@@ -375,6 +376,7 @@ export async function handleExternalSubscriptionsRequest(request, env, selector 
             const payload = await readExternalJson(request);
             const updated = {
                 ...current,
+                type: 'subscription',
                 ...(payload.name !== undefined ? { name: String(payload.name || '').trim() } : {}),
                 ...(payload.url !== undefined ? { url: String(payload.url || '').trim() } : {}),
                 ...(payload.enabled !== undefined ? { enabled: payload.enabled !== false } : {}),
