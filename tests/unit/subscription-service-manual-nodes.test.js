@@ -8,6 +8,33 @@ describe('subscription-service 手动节点健壮性', () => {
     afterEach(() => {
         vi.unstubAllGlobals();
     });
+    it('带 TLS 参数的导出 HTTP 节点直接参与输出，不抓取节点 URI', async () => {
+        vi.stubGlobal('fetch', vi.fn());
+        const url = convertClashProxyToUrl({
+            type: 'http',
+            name: 'TLS HTTP',
+            server: 'proxy.example.invalid',
+            port: 443,
+            username: 'fixture',
+            password: 'fixture',
+            tls: true,
+            servername: 'tls.example.invalid',
+            'skip-cert-verify': true,
+        });
+        const result = await generateCombinedNodeList(
+            {},
+            { enableAccessLog: false },
+            'ClashMeta',
+            [{ id: 'tls', name: 'TLS HTTP', enabled: true, url }],
+            '',
+            { enableManualNodes: true, enableSubscriptions: true },
+            false
+        );
+        expect(result).toContain('https://fixture:fixture@proxy.example.invalid:443');
+        expect(result).toContain('sni=tls.example.invalid');
+        expect(result).toContain('allowInsecure=1');
+        expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
     it('HTTP 手动节点参与订阅输出且不作为订阅源发起抓取', async () => {
         vi.stubGlobal('fetch', vi.fn());
         const result = await generateCombinedNodeList(

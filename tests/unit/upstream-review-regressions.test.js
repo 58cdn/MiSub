@@ -12,6 +12,26 @@ describe('upstream integration acceptance', () => {
         ['http://fixture:fixture@proxy.example.invalid:8080#HTTP', true, false],
         ['HTTP://fixture:fixture@proxy.example.invalid:80', true, false],
         [' https://fixture:p%40ss@[2001:db8::1]:443/#HTTPS ', true, false],
+        [
+            'https://fixture:fixture@proxy.example.invalid:443?sni=tls.example.invalid&allowInsecure=1',
+            true,
+            false,
+        ],
+        [
+            'https://fixture:fixture@proxy.example.invalid:443?peer=tls.example.invalid&insecure=0&fp=chrome&alpn=h2',
+            true,
+            false,
+        ],
+        [
+            'https://fixture:fixture@sub.example.invalid:8443/?sni=tls.example.invalid&token=fixture',
+            false,
+            true,
+        ],
+        [
+            'https://fixture:fixture@sub.example.invalid:8443/api?sni=tls.example.invalid',
+            false,
+            true,
+        ],
         ['https://fixture:fixture@sub.example.invalid:8443/api?token=fixture', false, true],
         ['https://fixture:fixture@sub.example.invalid:8443/?token=fixture', false, true],
         ['https://sub.example.invalid:8443/subscription', false, true],
