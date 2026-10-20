@@ -864,6 +864,7 @@ export const messages = {
             resetRequestFailed: '请求重置失败',
             loginFailed: '登录失败',
             sessionCheckFailed: '会话检查失败',
+            sessionDataInvalid: '会话确认返回的数据不完整或标识异常，请联系管理员检查服务端数据。',
             sessionCheckContext: '会话检查',
             authFailedRelogin: '认证失败,请重新登录',
             logoutFailed: '退出登录请求失败，当前登录状态未改变',
@@ -2834,6 +2835,8 @@ export const messages = {
             resetRequestFailed: 'Reset request failed',
             loginFailed: 'Login failed',
             sessionCheckFailed: 'Session check failed',
+            sessionDataInvalid:
+                'Session confirmation returned incomplete or inconsistent data. Ask an administrator to inspect server data.',
             sessionCheckContext: 'Session check',
             authFailedRelogin: 'Auth failed. Log in again.',
             logoutFailed: 'Logout request failed. You are still signed in.',

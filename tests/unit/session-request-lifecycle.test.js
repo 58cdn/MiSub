@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
+import { flushPromises, mount } from '@vue/test-utils';
+import Login from '../../src/components/modals/Login.vue';
 import { useSessionStore } from '../../src/stores/session.js';
 import { useDataStore } from '../../src/stores/useDataStore.js';
 import { api, configureUnauthorizedHandler } from '../../src/lib/http.js';
 import router from '../../src/router';
+import { t } from '../../src/i18n/index.js';
 
 vi.mock('../../src/router', () => ({ default: { push: vi.fn() } }));
 vi.mock('../../src/stores/toast', () => ({ useToastStore: () => ({ showToast: vi.fn() }) }));
@@ -49,7 +52,7 @@ beforeEach(() => {
     vi.stubGlobal(
         'fetch',
         vi.fn((url) => {
-            if (url === '/api/session/protocol')
+            if (url === '/api/session/protocol' && !queues.get(url)?.length)
                 return Promise.resolve(response({ protocol: 'legacy' }));
             const queue = queues.get(url);
             if (!queue?.length) throw new Error(`Unexpected offline request: ${url}`);
@@ -145,6 +148,76 @@ describe('session request lifecycle through real HTTP', () => {
         expect(await session.checkSession()).toBe(false);
         expect(session.sessionState).toBe('loggedOut');
         expect(session.initialData).toBeNull();
+    });
+    it('preserves the HTTP failure when confirming a successful login', async () => {
+        const session = useSessionStore();
+        enqueue('/api/login', response({ success: true }));
+        enqueue('/api/data', response({ error: 'synthetic storage unavailable' }, 503));
+        enqueue('/api/public_config', response({}));
+        await expect(session.login('fixture')).rejects.toMatchObject({
+            message: 'HTTP 503: synthetic storage unavailable',
+            status: 503,
+            code: 'session_data_unavailable',
+        });
+        expect(session.sessionState).toBe('loggedOut');
+        expect(session.initialData).toBeNull();
+        expect(router.push).not.toHaveBeenCalledWith({ path: '/dashboard' });
+    });
+    it('reports invalid authenticated data without disclosing its contents', async () => {
+        const session = useSessionStore();
+        enqueue('/api/login', response({ success: true }));
+        const invalid = snapshot('fixture');
+        invalid.misubs.push({ ...invalid.misubs[0], url: 'ss://private-fixture' });
+        enqueue('/api/data', response(invalid));
+        enqueue('/api/public_config', response({}));
+        await expect(session.login('fixture')).rejects.toMatchObject({
+            message: t('settings.sessionDataInvalid'),
+            code: 'session_data_invalid',
+        });
+        expect(session.sessionState).toBe('loggedOut');
+        expect(session.initialData).toBeNull();
+        expect(useDataStore().subscriptions).toEqual([]);
+        expect(router.push).not.toHaveBeenCalledWith({ path: '/dashboard' });
+    });
+    it('keeps the data service failure visible in the actual login form', async () => {
+        const session = useSessionStore();
+        enqueue('/api/login', response({ success: true }));
+        enqueue('/api/data', response({ error: 'synthetic storage unavailable' }, 503));
+        enqueue('/api/public_config', response({}));
+        const wrapper = mount(Login, { props: { login: session.login } });
+        try {
+            await wrapper.find('input[type="password"]').setValue('fixture');
+            await wrapper.find('form').trigger('submit');
+            await flushPromises();
+            expect(wrapper.text()).toContain('HTTP 503: synthetic storage unavailable');
+            expect(wrapper.find('button[type="submit"]').attributes('disabled')).toBeUndefined();
+        } finally {
+            wrapper.unmount();
+        }
+    });
+    it('preserves protocol discovery failures during post-login confirmation', async () => {
+        const session = useSessionStore();
+        enqueue('/api/session/protocol', response({ protocol: 'legacy' }));
+        enqueue('/api/session/protocol', response({ error: 'synthetic session unavailable' }, 503));
+        enqueue('/api/login', response({ success: true }));
+        await expect(session.login('fixture')).rejects.toMatchObject({
+            message: 'synthetic session unavailable',
+            status: 503,
+        });
+        expect(session.sessionState).toBe('loggedOut');
+        expect(fetch.mock.calls.some(([url]) => url === '/api/data')).toBe(false);
+    });
+    it('distinguishes an unconfirmed browser session after successful login', async () => {
+        const session = useSessionStore();
+        enqueue('/api/login', response({ success: true }));
+        enqueue('/api/data', response({ authenticated: false }));
+        enqueue('/api/public_config', response({}));
+        await expect(session.login('fixture')).rejects.toMatchObject({
+            message: t('settings.authFailedRelogin'),
+            code: 'session_unconfirmed',
+        });
+        expect(session.sessionState).toBe('loggedOut');
+        expect(router.push).not.toHaveBeenCalledWith({ path: '/dashboard' });
     });
     it('ignores a login response that completes after an explicit logout', async () => {
         const session = useSessionStore(),

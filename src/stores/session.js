@@ -61,7 +61,7 @@ export const useSessionStore = defineStore('session', () => {
         useDataStore().clearCachedData();
     }
 
-    async function checkSession() {
+    async function checkSession({ throwOnFailure = false } = {}) {
         const generation = currentSessionGeneration();
         const sequence = ++checkSequence;
         const isCurrent = () =>
@@ -77,6 +77,7 @@ export const useSessionStore = defineStore('session', () => {
             if (!isCurrent()) return null;
             clearSession();
             handleError(error, t('settings.sessionCheckContext'), { errorType: 'server' });
+            if (throwOnFailure) throw error;
             return false;
         }
         // Parallel fetch of initial data (auth check) and public config
@@ -107,21 +108,32 @@ export const useSessionStore = defineStore('session', () => {
             sessionState.value = 'loggedIn';
             return true;
         } else {
+            const failure = Object.assign(
+                new Error(
+                    dataResult.success
+                        ? t('settings.sessionDataInvalid')
+                        : dataResult.error || t('settings.sessionCheckFailed')
+                ),
+                {
+                    status: dataResult.status,
+                    code: dataResult.success
+                        ? 'session_data_invalid'
+                        : dataResult.errorType === 'auth'
+                          ? 'session_unconfirmed'
+                          : 'session_data_unavailable',
+                }
+            );
             // Auth failed or other error
             if (dataResult.errorType === 'auth') {
                 clearSession();
             } else {
                 // Network or other error, still show logged out
-                console.error('Session check failed:', dataResult.error);
-                handleError(
-                    new Error(dataResult.error || t('settings.sessionCheckFailed')),
-                    t('settings.sessionCheckContext'),
-                    {
-                        errorType: dataResult.errorType,
-                    }
-                );
+                handleError(failure, t('settings.sessionCheckContext'), {
+                    errorType: dataResult.success ? 'server' : dataResult.errorType,
+                });
                 clearSession();
             }
+            if (throwOnFailure) throw failure;
             return false;
         }
     }
@@ -135,7 +147,7 @@ export const useSessionStore = defineStore('session', () => {
             securityWarning.value = result.data?.securityWarning || null;
             loginSecurity.value = result.data?.loginSecurity || null;
             // The form owns its pending state so confirmation failures remain visible.
-            const authenticated = await checkSession();
+            const authenticated = await checkSession({ throwOnFailure: true });
             if (
                 authenticated === null ||
                 (authenticated && generation !== currentSessionGeneration())
